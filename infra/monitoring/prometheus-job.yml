@@ -1,0 +1,7 @@
+# 与现有 Prometheus 的其他抓取任务并列放入 scrape_configs。
+# 工作台停止时目标不可达是正常状态，不代表业务指标为零。
+- job_name: agent-dev-workbench
+  scrape_interval: 15s
+  metrics_path: /actuator/prometheus
+  static_configs:
+    - targets: ["host.docker.internal:8088"]

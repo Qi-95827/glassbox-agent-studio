@@ -1,0 +1,136 @@
+package dev.workbench;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.sql.DriverManager;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+
+/** 在隔离的旧版结构上运行当前初始化脚本，不触碰用户实际数据库。 */
+class SchemaMigrationTest {
+  @Test
+  void legacyRowsRemainReadableAfterAdditiveMigration() throws Exception {
+    String name = "migration_" + UUID.randomUUID().toString().replace("-", "");
+    try (var connection = DriverManager.getConnection("jdbc:h2:mem:" + name, "sa", "")) {
+      try (var sql = connection.createStatement()) {
+        sql.execute(
+            "CREATE TABLE tasks(id VARCHAR(36) PRIMARY KEY,goal VARCHAR(500) NOT NULL,scenario"
+                + " VARCHAR(20) NOT NULL,created_at VARCHAR(40) NOT NULL)");
+        sql.execute(
+            "CREATE TABLE runs(id VARCHAR(36) PRIMARY KEY,task_id VARCHAR(36) NOT NULL,parent_id"
+                + " VARCHAR(36),status VARCHAR(30) NOT NULL,reason VARCHAR(1000),result"
+                + " VARCHAR(2000),rounds INT NOT NULL,tools INT NOT NULL,max_rounds INT NOT"
+                + " NULL,max_tools INT NOT NULL,max_seconds INT NOT NULL,elapsed_ms BIGINT NOT"
+                + " NULL,created_at VARCHAR(40) NOT NULL,updated_at VARCHAR(40) NOT NULL)");
+        sql.execute("INSERT INTO tasks VALUES('old-task','历史目标','normal','2026-01-01T00:00:00Z')");
+        sql.execute(
+            "INSERT INTO runs"
+                + " VALUES('old-run','old-task',NULL,'COMPLETED',NULL,NULL,1,1,4,2,30,100,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')");
+        sql.execute(
+            "CREATE TABLE agent_invocations(id VARCHAR(36) PRIMARY KEY,run_id VARCHAR(36) NOT"
+                + " NULL,role_name VARCHAR(80) NOT NULL,task_goal VARCHAR(500) NOT NULL,status"
+                + " VARCHAR(30) NOT NULL,result VARCHAR(2000),created_at VARCHAR(40) NOT"
+                + " NULL,updated_at VARCHAR(40) NOT NULL)");
+        sql.execute(
+            "INSERT INTO agent_invocations VALUES('old-agent','old-run','分析"
+                + " Agent','历史目标','COMPLETED','结果','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')");
+        sql.execute(
+            "CREATE TABLE bug_checks(id VARCHAR(36) PRIMARY KEY,bug_id VARCHAR(80) NOT"
+                + " NULL,workspace_id VARCHAR(36) NOT NULL,kind VARCHAR(30) NOT NULL,status"
+                + " VARCHAR(30) NOT NULL,output CLOB,duration_ms BIGINT NOT NULL,created_at"
+                + " VARCHAR(40) NOT NULL)");
+        sql.execute(
+            "INSERT INTO bug_checks"
+                + " VALUES('old-check','MOCK-PY-001','old-workspace','REPRODUCE','FAILURES_OBSERVED',NULL,10,'2026-01-01T00:00:00Z')");
+        sql.execute(
+            "CREATE TABLE evaluation_batches(id VARCHAR(36) PRIMARY KEY,suite VARCHAR(40) NOT"
+                + " NULL,status VARCHAR(30) NOT NULL,created_at VARCHAR(40) NOT NULL,finished_at"
+                + " VARCHAR(40))");
+        sql.execute(
+            "INSERT INTO evaluation_batches"
+                + " VALUES('old-batch','LOCAL_AGENT_V1','COMPLETED','2026-01-01T00:00:00Z',NULL)");
+        sql.execute(
+            "CREATE TABLE agent_tool_grants(agent_id VARCHAR(36) NOT NULL,tool_kind VARCHAR(40) NOT"
+                + " NULL,PRIMARY KEY(agent_id,tool_kind))");
+        sql.execute("INSERT INTO agent_tool_grants VALUES('old-agent','WORKSPACE_READ')");
+        sql.execute(
+            "CREATE TABLE tool_invocations(id VARCHAR(36) PRIMARY KEY,run_id VARCHAR(36) NOT"
+                + " NULL,agent_id VARCHAR(36) NOT NULL,tool_name VARCHAR(80) NOT NULL,status"
+                + " VARCHAR(30) NOT NULL,result VARCHAR(2000),error_message"
+                + " VARCHAR(1000),duration_ms BIGINT,created_at VARCHAR(40) NOT NULL,updated_at"
+                + " VARCHAR(40) NOT NULL)");
+        sql.execute(
+            "INSERT INTO tool_invocations"
+                + " VALUES('old-tool','old-run','old-agent','读取授权文件','COMPLETED',NULL,NULL,10,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')");
+      }
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      try (var sql = connection.createStatement();
+          var rows = sql.executeQuery("SELECT stop_cause FROM runs WHERE id='old-run'")) {
+        assertTrue(rows.next());
+        assertNull(rows.getObject(1));
+      }
+      try (var sql = connection.createStatement();
+          var rows = sql.executeQuery("SELECT run_id FROM bug_checks WHERE id='old-check'")) {
+        assertTrue(rows.next());
+        assertNull(rows.getObject(1));
+      }
+      try (var sql = connection.createStatement();
+          var rows =
+              sql.executeQuery(
+                  "SELECT definition_json,definition_sha256 FROM evaluation_batches WHERE"
+                      + " id='old-batch'")) {
+        assertTrue(rows.next());
+        assertNull(rows.getObject(1));
+        assertNull(rows.getObject(2));
+      }
+      try (var sql = connection.createStatement();
+          var rows =
+              sql.executeQuery(
+                  "SELECT tool_version FROM agent_tool_grants WHERE agent_id='old-agent'")) {
+        assertTrue(rows.next());
+        assertNull(rows.getObject(1));
+      }
+      try (var sql = connection.createStatement();
+          var rows =
+              sql.executeQuery("SELECT tool_version FROM tool_invocations WHERE id='old-tool'")) {
+        assertTrue(rows.next());
+        assertNull(rows.getObject(1));
+      }
+      try (var sql = connection.createStatement();
+          var rows =
+              sql.executeQuery(
+                  "SELECT"
+                      + " t.memory_enabled,r.max_per_tool,r.status,t.constraints_json,t.acceptance_json,r.max_reported_tokens,r.max_identical_tools,t.entry_kind,r.max_agent_rounds,r.max_agent_tools,r.recovery_dispatch,t.file_scopes_json"
+                      + " FROM tasks t JOIN runs r ON r.task_id=t.id")) {
+        assertTrue(rows.next());
+        assertFalse(rows.getBoolean(1));
+        assertEquals(20, rows.getInt(2));
+        assertEquals("COMPLETED", rows.getString(3));
+        assertEquals("[]", rows.getString(4));
+        assertEquals("[]", rows.getString(5));
+        assertNull(rows.getObject(6));
+        assertNull(rows.getObject(7));
+        assertEquals("GENERAL", rows.getString(8));
+        assertNull(rows.getObject(9));
+        assertNull(rows.getObject(10));
+        assertEquals("UNKNOWN", rows.getString(11));
+        assertEquals("[]", rows.getString(12));
+      }
+      try (var sql = connection.createStatement();
+          var rows = sql.executeQuery("SELECT COUNT(*) FROM plan_nodes WHERE run_id='old-run'")) {
+        assertTrue(rows.next());
+        assertEquals(0, rows.getInt(1));
+      }
+      try (var sql = connection.createStatement();
+          var rows =
+              sql.executeQuery(
+                  "SELECT role_code,role_version FROM agent_invocations WHERE id='old-agent'")) {
+        assertTrue(rows.next());
+        assertNull(rows.getString(1));
+        assertNull(rows.getObject(2));
+      }
+    }
+  }
+}

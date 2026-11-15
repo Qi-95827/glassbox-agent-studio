@@ -1,0 +1,8 @@
+/target/
+/data/
+*.log
+.idea/
+.vscode/
+/config/deepseek-api-key.txt
+/frontend/user-workbench/node_modules/
+/frontend/user-workbench/dist/
