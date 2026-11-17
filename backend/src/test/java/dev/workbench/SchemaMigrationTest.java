@@ -11,6 +11,42 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
 /** 在隔离的旧版结构上运行当前初始化脚本，不触碰用户实际数据库。 */
 class SchemaMigrationTest {
   @Test
+  void legacyToolBudgetsMigrateOnceWithoutResurrectingDeletedRows() throws Exception {
+    String name = "budget_migration_" + UUID.randomUUID().toString().replace("-", "");
+    try (var connection = DriverManager.getConnection("jdbc:h2:mem:" + name, "sa", "")) {
+      try (var sql = connection.createStatement()) {
+        sql.execute(
+            "CREATE TABLE task_tool_budgets (task_id VARCHAR(36) NOT NULL, tool_kind VARCHAR(40)"
+                + " NOT NULL, policy_version INT NOT NULL, max_calls INT NOT NULL, PRIMARY"
+                + " KEY(task_id, tool_kind), CHECK(policy_version=1), CHECK(tool_kind IN"
+                + " ('SIMULATED_INSPECTION','WORKSPACE_READ','WORKSPACE_WRITE')), CHECK(max_calls"
+                + " BETWEEN 0 AND 20))");
+        sql.execute("INSERT INTO task_tool_budgets VALUES('old-task','WORKSPACE_READ',1,3)");
+      }
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      try (var sql = connection.createStatement()) {
+        try (var rows =
+            sql.executeQuery(
+                "SELECT max_calls FROM task_tool_budgets_v2 WHERE task_id='old-task' AND"
+                    + " tool_kind='WORKSPACE_READ'")) {
+          assertTrue(rows.next());
+          assertEquals(3, rows.getInt(1));
+          assertFalse(rows.next());
+        }
+        sql.execute("INSERT INTO task_tool_budgets_v2 VALUES('new-task','WORKSPACE_SEARCH',1,0)");
+        sql.execute("DELETE FROM task_tool_budgets_v2 WHERE task_id='old-task'");
+      }
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      try (var sql = connection.createStatement();
+          var rows = sql.executeQuery("SELECT COUNT(*) FROM task_tool_budgets_v2")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getInt(1));
+      }
+    }
+  }
+
+  @Test
   void legacyRowsRemainReadableAfterAdditiveMigration() throws Exception {
     String name = "migration_" + UUID.randomUUID().toString().replace("-", "");
     try (var connection = DriverManager.getConnection("jdbc:h2:mem:" + name, "sa", "")) {

@@ -151,7 +151,7 @@ public class RunRepository {
   public Map<ToolKind, Integer> toolBudgets(String taskId) {
     var result = new java.util.EnumMap<ToolKind, Integer>(ToolKind.class);
     db.query(
-        "SELECT tool_kind,policy_version,max_calls FROM task_tool_budgets WHERE task_id=?",
+        "SELECT tool_kind,policy_version,max_calls FROM task_tool_budgets_v2 WHERE task_id=?",
         (org.springframework.jdbc.core.RowCallbackHandler)
             row -> {
               if (row.getInt("policy_version") != 1)
@@ -801,7 +801,7 @@ public class RunRepository {
           }
           for (var entry : task.toolBudgets().entrySet()) {
             db.update(
-                "INSERT INTO task_tool_budgets(task_id,tool_kind,policy_version,max_calls)"
+                "INSERT INTO task_tool_budgets_v2(task_id,tool_kind,policy_version,max_calls)"
                     + " VALUES(?,?,?,?)",
                 task.id().toString(),
                 entry.getKey().name(),

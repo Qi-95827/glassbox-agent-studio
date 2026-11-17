@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.workspace.AuthorizedCodeSearch;
 import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
@@ -64,6 +65,41 @@ class WorkspaceScopedToolsIntegrationTest {
         new WorkspaceScopedWriteTool(workspace, created.id(), scope, json, runtime, failure);
     var toolkit = new io.agentscope.core.tool.Toolkit();
     toolkit.registerTool(reader);
+    var search =
+        new WorkspaceSearchTool(
+            new AuthorizedCodeSearch(workspace), created.id(), scope, json, runtime, failure);
+    toolkit.registerTool(search);
+    var searchInput = java.util.Map.<String, Object>of("query", "原始");
+    var searchCall =
+        io.agentscope.core.message.ToolUseBlock.builder()
+            .id("test-search")
+            .name("search_authorized_files")
+            .input(searchInput)
+            .content(json.writeValueAsString(searchInput))
+            .build();
+    var searchOutput =
+        toolkit
+            .callTool(
+                io.agentscope.core.tool.ToolCallParam.builder()
+                    .toolUseBlock(searchCall)
+                    .input(searchInput)
+                    .build())
+            .block();
+    assertNotNull(searchOutput);
+    assertNotEquals(io.agentscope.core.message.ToolResultState.ERROR, searchOutput.getState());
+    var searchJson =
+        json.readTree(
+            ((io.agentscope.core.message.TextBlock) searchOutput.getOutput().getFirst()).getText());
+    if (searchJson.isTextual()) searchJson = json.readTree(searchJson.asText());
+    assertEquals("SUCCEEDED", searchJson.path("status").asText());
+    assertEquals("WORKSPACE_SEARCH", searchJson.path("toolId").asText());
+    assertEquals(2, searchJson.path("data").path("matches").size());
+    assertEquals("a.txt", searchJson.path("data").path("matches").get(0).path("path").asText());
+    assertEquals(1, searchJson.path("data").path("matches").get(0).path("line").asInt());
+    assertFalse(searchJson.toString().contains("secret.txt"));
+    assertEquals("REJECTED", json.readTree(search.search("\n")).path("status").asText());
+    verify(runtime, times(2))
+        .beforeTool(eq(dev.workbench.domain.ToolKind.WORKSPACE_SEARCH), eq(1), anyString());
     var call =
         io.agentscope.core.message.ToolUseBlock.builder()
             .id("test-call")

@@ -20,14 +20,16 @@ class AgentRoleDefinitionTest {
     assertEquals(AgentRole.REVIEWER.version(), reviewer.version());
     assertEquals(Set.of(ToolKind.SIMULATED_INSPECTION), analyst.authorizedTools(false, false));
     assertEquals(
-        Set.of(ToolKind.SIMULATED_INSPECTION, ToolKind.WORKSPACE_READ),
+        Set.of(ToolKind.SIMULATED_INSPECTION, ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH),
         analyst.authorizedTools(true, false));
     assertEquals(
-        Set.of(ToolKind.SIMULATED_INSPECTION, ToolKind.WORKSPACE_READ),
+        Set.of(ToolKind.SIMULATED_INSPECTION, ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH),
         analyst.authorizedTools(true, true));
-    assertEquals(Set.of(ToolKind.WORKSPACE_READ), coder.authorizedTools(true, false));
     assertEquals(
-        Set.of(ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_WRITE),
+        Set.of(ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH),
+        coder.authorizedTools(true, false));
+    assertEquals(
+        Set.of(ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH, ToolKind.WORKSPACE_WRITE),
         coder.authorizedTools(true, true));
     assertTrue(reviewer.authorizedTools(true, true).isEmpty());
     assertThrows(IllegalArgumentException.class, () -> analyst.authorizedTools(false, true));

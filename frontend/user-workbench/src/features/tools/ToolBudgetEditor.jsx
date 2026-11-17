@@ -4,6 +4,7 @@ import { InputNumber } from 'antd';
 const tools = [
   ['SIMULATED_INSPECTION', '模拟检查工具'],
   ['WORKSPACE_READ', '读取授权文件'],
+  ['WORKSPACE_SEARCH', '搜索授权文件'],
   ['WORKSPACE_WRITE', '修改授权文件'],
 ];
 

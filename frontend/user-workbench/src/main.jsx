@@ -16,7 +16,7 @@ const stopCauses = { USER_CANCELLED:'用户取消', INTERRUPTED:'执行中断', 
 const entryNames = { GENERAL:'通用目标', REQUIREMENT:'需求', DESIGN:'概要设计', CODE:'代码', TEST:'测试', BUG:'Bug' };
 const planRoles = { ANALYST:'分析 Agent', CODER:'开发 Agent', REVIEWER:'审查 Agent' };
 const skillNames = { ANALYZE_EVIDENCE:'问题分析', AUTHORIZED_EDIT:'受限代码修改', REVIEW_EVIDENCE:'证据审查' };
-const toolNames = { SIMULATED_INSPECTION:'模拟检查工具', WORKSPACE_READ:'读取授权文件', WORKSPACE_WRITE:'修改授权文件' };
+const toolNames = { SIMULATED_INSPECTION:'模拟检查工具', WORKSPACE_READ:'读取授权文件', WORKSPACE_SEARCH:'搜索授权文件', WORKSPACE_WRITE:'修改授权文件' };
 const comparisonNames = { UNCHANGED_PASS:'均通过', UNCHANGED_FAIL:'均失败', IMPROVED:'失败变为通过', REGRESSED:'通过变为失败', INCONCLUSIVE:'无法判断' };
 const eventNames = { TASK_CREATED:'创建任务', RUN_STARTED:'开始运行', DELEGATED:'分配子任务', AGENT_STARTED:'启动 Agent', MODEL_STARTED:'模型调用', MODEL_FINISHED:'模型返回', TOOL_STARTED:'调用工具', TOOL_FINISHED:'工具返回', TOOL_REJECTED:'工具输入被拒绝', HANDOFF:'结果交接', HANDOFF_ACCEPTED:'接收实例启动', CHECKPOINT_SAVED:'保存检查点', CHECKPOINT_SKIPPED:'未生成分析后检查点', RUN_COMPLETED:'运行完成', CANCEL_REQUESTED:'请求取消', PAUSE_REQUESTED:'请求暂停', PAUSED:'已暂停', RESUMED:'继续执行', CANCELLED:'运行取消', FAILED:'执行失败', LIMITED:'达到限制', INTERRUPTED:'运行中断', RECOVERY_STARTED:'恢复运行', MEMORY_LOADED:'装配项目背景', TEST_STARTED:'开始测试', TEST_FINISHED:'测试结果', BLOCKED:'等待处理' };
 const dateTime = s => s ? new Date(s).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';

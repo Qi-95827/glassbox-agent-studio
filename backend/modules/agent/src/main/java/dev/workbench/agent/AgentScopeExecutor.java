@@ -8,6 +8,7 @@ import dev.workbench.domain.Scenario;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.tool.SimulatedTool;
 import dev.workbench.tool.ToolContracts;
+import dev.workbench.workspace.AuthorizedCodeSearch;
 import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.WorkspaceService;
 import io.agentscope.core.ReActAgent;
@@ -113,6 +114,17 @@ public class AgentScopeExecutor {
       registered.put(
           ToolKind.WORKSPACE_WRITE,
           ToolContracts.versionFor(ToolKind.WORKSPACE_WRITE, fileScopes.size()));
+    }
+    if (allowed.contains(ToolKind.WORKSPACE_SEARCH)) {
+      toolkit.registerTool(
+          new WorkspaceSearchTool(
+              new AuthorizedCodeSearch(workspaces),
+              workspaceId,
+              scopedFiles,
+              json,
+              runtime,
+              failure));
+      registered.put(ToolKind.WORKSPACE_SEARCH, ToolContracts.SEARCH_VERSION);
     }
     if (!registered.equals(assembly.toolVersions()))
       throw new IllegalStateException("Agent 工具装配或契约版本不完整。");

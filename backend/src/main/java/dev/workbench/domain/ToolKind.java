@@ -6,6 +6,8 @@ public enum ToolKind {
   SIMULATED_INSPECTION("模拟检查工具"),
   /** 读取用户授权的单个工作区文件。 */
   WORKSPACE_READ("读取授权文件"),
+  /** 在授权的文件集合内搜索字面文本。 */
+  WORKSPACE_SEARCH("搜索授权文件"),
   /** 写入用户授权的单个工作区文件。 */
   WORKSPACE_WRITE("修改授权文件");
 

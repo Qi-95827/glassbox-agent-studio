@@ -26,6 +26,7 @@ record AgentRoleDefinition(
     result.addAll(tools);
     if (!workspaceAvailable) {
       result.remove(ToolKind.WORKSPACE_READ);
+      result.remove(ToolKind.WORKSPACE_SEARCH);
       result.remove(ToolKind.WORKSPACE_WRITE);
     } else if (!writeEnabled) {
       result.remove(ToolKind.WORKSPACE_WRITE);

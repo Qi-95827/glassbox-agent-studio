@@ -3,9 +3,9 @@ package dev.workbench.domain;
 /** 协作流程中的角色；不同角色拥有独立上下文和工具范围。 */
 public enum AgentRole {
   /** 使用模拟工具产生可追溯的分析结果。 */
-  ANALYST("分析 Agent", 3),
+  ANALYST("分析 Agent", 4),
   /** 根据结构化分析在用户授权范围内进行代码开发。 */
-  CODER("开发 Agent", 3),
+  CODER("开发 Agent", 4),
   /** 仅接收交接内容并检查证据与限制，不使用工具。 */
   REVIEWER("审查 Agent", 2);
 

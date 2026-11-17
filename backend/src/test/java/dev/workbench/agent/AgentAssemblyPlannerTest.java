@@ -20,10 +20,13 @@ class AgentAssemblyPlannerTest {
     assertEquals(Map.of(ToolKind.SIMULATED_INSPECTION, 1), isolated.toolVersions());
     assertEquals(SkillId.ANALYZE_EVIDENCE, isolated.skills().getFirst().id());
     var readOnly = planner.plan(AgentRole.CODER, true, 1, false);
-    assertEquals(Map.of(ToolKind.WORKSPACE_READ, 1), readOnly.toolVersions());
+    assertEquals(
+        Map.of(ToolKind.WORKSPACE_READ, 1, ToolKind.WORKSPACE_SEARCH, 1), readOnly.toolVersions());
     var multiFile = planner.plan(AgentRole.CODER, true, 2, true);
     assertEquals(
-        Map.of(ToolKind.WORKSPACE_READ, 2, ToolKind.WORKSPACE_WRITE, 2), multiFile.toolVersions());
+        Map.of(
+            ToolKind.WORKSPACE_READ, 2, ToolKind.WORKSPACE_SEARCH, 1, ToolKind.WORKSPACE_WRITE, 2),
+        multiFile.toolVersions());
     assertTrue(planner.plan(AgentRole.REVIEWER, true, 2, true).toolVersions().isEmpty());
     assertThrows(UnsupportedOperationException.class, () -> multiFile.toolVersions().clear());
     assertThrows(UnsupportedOperationException.class, () -> multiFile.skills().clear());

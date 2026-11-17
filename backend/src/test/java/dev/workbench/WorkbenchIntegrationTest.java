@@ -307,7 +307,7 @@ class WorkbenchIntegrationTest {
         java.util.List.of("ANALYST", "CODER", "REVIEWER"),
         repo.agents(id).stream().map(a -> a.get("ROLE_CODE").toString()).toList());
     assertEquals(
-        java.util.List.of(3, 3, 2),
+        java.util.List.of(4, 4, 2),
         repo.agents(id).stream().map(a -> ((Number) a.get("ROLE_VERSION")).intValue()).toList());
     var assignedSkills = repo.skills(id);
     assertEquals(3, assignedSkills.size());
@@ -350,10 +350,12 @@ class WorkbenchIntegrationTest {
             .orElseThrow()
             .tools();
     assertEquals(
-        java.util.Set.of(ToolKind.SIMULATED_INSPECTION, ToolKind.WORKSPACE_READ),
+        java.util.Set.of(
+            ToolKind.SIMULATED_INSPECTION, ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH),
         java.util.Set.copyOf(analystTools));
     assertEquals(
-        java.util.Set.of(ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_WRITE),
+        java.util.Set.of(
+            ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH, ToolKind.WORKSPACE_WRITE),
         java.util.Set.copyOf(coderTools));
     assertTrue(reviewerTools.isEmpty());
     mvc.perform(get("/api/runs/{id}/tool-grants", id))
@@ -445,7 +447,13 @@ class WorkbenchIntegrationTest {
     assertTrue(
         repo.agentToolGrants(runId).stream()
             .flatMap(g -> g.toolVersions().stream())
-            .allMatch(t -> t.version() == (t.tool() == ToolKind.SIMULATED_INSPECTION ? 1 : 2)));
+            .allMatch(
+                t ->
+                    t.version()
+                        == (t.tool() == ToolKind.SIMULATED_INSPECTION
+                                || t.tool() == ToolKind.WORKSPACE_SEARCH
+                            ? 1
+                            : 2)));
     mvc.perform(get("/api/runs/{id}/tool-grants", runId))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$[0].toolVersions[?(@.tool == 'WORKSPACE_READ')].version").value(2));
@@ -1594,6 +1602,30 @@ class WorkbenchIntegrationTest {
   }
 
   @Test
+  void searchBudgetIsAcceptedPersistedAndReportedWithoutGrantingWorkspace() throws Exception {
+    String body = "{\"goal\":\"搜索预算\",\"toolBudgets\":{\"WORKSPACE_SEARCH\":0}}";
+    String response =
+        mvc.perform(post("/api/tasks").contentType("application/json").content(body))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    String runId =
+        new com.fasterxml.jackson.databind.ObjectMapper().readTree(response).get("runId").asText();
+    await(runId);
+    assertEquals(
+        0,
+        repo.taskDefinition(repo.runSnapshot(runId).taskId().toString())
+            .toolBudgets()
+            .get(ToolKind.WORKSPACE_SEARCH));
+    assertTrue(reports.render(runId).contains("搜索授权文件：0 次"));
+    assertTrue(
+        repo.agentToolGrants(runId).stream()
+            .flatMap(g -> g.tools().stream())
+            .noneMatch(t -> t == ToolKind.WORKSPACE_SEARCH));
+  }
+
+  @Test
   void specificToolLimitCarriesAcrossRecoveryAndRejectsInvalidPolicies() throws Exception {
     String body =
         """
@@ -1643,7 +1675,7 @@ class WorkbenchIntegrationTest {
         org.springframework.dao.DataAccessException.class,
         () ->
             db.update(
-                "INSERT INTO task_tool_budgets(task_id,tool_kind,policy_version,max_calls)"
+                "INSERT INTO task_tool_budgets_v2(task_id,tool_kind,policy_version,max_calls)"
                     + " VALUES(?,?,?,?)",
                 java.util.UUID.randomUUID().toString(),
                 "SIMULATED_INSPECTION",
