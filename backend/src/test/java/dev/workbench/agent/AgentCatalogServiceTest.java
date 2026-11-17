@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ToolKind;
-import dev.workbench.skill.SkillRegistry;
+import dev.workbench.framework.skill.SkillRegistry;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 

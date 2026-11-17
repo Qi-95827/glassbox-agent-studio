@@ -11,6 +11,73 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
 /** 在隔离的旧版结构上运行当前初始化脚本，不触碰用户实际数据库。 */
 class SchemaMigrationTest {
   @Test
+  void legacyPlanDependenciesAreBackfilledIdempotentlyWithoutInventingNodes() throws Exception {
+    String name = "plan_migration_" + UUID.randomUUID().toString().replace("-", "");
+    String run = UUID.randomUUID().toString();
+    String missingRun = UUID.randomUUID().toString();
+    String analyst = UUID.randomUUID().toString();
+    String reviewer = UUID.randomUUID().toString();
+    String orphan = UUID.randomUUID().toString();
+    try (var connection = DriverManager.getConnection("jdbc:h2:mem:" + name, "sa", "")) {
+      try (var sql =
+          connection.prepareStatement(
+              "CREATE TABLE plan_nodes(id VARCHAR(36) PRIMARY KEY,run_id VARCHAR(36) NOT"
+                  + " NULL,sequence_no INT NOT NULL,role_code VARCHAR(30) NOT"
+                  + " NULL,prerequisite_role VARCHAR(30),status VARCHAR(30) NOT NULL,agent_id"
+                  + " VARCHAR(36),started_at VARCHAR(40),finished_at"
+                  + " VARCHAR(40),UNIQUE(run_id,role_code),UNIQUE(run_id,sequence_no),UNIQUE(agent_id))")) {
+        sql.execute();
+      }
+      try (var sql =
+          connection.prepareStatement(
+              "INSERT INTO plan_nodes(id,run_id,sequence_no,role_code,prerequisite_role,status)"
+                  + " VALUES(?,?,?,?,?,?)")) {
+        sql.setString(1, analyst);
+        sql.setString(2, run);
+        sql.setInt(3, 1);
+        sql.setString(4, "ANALYST");
+        sql.setString(5, null);
+        sql.setString(6, "COMPLETED");
+        sql.executeUpdate();
+        sql.setString(1, reviewer);
+        sql.setString(2, run);
+        sql.setInt(3, 2);
+        sql.setString(4, "REVIEWER");
+        sql.setString(5, "ANALYST");
+        sql.setString(6, "PENDING");
+        sql.executeUpdate();
+        sql.setString(1, orphan);
+        sql.setString(2, missingRun);
+        sql.setInt(3, 1);
+        sql.setString(4, "REVIEWER");
+        sql.setString(5, "ANALYST");
+        sql.setString(6, "PENDING");
+        sql.executeUpdate();
+      }
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      var db =
+          new org.springframework.jdbc.core.JdbcTemplate(
+              new org.springframework.jdbc.datasource.SingleConnectionDataSource(connection, true));
+      var repository =
+          new dev.workbench.framework.workflow.plan.PlanRepository(
+              db,
+              new dev.workbench.framework.workflow.plan.PlanFactory(
+                  new dev.workbench.framework.workflow.plan.PlanValidator()));
+      assertEquals(
+          1, db.queryForObject("SELECT COUNT(*) FROM plan_node_dependencies", Integer.class));
+      assertEquals(
+          java.util.List.of(UUID.fromString(analyst)),
+          repository.find(run).getLast().dependencyIds());
+      assertNull(repository.find(run).getFirst().definitionRef());
+      assertNull(repository.find(run).getLast().definitionRef());
+      assertNull(repository.find(run).getFirst().definitionSha256());
+      assertEquals(3, db.queryForObject("SELECT COUNT(*) FROM plan_nodes", Integer.class));
+      assertThrows(IllegalStateException.class, () -> repository.find(missingRun));
+    }
+  }
+
+  @Test
   void legacyToolBudgetsMigrateOnceWithoutResurrectingDeletedRows() throws Exception {
     String name = "budget_migration_" + UUID.randomUUID().toString().replace("-", "");
     try (var connection = DriverManager.getConnection("jdbc:h2:mem:" + name, "sa", "")) {
@@ -162,10 +229,14 @@ class SchemaMigrationTest {
       try (var sql = connection.createStatement();
           var rows =
               sql.executeQuery(
-                  "SELECT role_code,role_version FROM agent_invocations WHERE id='old-agent'")) {
+                  "SELECT role_code,role_version,definition_id,definition_version,definition_sha256"
+                      + " FROM agent_invocations WHERE id='old-agent'")) {
         assertTrue(rows.next());
         assertNull(rows.getString(1));
         assertNull(rows.getObject(2));
+        assertNull(rows.getString(3));
+        assertNull(rows.getObject(4));
+        assertNull(rows.getString(5));
       }
     }
   }

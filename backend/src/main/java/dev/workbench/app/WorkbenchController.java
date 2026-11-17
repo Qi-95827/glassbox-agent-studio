@@ -1,10 +1,10 @@
 package dev.workbench.app;
 
 import dev.workbench.agent.AgentSessionService;
+import dev.workbench.framework.workflow.plan.PlanRepository;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.orchestration.plan.PlanRepository;
 import dev.workbench.task.RunRepository;
 import java.util.List;
 import java.util.Map;

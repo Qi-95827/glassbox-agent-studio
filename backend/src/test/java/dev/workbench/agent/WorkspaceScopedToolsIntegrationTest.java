@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.workspace.AuthorizedCodeSearch;
 import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.WorkspaceService;
@@ -52,12 +53,12 @@ class WorkspaceScopedToolsIntegrationTest {
     var singleReader =
         new WorkspaceReadTool(workspace, json, created.id(), "a.txt", runtime, failure);
     assertEquals(
-        dev.workbench.tool.ToolContracts.SINGLE_FILE_VERSION,
+        dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
         json.readTree(singleReader.read()).path("toolVersion").asInt());
     verify(runtime)
         .beforeTool(
             eq(dev.workbench.domain.ToolKind.WORKSPACE_READ),
-            eq(dev.workbench.tool.ToolContracts.SINGLE_FILE_VERSION),
+            eq(dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION),
             anyString());
     var reader =
         new WorkspaceScopedReadTool(workspace, created.id(), scope, json, runtime, failure);

@@ -21,6 +21,9 @@ import dev.workbench.evaluation.CaseStatus;
 import dev.workbench.evaluation.EvaluationRepository;
 import dev.workbench.evaluation.EvaluationService;
 import dev.workbench.evaluation.EvaluationStatus;
+import dev.workbench.framework.event.EventQueryService;
+import dev.workbench.framework.workflow.plan.PlanNodeStatus;
+import dev.workbench.framework.workflow.plan.PlanRepository;
 import dev.workbench.memory.MemoryCategory;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.MonitoringService;
@@ -28,9 +31,6 @@ import dev.workbench.observability.RunMetricsService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.Handoff;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.orchestration.events.EventQueryService;
-import dev.workbench.orchestration.plan.PlanNodeStatus;
-import dev.workbench.orchestration.plan.PlanRepository;
 import dev.workbench.report.HtmlReportService;
 import dev.workbench.task.RunRepository;
 import dev.workbench.workspace.ApprovalService;
@@ -77,6 +77,29 @@ class WorkbenchIntegrationTest {
   @Autowired MeterRegistry meters;
   @Autowired MonitoringService monitoring;
   @Autowired io.agentscope.core.state.AgentStateStore agentStates;
+
+  @Test
+  void workspaceCandidatesAreReadOnlyAndDoNotGrantTaskPermissions(@TempDir Path temp)
+      throws Exception {
+    Path repoDir = Files.createDirectory(temp.resolve("repo"));
+    runGit(repoDir, "init", "-b", "main");
+    runGit(repoDir, "config", "user.email", "test@example.invalid");
+    runGit(repoDir, "config", "user.name", "Test");
+    Files.writeString(repoDir.resolve("中文 name.txt"), "内容", StandardCharsets.UTF_8);
+    runGit(repoDir, "add", ".");
+    runGit(repoDir, "commit", "-m", "fixture");
+    var workspace = workspaces.create(repoDir.toString(), "main");
+    int before = repo.tasks().size();
+    mvc.perform(get("/api/workspaces/{id}/files", workspace.id()).param("keyword", "中文"))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.paths[0]").value("中文 name.txt"))
+        .andExpect(jsonPath("$.truncated").value(false));
+    mvc.perform(get("/api/workspaces/{id}/files", workspace.id()).param("keyword", "x\ny"))
+        .andExpect(status().isBadRequest());
+    assertEquals(before, repo.tasks().size());
+    assertTrue(workspaces.status(workspace.id()).changes().isBlank());
+  }
 
   @Test
   void agentCatalogExposesRolesWithoutGrantingTaskPermissions() throws Exception {
@@ -313,9 +336,9 @@ class WorkbenchIntegrationTest {
     assertEquals(3, assignedSkills.size());
     assertEquals(
         java.util.Set.of(
-            dev.workbench.skill.SkillId.ANALYZE_EVIDENCE,
-            dev.workbench.skill.SkillId.AUTHORIZED_EDIT,
-            dev.workbench.skill.SkillId.REVIEW_EVIDENCE),
+            dev.workbench.framework.skill.SkillId.ANALYZE_EVIDENCE,
+            dev.workbench.framework.skill.SkillId.AUTHORIZED_EDIT,
+            dev.workbench.framework.skill.SkillId.REVIEW_EVIDENCE),
         assignedSkills.stream().map(s -> s.skillId()).collect(java.util.stream.Collectors.toSet()));
     assertTrue(
         assignedSkills.stream()
@@ -1263,8 +1286,36 @@ class WorkbenchIntegrationTest {
     assertEquals(2, repo.checkpoints(id).size());
     assertEquals("COMPLETED", repo.agents(id).getFirst().get("STATUS"));
     assertEquals(2, repo.agents(id).size());
+    assertEquals("analyst", repo.agents(id).getFirst().get("DEFINITION_ID"));
+    assertEquals(AgentRole.ANALYST.version(), repo.agents(id).getFirst().get("DEFINITION_VERSION"));
+    assertEquals("reviewer", repo.agents(id).getLast().get("DEFINITION_ID"));
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            repo.recordAgentDefinition(
+                id,
+                repo.agents(id).getFirst().get("ID").toString(),
+                new dev.workbench.framework.agent.definition.AgentDefinitionRef("analyst", 4),
+                "a".repeat(64)));
     var nodes = plans.find(id);
     assertEquals(2, nodes.size());
+    assertEquals("analyst", nodes.getFirst().definitionRef().id());
+    assertEquals(
+        nodes.getFirst().definitionSha256(), repo.agents(id).getFirst().get("DEFINITION_SHA256"));
+    assertEquals(
+        nodes.getFirst().definitionRef().version(),
+        repo.agents(id).getFirst().get("DEFINITION_VERSION"));
+    assertEquals("reviewer", nodes.getLast().definitionRef().id());
+    db.update(
+        "UPDATE plan_nodes SET definition_sha256=NULL WHERE id=?",
+        nodes.getFirst().id().toString());
+    assertThrows(
+        IllegalStateException.class,
+        () -> repo.plannedDefinitionForAgent(id, nodes.getFirst().agentId().toString()));
+    db.update(
+        "UPDATE plan_nodes SET definition_sha256=? WHERE id=?",
+        nodes.getFirst().definitionSha256(),
+        nodes.getFirst().id().toString());
     assertEquals(AgentRole.ANALYST, nodes.getFirst().role());
     assertEquals(AgentRole.ANALYST, nodes.getLast().prerequisite());
     assertTrue(nodes.stream().allMatch(n -> n.status() == PlanNodeStatus.COMPLETED));
@@ -1273,6 +1324,8 @@ class WorkbenchIntegrationTest {
     mvc.perform(get("/api/runs/" + id))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.planNodes[0].role").value("ANALYST"))
+        .andExpect(jsonPath("$.planNodes[0].definitionRef.id").value("analyst"))
+        .andExpect(jsonPath("$.agents[0].DEFINITION_ID").value("analyst"))
         .andExpect(jsonPath("$.planNodes[1].status").value("COMPLETED"));
     assertTrue(repo.agents(id).stream().allMatch(a -> a.get("STATUS").equals("COMPLETED")));
     var tool = repo.tools(id).getFirst();
@@ -1873,12 +1926,12 @@ class WorkbenchIntegrationTest {
     String task = java.util.UUID.randomUUID().toString();
     String first = java.util.UUID.randomUUID().toString();
     String next = java.util.UUID.randomUUID().toString();
-    String a = dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, "a", "bc");
-    String b = dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, "ab", "c");
+    String a = dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, "a", "bc");
+    String b = dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, "ab", "c");
     assertNotEquals(a, b);
     assertNotEquals(
-        dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, (String) null),
-        dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, ""));
+        dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, (String) null),
+        dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, ""));
     repo.createRun(first, task, null, 0, 0, 8, 5, 5, null, 2, 30, 0, false);
     String agent = java.util.UUID.randomUUID().toString();
     repo.startTool(

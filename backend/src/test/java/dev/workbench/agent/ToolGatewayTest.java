@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ToolKind;
-import dev.workbench.tool.ToolEffect;
+import dev.workbench.framework.agent.execution.AgentRuntime;
+import dev.workbench.framework.tool.ToolEffect;
+import dev.workbench.framework.tool.ToolGateway;
 import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -23,8 +25,8 @@ class ToolGatewayTest {
     String output =
         gateway.execute(
             ToolKind.SIMULATED_INSPECTION,
-            dev.workbench.tool.ToolContracts.SIMULATED_VERSION,
-            dev.workbench.tool.ToolFingerprint.of(ToolKind.SIMULATED_INSPECTION),
+            dev.workbench.framework.tool.ToolContracts.SIMULATED_VERSION,
+            dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.SIMULATED_INSPECTION),
             ToolEffect.READ_ONLY,
             "开始",
             value -> "摘要",
@@ -52,8 +54,8 @@ class ToolGatewayTest {
     String output =
         gateway.execute(
             ToolKind.WORKSPACE_WRITE,
-            dev.workbench.tool.ToolContracts.SINGLE_FILE_VERSION,
-            dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_WRITE),
+            dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+            dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_WRITE),
             ToolEffect.WRITE,
             "开始",
             value -> "摘要",
@@ -81,8 +83,8 @@ class ToolGatewayTest {
         json.readTree(
             versionGateway.execute(
                 ToolKind.WORKSPACE_WRITE,
-                dev.workbench.tool.ToolContracts.SINGLE_FILE_VERSION,
-                dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_WRITE),
+                dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+                dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_WRITE),
                 ToolEffect.WRITE,
                 "开始",
                 value -> "摘要",
@@ -100,12 +102,12 @@ class ToolGatewayTest {
     var sideEffect = new java.util.concurrent.atomic.AtomicBoolean();
     var error =
         assertThrows(
-            dev.workbench.tool.UncertainToolEffectException.class,
+            dev.workbench.framework.tool.UncertainToolEffectException.class,
             () ->
                 gateway.execute(
                     ToolKind.WORKSPACE_WRITE,
-                    dev.workbench.tool.ToolContracts.SINGLE_FILE_VERSION,
-                    dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_WRITE),
+                    dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+                    dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_WRITE),
                     ToolEffect.WRITE,
                     "开始",
                     value -> "摘要",
@@ -156,7 +158,8 @@ class ToolGatewayTest {
         .thenThrow(new IllegalStateException("底层状态不确定"));
     var error =
         assertThrows(
-            dev.workbench.tool.UncertainToolEffectException.class, () -> writer.write(hash, "新内容"));
+            dev.workbench.framework.tool.UncertainToolEffectException.class,
+            () -> writer.write(hash, "新内容"));
     assertSame(error, failure.get());
     assertNull(runtime.rejected);
   }
@@ -172,8 +175,8 @@ class ToolGatewayTest {
     String output =
         gateway.execute(
             ToolKind.WORKSPACE_READ,
-            dev.workbench.tool.ToolContracts.SINGLE_FILE_VERSION,
-            dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ),
+            dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+            dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ),
             ToolEffect.READ_ONLY,
             "开始",
             value -> "摘要",
@@ -198,8 +201,8 @@ class ToolGatewayTest {
             () ->
                 gateway.execute(
                     ToolKind.WORKSPACE_READ,
-                    dev.workbench.tool.ToolContracts.SINGLE_FILE_VERSION,
-                    dev.workbench.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ),
+                    dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+                    dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ),
                     ToolEffect.READ_ONLY,
                     "开始",
                     value -> "摘要",
@@ -221,7 +224,10 @@ class ToolGatewayTest {
 
     public void modelResult(Integer input, Integer output) {}
 
-    public void skillsLoaded(java.util.List<dev.workbench.skill.SkillRef> skills) {}
+    public void definitionResolved(
+        dev.workbench.framework.agent.definition.AgentDefinitionRef ref, String sha256) {}
+
+    public void skillsLoaded(java.util.List<dev.workbench.framework.skill.SkillRef> skills) {}
 
     public void toolsLoaded(java.util.Map<ToolKind, Integer> tools) {}
 

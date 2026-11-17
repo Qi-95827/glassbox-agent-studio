@@ -3,3 +3,5 @@
 .handoff{display:block;margin-bottom:8px;font-size:12px}.handoff summary{cursor:pointer;font-weight:600}.handoff p{line-height:1.7;color:#66758c;margin:8px 0 0;overflow-wrap:anywhere}
 
 .nav-button{border:0;background:none;width:100%;cursor:pointer;font-family:inherit}.workspace-output{max-height:200px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f7fb;padding:12px;font-size:12px}
+/* 授权候选仅用于选择；长路径可换行，避免窄屏时遮挡操作。 */
+.file-picker{margin:10px 0}.file-picker-search{display:flex;gap:8px;margin:10px 0}.file-picker-list{list-style:none;margin:10px 0;padding:0;max-height:230px;overflow:auto}.file-picker-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid #edf0f5}.file-picker-list li span{min-width:0;overflow-wrap:anywhere;font-size:12px;color:#40506c}.file-picker-list li button{flex:none}

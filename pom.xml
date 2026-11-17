@@ -23,32 +23,6 @@
       <resource><directory>frontend/user-workbench/dist</directory><targetPath>static</targetPath></resource>
     </resources>
     <plugins>
-      <!-- 各功能目录是同一工程的源码根目录，并非独立 Maven 子模块。 -->
-      <plugin>
-        <groupId>org.codehaus.mojo</groupId>
-        <artifactId>build-helper-maven-plugin</artifactId>
-        <version>3.6.1</version>
-        <executions>
-          <execution>
-            <id>add-feature-sources</id><phase>generate-sources</phase>
-            <goals><goal>add-source</goal></goals>
-            <configuration><sources>
-              <source>backend/modules/agent/src/main/java</source>
-              <source>backend/modules/orchestration/src/main/java</source>
-              <source>backend/modules/control/src/main/java</source>
-              <source>backend/modules/task/src/main/java</source>
-              <source>backend/modules/tool/src/main/java</source>
-              <source>backend/modules/workspace/src/main/java</source>
-              <source>backend/modules/bug/src/main/java</source>
-              <source>backend/modules/report/src/main/java</source>
-              <source>backend/modules/evaluation/src/main/java</source>
-              <source>backend/modules/observability/src/main/java</source>
-              <source>backend/modules/memory/src/main/java</source>
-              <source>backend/modules/skill/src/main/java</source>
-            </sources></configuration>
-          </execution>
-        </executions>
-      </plugin>
       <plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin>
     </plugins>
   </build>

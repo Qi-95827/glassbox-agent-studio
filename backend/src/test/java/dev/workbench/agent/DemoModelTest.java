@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.Scenario;
+import dev.workbench.infrastructure.model.DemoModel;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.ToolResultBlock;

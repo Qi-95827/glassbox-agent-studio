@@ -7,6 +7,8 @@ import static org.mockito.Mockito.*;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ModelMode;
+import dev.workbench.framework.agent.execution.AgentRuntime;
+import dev.workbench.framework.model.ControlledModel;
 import io.agentscope.core.model.ChatResponse;
 import io.agentscope.core.model.ChatUsage;
 import io.agentscope.core.model.Model;

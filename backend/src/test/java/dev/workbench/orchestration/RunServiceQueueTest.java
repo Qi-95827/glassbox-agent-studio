@@ -5,10 +5,10 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.workbench.agent.AgentScopeExecutor;
 import dev.workbench.bug.BugService;
 import dev.workbench.domain.RunStatus;
-import dev.workbench.memory.MemoryService;
+import dev.workbench.framework.context.AgentContextAssembler;
+import dev.workbench.infrastructure.agentscope.AgentScopeExecutor;
 import dev.workbench.task.RunRepository;
 import dev.workbench.workspace.WorkspaceService;
 import org.junit.jupiter.api.Test;
@@ -26,7 +26,7 @@ class RunServiceQueueTest {
             new ObjectMapper(),
             mock(WorkspaceService.class),
             mock(BugService.class),
-            mock(MemoryService.class));
+            mock(AgentContextAssembler.class));
     service.shutdown();
     String runId = service.create(new CreateTaskRequest("任务", "normal", 4, 2, 30));
     verify(repository).createTaskAndFirstRun(any(), any(), any(), anyString());
@@ -52,7 +52,7 @@ class RunServiceQueueTest {
             new ObjectMapper(),
             mock(WorkspaceService.class),
             mock(BugService.class),
-            mock(MemoryService.class));
+            mock(AgentContextAssembler.class));
     var runId = java.util.UUID.randomUUID();
     var taskId = java.util.UUID.randomUUID();
     var checkpointId = java.util.UUID.randomUUID();

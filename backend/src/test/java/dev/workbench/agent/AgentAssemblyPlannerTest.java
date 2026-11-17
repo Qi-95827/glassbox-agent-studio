@@ -4,8 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ToolKind;
-import dev.workbench.skill.SkillId;
-import dev.workbench.skill.SkillRegistry;
+import dev.workbench.framework.agent.assembly.AgentAssemblyPlanner;
+import dev.workbench.framework.skill.SkillId;
+import dev.workbench.framework.skill.SkillRegistry;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -44,8 +45,9 @@ class AgentAssemblyPlannerTest {
         IllegalArgumentException.class, () -> planner.plan(AgentRole.CODER, false, 0, true));
     assertThrows(
         IllegalArgumentException.class,
-        () -> dev.workbench.tool.ToolContracts.versionFor(ToolKind.WORKSPACE_READ, 0));
+        () -> dev.workbench.framework.tool.ToolContracts.versionFor(ToolKind.WORKSPACE_READ, 0));
     assertThrows(
-        IllegalArgumentException.class, () -> dev.workbench.tool.ToolContracts.versionFor(null, 1));
+        IllegalArgumentException.class,
+        () -> dev.workbench.framework.tool.ToolContracts.versionFor(null, 1));
   }
 }
