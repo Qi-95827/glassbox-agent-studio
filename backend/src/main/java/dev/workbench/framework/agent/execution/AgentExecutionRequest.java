@@ -5,6 +5,7 @@ import dev.workbench.domain.CheckpointStage;
 import dev.workbench.domain.ModelMode;
 import dev.workbench.domain.Scenario;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
+import dev.workbench.framework.context.AgentInput;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -13,7 +14,7 @@ import java.util.UUID;
 public record AgentExecutionRequest(
     AgentRole role,
     String agentId,
-    String input,
+    AgentInput context,
     String workspaceId,
     List<String> fileScopes,
     boolean writeEnabled,
@@ -24,6 +25,40 @@ public record AgentExecutionRequest(
     AgentRuntime runtime,
     AgentDefinitionRef definitionRef,
     String expectedDefinitionSha256) {
+  public AgentExecutionRequest(
+      AgentRole role,
+      String agentId,
+      String input,
+      String workspaceId,
+      List<String> fileScopes,
+      boolean writeEnabled,
+      Scenario scenario,
+      ModelMode modelMode,
+      CheckpointStage stage,
+      String previous,
+      AgentRuntime runtime,
+      AgentDefinitionRef definitionRef,
+      String expectedDefinitionSha256) {
+    this(
+        role,
+        agentId,
+        new AgentInput(input, List.of()),
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256);
+  }
+
+  public String input() {
+    return context.text();
+  }
+
   /** 内部受信调用可按定义引用执行，不将它当作持久化计划。 */
   public AgentExecutionRequest(
       AgentRole role,
@@ -85,7 +120,8 @@ public record AgentExecutionRequest(
   public AgentExecutionRequest {
     Objects.requireNonNull(role, "角色不能为空");
     UUID.fromString(agentId);
-    if (input == null || input.isBlank()) throw new IllegalArgumentException("Agent 输入不能为空。");
+    if (context == null || context.text().isBlank())
+      throw new IllegalArgumentException("Agent 输入不能为空。");
     if (fileScopes == null
         || (workspaceId == null && !fileScopes.isEmpty())
         || (workspaceId != null && fileScopes.isEmpty())

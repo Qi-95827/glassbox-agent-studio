@@ -94,10 +94,18 @@ class AgentDefinitionRegistryTest {
             reference);
 
     assertTrue(executor.execute(request).contains("审查完成"));
-    verify(runtime).definitionResolved(reference, definitions.fingerprint(reference));
-    verify(runtime).beforeModel(any());
-    verify(runtime).skillsLoaded(argThat(value -> value.size() == 1));
-    verify(runtime).toolsLoaded(eq(java.util.Map.of()));
+    var sequence = inOrder(runtime);
+    sequence
+        .verify(runtime)
+        .assemblyResolved(
+            argThat(
+                components ->
+                    reference.equals(components.definition())
+                        && definitions.fingerprint(reference).equals(components.definitionSha256())
+                        && components.skills().size() == 1
+                        && components.tools().isEmpty()
+                        && "mock".equals(components.model().name())));
+    sequence.verify(runtime).beforeModel(any());
     clearInvocations(runtime);
     var wrongDigest =
         new AgentExecutionRequest(

@@ -5,14 +5,23 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.domain.Scenario;
+import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.execution.AgentRuntime;
-import dev.workbench.workspace.AuthorizedCodeSearch;
-import dev.workbench.workspace.AuthorizedFileSet;
+import dev.workbench.framework.tool.AgentToolContext;
+import dev.workbench.framework.tool.AgentToolRegistry;
+import dev.workbench.framework.tool.ToolContracts;
 import dev.workbench.workspace.WorkspaceService;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ToolResultState;
+import io.agentscope.core.message.ToolUseBlock;
+import io.agentscope.core.tool.ToolCallParam;
+import io.agentscope.core.tool.Toolkit;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -48,131 +57,80 @@ class WorkspaceScopedToolsIntegrationTest {
     when(runtime.beforeTool(any(), anyInt(), anyString()))
         .thenAnswer(invocation -> UUID.randomUUID());
     var json = new ObjectMapper().findAndRegisterModules();
-    var scope = new AuthorizedFileSet(List.of("a.txt", "b.txt"));
     var failure = new AtomicReference<RuntimeException>();
-    var singleReader =
-        new WorkspaceReadTool(workspace, json, created.id(), "a.txt", runtime, failure);
+    var providers = new BuiltInToolProviders();
+    var registry =
+        new AgentToolRegistry(
+            List.of(
+                providers.workspaceReadProvider(workspace),
+                providers.workspaceSearchProvider(workspace),
+                providers.workspaceWriteProvider(workspace)));
+    var single =
+        registry.assemble(
+            Map.of(ToolKind.WORKSPACE_READ, 1),
+            new AgentToolContext(
+                json, created.id(), List.of("a.txt"), Scenario.NORMAL, runtime, failure));
     assertEquals(
-        dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
-        json.readTree(singleReader.read()).path("toolVersion").asInt());
-    verify(runtime)
-        .beforeTool(
-            eq(dev.workbench.domain.ToolKind.WORKSPACE_READ),
-            eq(dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION),
-            anyString());
-    var reader =
-        new WorkspaceScopedReadTool(workspace, created.id(), scope, json, runtime, failure);
-    var writer =
-        new WorkspaceScopedWriteTool(workspace, created.id(), scope, json, runtime, failure);
-    var toolkit = new io.agentscope.core.tool.Toolkit();
-    toolkit.registerTool(reader);
-    var search =
-        new WorkspaceSearchTool(
-            new AuthorizedCodeSearch(workspace), created.id(), scope, json, runtime, failure);
-    toolkit.registerTool(search);
-    var searchInput = java.util.Map.<String, Object>of("query", "原始");
-    var searchCall =
-        io.agentscope.core.message.ToolUseBlock.builder()
-            .id("test-search")
-            .name("search_authorized_files")
-            .input(searchInput)
-            .content(json.writeValueAsString(searchInput))
-            .build();
-    var searchOutput =
-        toolkit
-            .callTool(
-                io.agentscope.core.tool.ToolCallParam.builder()
-                    .toolUseBlock(searchCall)
-                    .input(searchInput)
-                    .build())
-            .block();
-    assertNotNull(searchOutput);
-    assertNotEquals(io.agentscope.core.message.ToolResultState.ERROR, searchOutput.getState());
-    var searchJson =
-        json.readTree(
-            ((io.agentscope.core.message.TextBlock) searchOutput.getOutput().getFirst()).getText());
-    if (searchJson.isTextual()) searchJson = json.readTree(searchJson.asText());
-    assertEquals("SUCCEEDED", searchJson.path("status").asText());
-    assertEquals("WORKSPACE_SEARCH", searchJson.path("toolId").asText());
-    assertEquals(2, searchJson.path("data").path("matches").size());
-    assertEquals("a.txt", searchJson.path("data").path("matches").get(0).path("path").asText());
-    assertEquals(1, searchJson.path("data").path("matches").get(0).path("line").asInt());
-    assertFalse(searchJson.toString().contains("secret.txt"));
-    assertEquals("REJECTED", json.readTree(search.search("\n")).path("status").asText());
-    verify(runtime, times(2))
-        .beforeTool(eq(dev.workbench.domain.ToolKind.WORKSPACE_SEARCH), eq(1), anyString());
-    var call =
-        io.agentscope.core.message.ToolUseBlock.builder()
-            .id("test-call")
-            .name("read_authorized_file")
-            .input(java.util.Map.of("path", "a.txt"))
-            .content("{\"path\":\"a.txt\"}")
-            .build();
-    var result =
-        toolkit
-            .callTool(
-                io.agentscope.core.tool.ToolCallParam.builder()
-                    .toolUseBlock(call)
-                    .input(call.getInput())
-                    .build())
-            .block();
-    assertNotNull(result);
-    assertNotEquals(io.agentscope.core.message.ToolResultState.ERROR, result.getState());
-    String resultText =
-        ((io.agentscope.core.message.TextBlock) result.getOutput().getFirst()).getText();
-    var resultJson = json.readTree(resultText);
-    if (resultJson.isTextual()) resultJson = json.readTree(resultJson.asText());
-    assertEquals("SUCCEEDED", resultJson.path("status").asText());
-    var a = json.readTree(reader.read("a.txt"));
-    var b = json.readTree(reader.read("b.txt"));
+        ToolContracts.SINGLE_FILE_VERSION,
+        call(json, single, "read_authorized_file", Map.of()).path("toolVersion").asInt());
+    verify(runtime).beforeTool(eq(ToolKind.WORKSPACE_READ), eq(1), anyString());
+
+    var toolkit =
+        registry.assemble(
+            Map.of(
+                ToolKind.WORKSPACE_READ,
+                2,
+                ToolKind.WORKSPACE_WRITE,
+                2,
+                ToolKind.WORKSPACE_SEARCH,
+                1),
+            new AgentToolContext(
+                json, created.id(), List.of("a.txt", "b.txt"), Scenario.NORMAL, runtime, failure));
+    var search = call(json, toolkit, "search_authorized_files", Map.of("query", "原始"));
+    assertEquals("SUCCEEDED", search.path("status").asText());
+    assertEquals("WORKSPACE_SEARCH", search.path("toolId").asText());
+    assertEquals(2, search.path("data").path("matches").size());
+    assertEquals("a.txt", search.path("data").path("matches").get(0).path("path").asText());
+    assertEquals(1, search.path("data").path("matches").get(0).path("line").asInt());
+    assertFalse(search.toString().contains("secret.txt"));
+    assertEquals(
+        "REJECTED",
+        call(json, toolkit, "search_authorized_files", Map.of("query", "\n"))
+            .path("status")
+            .asText());
+    verify(runtime, times(2)).beforeTool(eq(ToolKind.WORKSPACE_SEARCH), eq(1), anyString());
+
+    var a = call(json, toolkit, "read_authorized_file", Map.of("path", "a.txt"));
+    var b = call(json, toolkit, "read_authorized_file", Map.of("path", "b.txt"));
+    assertEquals("SUCCEEDED", a.path("status").asText());
     assertEquals("原始 A", a.path("data").path("content").asText());
     assertEquals("原始 B", b.path("data").path("content").asText());
     assertEquals(2, a.path("toolVersion").asInt());
-    assertEquals("REJECTED", json.readTree(reader.read("secret.txt")).path("status").asText());
-    assertEquals("REJECTED", json.readTree(reader.read("../secret.txt")).path("status").asText());
+    assertEquals(
+        "REJECTED",
+        call(json, toolkit, "read_authorized_file", Map.of("path", "secret.txt"))
+            .path("status")
+            .asText());
+    assertEquals(
+        "REJECTED",
+        call(json, toolkit, "read_authorized_file", Map.of("path", "../secret.txt"))
+            .path("status")
+            .asText());
+
     String hash = b.path("data").path("sha256").asText();
-    var wrongFileVersion = json.readTree(writer.write("a.txt", hash, "不能修改 A"));
+    var wrongFileVersion = write(json, toolkit, "a.txt", hash, "不能修改 A");
     assertEquals("STALE_VERSION", wrongFileVersion.path("error").path("code").asText());
-    var written = json.readTree(writer.write("b.txt", hash, "修改 B"));
+    var written = write(json, toolkit, "b.txt", hash, "修改 B");
     assertEquals("SUCCEEDED", written.path("status").asText());
     assertEquals(2, written.path("toolVersion").asInt());
-    var stale = json.readTree(writer.write("b.txt", hash, "再次修改"));
+    var stale = write(json, toolkit, "b.txt", hash, "再次修改");
     assertEquals("STALE_VERSION", stale.path("error").path("code").asText());
-    toolkit.registerTool(writer);
-    java.util.Map<String, Object> writeInput =
-        java.util.Map.of(
-            "path",
-            "a.txt",
-            "expectedSha256",
-            a.path("data").path("sha256").asText(),
-            "content",
-            "框架修改 A");
-    var writeCall =
-        io.agentscope.core.message.ToolUseBlock.builder()
-            .id("test-write")
-            .name("write_authorized_file")
-            .input(writeInput)
-            .content(json.writeValueAsString(writeInput))
-            .build();
-    var frameworkWrite =
-        toolkit
-            .callTool(
-                io.agentscope.core.tool.ToolCallParam.builder()
-                    .toolUseBlock(writeCall)
-                    .input(writeCall.getInput())
-                    .build())
-            .block();
-    assertNotNull(frameworkWrite);
-    assertNotEquals(io.agentscope.core.message.ToolResultState.ERROR, frameworkWrite.getState());
     var frameworkResult =
-        json.readTree(
-            ((io.agentscope.core.message.TextBlock) frameworkWrite.getOutput().getFirst())
-                .getText());
-    if (frameworkResult.isTextual()) frameworkResult = json.readTree(frameworkResult.asText());
+        write(json, toolkit, "a.txt", a.path("data").path("sha256").asText(), "框架修改 A");
     assertEquals("SUCCEEDED", frameworkResult.path("status").asText());
     assertEquals(2, frameworkResult.path("toolVersion").asInt());
-    var denied = json.readTree(writer.write("secret.txt", hash, "越权"));
-    assertEquals("REJECTED", denied.path("status").asText());
+    assertEquals(
+        "REJECTED", write(json, toolkit, "secret.txt", hash, "越权").path("status").asText());
     assertEquals("原始 B", Files.readString(repo.resolve("b.txt"), StandardCharsets.UTF_8));
     assertEquals(
         "修改 B",
@@ -187,6 +145,34 @@ class WorkspaceScopedToolsIntegrationTest {
         Files.readString(
             Path.of(created.workspacePath()).resolve("secret.txt"), StandardCharsets.UTF_8));
     assertNull(failure.get());
+  }
+
+  private static com.fasterxml.jackson.databind.JsonNode write(
+      ObjectMapper json, Toolkit toolkit, String path, String hash, String content)
+      throws Exception {
+    return call(
+        json,
+        toolkit,
+        "write_authorized_file",
+        Map.of("path", path, "expectedSha256", hash, "content", content));
+  }
+
+  private static com.fasterxml.jackson.databind.JsonNode call(
+      ObjectMapper json, Toolkit toolkit, String name, Map<String, Object> input) throws Exception {
+    var request =
+        ToolUseBlock.builder()
+            .id(UUID.randomUUID().toString())
+            .name(name)
+            .input(input)
+            .content(json.writeValueAsString(input))
+            .build();
+    var result =
+        toolkit
+            .callTool(ToolCallParam.builder().toolUseBlock(request).input(input).build())
+            .block();
+    assertNotNull(result);
+    assertNotEquals(ToolResultState.ERROR, result.getState());
+    return json.readTree(((TextBlock) result.getOutput().getFirst()).getText());
   }
 
   private static void git(Path dir, String... args) throws Exception {

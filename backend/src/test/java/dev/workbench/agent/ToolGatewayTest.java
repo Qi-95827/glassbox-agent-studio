@@ -5,11 +5,20 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.ModelKind;
+import dev.workbench.domain.Scenario;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.execution.AgentRuntime;
+import dev.workbench.framework.tool.AgentToolContext;
+import dev.workbench.framework.tool.AgentToolRegistry;
 import dev.workbench.framework.tool.ToolEffect;
 import dev.workbench.framework.tool.ToolGateway;
+import dev.workbench.workspace.WorkspaceService;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ToolUseBlock;
+import io.agentscope.core.tool.ToolCallParam;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -126,15 +135,10 @@ class ToolGatewayTest {
   void invalidWriteInputIsRejectedBeforeCallingWorkspace() throws Exception {
     var workspace = org.mockito.Mockito.mock(dev.workbench.workspace.WorkspaceService.class);
     var runtime = new StubRuntime();
-    var writer =
-        new WorkspaceWriteTool(
-            workspace,
-            "workspace",
-            "file",
-            new ObjectMapper().findAndRegisterModules(),
-            runtime,
-            new AtomicReference<RuntimeException>());
-    var result = new ObjectMapper().readTree(writer.write("invalid-hash", "新内容"));
+    var result =
+        new ObjectMapper()
+            .readTree(
+                callRegisteredWrite(workspace, runtime, new AtomicReference<>(), "invalid-hash"));
     assertEquals("REJECTED", result.path("status").asText());
     assertEquals("INVALID_ARGUMENT", result.path("error").path("code").asText());
     org.mockito.Mockito.verifyNoInteractions(workspace);
@@ -145,23 +149,43 @@ class ToolGatewayTest {
     var workspace = org.mockito.Mockito.mock(dev.workbench.workspace.WorkspaceService.class);
     var runtime = new StubRuntime();
     var failure = new AtomicReference<RuntimeException>();
-    var writer =
-        new WorkspaceWriteTool(
-            workspace,
-            "workspace",
-            "file",
-            new ObjectMapper().findAndRegisterModules(),
-            runtime,
-            failure);
     String hash = "a".repeat(64);
     org.mockito.Mockito.when(workspace.write("workspace", "file", hash, "新内容"))
         .thenThrow(new IllegalStateException("底层状态不确定"));
     var error =
         assertThrows(
             dev.workbench.framework.tool.UncertainToolEffectException.class,
-            () -> writer.write(hash, "新内容"));
+            () -> callRegisteredWrite(workspace, runtime, failure, hash));
     assertSame(error, failure.get());
     assertNull(runtime.rejected);
+  }
+
+  private static String callRegisteredWrite(
+      WorkspaceService workspace,
+      AgentRuntime runtime,
+      AtomicReference<RuntimeException> failure,
+      String hash) {
+    var json = new ObjectMapper().findAndRegisterModules();
+    var provider = new BuiltInToolProviders().workspaceWriteProvider(workspace);
+    var context =
+        new AgentToolContext(json, "workspace", List.of("file"), Scenario.NORMAL, runtime, failure);
+    var toolkit =
+        new AgentToolRegistry(List.of(provider))
+            .assemble(Map.of(ToolKind.WORKSPACE_WRITE, 1), context);
+    String name = "write_authorized_file";
+    var use =
+        ToolUseBlock.builder()
+            .id("write")
+            .name(name)
+            .input(Map.of("expectedSha256", hash, "content", "新内容"))
+            .build();
+    var result =
+        toolkit
+            .getTool(name)
+            .callAsync(ToolCallParam.builder().toolUseBlock(use).input(use.getInput()).build())
+            .block();
+    assertNotNull(result);
+    return ((TextBlock) result.getOutput().getFirst()).getText();
   }
 
   @Test
@@ -224,12 +248,8 @@ class ToolGatewayTest {
 
     public void modelResult(Integer input, Integer output) {}
 
-    public void definitionResolved(
-        dev.workbench.framework.agent.definition.AgentDefinitionRef ref, String sha256) {}
-
-    public void skillsLoaded(java.util.List<dev.workbench.framework.skill.SkillRef> skills) {}
-
-    public void toolsLoaded(java.util.Map<ToolKind, Integer> tools) {}
+    public void assemblyResolved(
+        dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Components components) {}
 
     public UUID beforeTool(ToolKind tool, int version, String fingerprint) {
       return id;

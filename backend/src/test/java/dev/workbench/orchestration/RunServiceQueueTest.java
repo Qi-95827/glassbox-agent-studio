@@ -26,7 +26,8 @@ class RunServiceQueueTest {
             new ObjectMapper(),
             mock(WorkspaceService.class),
             mock(BugService.class),
-            mock(AgentContextAssembler.class));
+            mock(AgentContextAssembler.class),
+            mock(WorkflowScheduler.class));
     service.shutdown();
     String runId = service.create(new CreateTaskRequest("任务", "normal", 4, 2, 30));
     verify(repository).createTaskAndFirstRun(any(), any(), any(), anyString());
@@ -52,7 +53,8 @@ class RunServiceQueueTest {
             new ObjectMapper(),
             mock(WorkspaceService.class),
             mock(BugService.class),
-            mock(AgentContextAssembler.class));
+            mock(AgentContextAssembler.class),
+            mock(WorkflowScheduler.class));
     var runId = java.util.UUID.randomUUID();
     var taskId = java.util.UUID.randomUUID();
     var checkpointId = java.util.UUID.randomUUID();

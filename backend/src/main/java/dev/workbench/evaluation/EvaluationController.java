@@ -35,8 +35,8 @@ public class EvaluationController {
   }
 
   @PostMapping
-  public Created start() {
-    return new Created(service.start());
+  public Created start(@RequestParam(defaultValue = SeedSuite.CODE) SeedSuite.Variant suite) {
+    return new Created(service.start(suite));
   }
 
   @PostMapping("/{id}/cancel")

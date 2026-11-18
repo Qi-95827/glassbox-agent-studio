@@ -4,12 +4,16 @@ package dev.workbench.domain;
 public enum EventType {
   /** 任务已创建。 */
   TASK_CREATED,
+  /** 用户确认了已保存的计划版本。 */
+  PLAN_APPROVED,
   /** 排队运行开始执行。 */
   RUN_STARTED,
   /** 协调者已委派子任务。 */
   DELEGATED,
   /** Agent 实例已开始。 */
   AGENT_STARTED,
+  /** 本次尝试已结束，节点将在退避后重新认领。 */
+  NODE_RETRY_SCHEDULED,
   /** 模型调用已发起。 */
   MODEL_STARTED,
   /** 模型调用已返回。 */
@@ -24,6 +28,10 @@ public enum EventType {
   HANDOFF,
   /** 接收交接的 Agent 启动记录已保存，不证明模型收到输入。 */
   HANDOFF_ACCEPTED,
+  /** 系统检查节点已认领并开始确定性检查。 */
+  CHECK_STARTED,
+  /** 系统检查已结算，结果写入检查记录。 */
+  CHECK_FINISHED,
   /** 内部检查点已保存。 */
   CHECKPOINT_SAVED,
   /** 分析后恢复检查点不满足保存条件；不表示运行失败。 */

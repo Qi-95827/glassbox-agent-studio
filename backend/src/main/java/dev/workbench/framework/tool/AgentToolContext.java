@@ -27,9 +27,4 @@ public record AgentToolContext(
     }
     authorizedPaths = List.copyOf(authorizedPaths);
   }
-
-  /** 扩展工具应通过网关连接运行控制、预算及结构化结果。 */
-  public ToolGateway gateway() {
-    return new ToolGateway(json, runtime, failure);
-  }
 }

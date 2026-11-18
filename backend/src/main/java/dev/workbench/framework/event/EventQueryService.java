@@ -23,18 +23,31 @@ public class EventQueryService {
     runs.runSnapshot(runId);
     var events =
         db.query(
-            "SELECT id,run_id,event_type,message,created_at FROM events WHERE run_id=? AND id>?"
-                + " ORDER BY id LIMIT ?",
+            "SELECT id,run_id,event_type,message,created_at,plan_version_id,node_id,attempt_id,"
+                + "agent_id,check_id,model_call_id,tool_call_id,reason_code FROM events"
+                + " WHERE run_id=? AND id>? ORDER BY id LIMIT ?",
             (r, i) ->
                 new RunEvent(
                     r.getLong("id"),
                     UUID.fromString(r.getString("run_id")),
                     EventType.valueOf(r.getString("event_type")),
                     r.getString("message"),
-                    Instant.parse(r.getString("created_at"))),
+                    Instant.parse(r.getString("created_at")),
+                    nullableUuid(r.getString("plan_version_id")),
+                    nullableUuid(r.getString("node_id")),
+                    nullableUuid(r.getString("attempt_id")),
+                    nullableUuid(r.getString("agent_id")),
+                    nullableUuid(r.getString("check_id")),
+                    nullableUuid(r.getString("model_call_id")),
+                    nullableUuid(r.getString("tool_call_id")),
+                    r.getString("reason_code")),
             runId,
             after,
             limit);
     return new EventPage(events, events.isEmpty() ? after : events.getLast().id());
+  }
+
+  private static UUID nullableUuid(String value) {
+    return value == null || value.isBlank() ? null : UUID.fromString(value);
   }
 }

@@ -26,25 +26,25 @@ public final class AgentToolRegistry {
   /** 只注册计划中的工具；成功注册后调用方才能记录装配事实。 */
   public Toolkit assemble(Map<ToolKind, Integer> planned, AgentToolContext context) {
     var toolkit = new Toolkit();
-    int count = 0;
     var sorted = new EnumMap<ToolKind, Integer>(ToolKind.class);
     sorted.putAll(planned);
     int files = context.authorizedPaths().size();
     for (var entry : sorted.entrySet()) {
       var provider = providers.get(entry.getKey());
       if (provider == null) throw new IllegalStateException("授权工具缺少提供者：" + entry.getKey());
-      if (entry.getValue() == null || entry.getValue() != provider.contractVersion(files))
+      if (entry.getValue() == null
+          || entry.getValue() != ToolContracts.versionFor(entry.getKey(), files)
+          || entry.getValue() != provider.contractVersion(files))
         throw new IllegalStateException("工具提供者的契约版本与装配计划不一致：" + entry.getKey());
-      Object tool = provider.create(context);
-      if (tool == null) throw new IllegalStateException("工具提供者未创建工具：" + entry.getKey());
-      var previous = new java.util.HashMap<String, io.agentscope.core.tool.AgentTool>();
-      for (String name : toolkit.getToolNames()) previous.put(name, toolkit.getTool(name));
-      toolkit.registerTool(tool);
-      count++;
-      if (toolkit.getToolNames().size() != count
-          || previous.entrySet().stream()
-              .anyMatch(item -> toolkit.getTool(item.getKey()) != item.getValue()))
-        throw new IllegalStateException("工具提供者必须注册唯一的单个工具：" + entry.getKey());
+      var spec =
+          provider.create(
+              new AgentToolProvider.Scope(
+                  context.workspaceId(), context.authorizedPaths(), context.scenario()));
+      if (spec == null) throw new IllegalStateException("工具提供者未声明工具：" + entry.getKey());
+      if (toolkit.getTool(spec.name()) != null)
+        throw new IllegalStateException("工具名称重复：" + spec.name());
+      toolkit.registerAgentTool(
+          new GatewayAgentTool<>(entry.getKey(), entry.getValue(), spec, context));
     }
     return toolkit;
   }

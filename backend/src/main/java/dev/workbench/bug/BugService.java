@@ -37,6 +37,11 @@ public class BugService {
             "tests/test_*.py"));
   }
 
+  /** 当前受支持的模拟 Bug；未知标识在计划创建和检查执行时拒绝。 */
+  public boolean supports(String bugId) {
+    return BUG_ID.equals(bugId);
+  }
+
   public List<Map<String, Object>> checks(String workspaceId) {
     return db.queryForList(
         "SELECT id,bug_id,workspace_id,run_id,kind,status,CAST(output AS VARCHAR) AS"

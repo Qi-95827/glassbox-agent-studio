@@ -1,0 +1,51 @@
+package dev.workbench.framework.workflow.check;
+
+import java.util.Objects;
+
+/**
+ * 系统检查的结算结果。
+ *
+ * <p>{@code summary} 会作为可交接的检查结论展示给下游；{@code evidence} 保存结构化说明（例如引用计数和 缺失项），不包含文件正文或密钥。{@code
+ * externalEvidenceId} 指向系统内另一张权威证据表（例如 {@code bug_checks}），用于核对归属而不复制其正文。
+ */
+public record SystemCheckResult(
+    SystemCheckStatus status, String summary, String evidence, String externalEvidenceId) {
+  public SystemCheckResult {
+    Objects.requireNonNull(status, "检查状态不能为空");
+    if (status == SystemCheckStatus.RUNNING) throw new IllegalArgumentException("结算结果不能是运行中状态。");
+    if (summary == null || summary.isBlank() || summary.length() > 1000)
+      throw new IllegalArgumentException("检查摘要必须为 1 至 1000 个字符。");
+    if (evidence != null && evidence.length() > 2000)
+      throw new IllegalArgumentException("检查证据说明不能超过 2000 个字符。");
+    if (externalEvidenceId != null
+        && (externalEvidenceId.isBlank() || externalEvidenceId.length() > 80))
+      throw new IllegalArgumentException("外部证据标识无效。");
+  }
+
+  public static SystemCheckResult passed(String summary) {
+    return new SystemCheckResult(SystemCheckStatus.PASSED, summary, null, null);
+  }
+
+  public static SystemCheckResult passed(
+      String summary, String evidence, String externalEvidenceId) {
+    return new SystemCheckResult(SystemCheckStatus.PASSED, summary, evidence, externalEvidenceId);
+  }
+
+  public static SystemCheckResult failed(String summary, String evidence) {
+    return new SystemCheckResult(SystemCheckStatus.FAILED, summary, evidence, null);
+  }
+
+  public static SystemCheckResult failed(
+      String summary, String evidence, String externalEvidenceId) {
+    return new SystemCheckResult(SystemCheckStatus.FAILED, summary, evidence, externalEvidenceId);
+  }
+
+  public static SystemCheckResult blocked(String summary, String evidence) {
+    return new SystemCheckResult(SystemCheckStatus.BLOCKED, summary, evidence, null);
+  }
+
+  public static SystemCheckResult blocked(
+      String summary, String evidence, String externalEvidenceId) {
+    return new SystemCheckResult(SystemCheckStatus.BLOCKED, summary, evidence, externalEvidenceId);
+  }
+}

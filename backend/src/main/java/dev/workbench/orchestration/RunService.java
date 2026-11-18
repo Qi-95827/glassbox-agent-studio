@@ -9,8 +9,11 @@ import dev.workbench.framework.agent.execution.AgentExecutor;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.context.AgentContextAssembler;
 import dev.workbench.framework.context.AgentContextInput;
+import dev.workbench.framework.context.AgentInput;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.control.StopExecution;
+import dev.workbench.framework.workflow.plan.WorkflowPlan;
+import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.task.RunLimits;
 import dev.workbench.task.RunRepository;
 import dev.workbench.workspace.AuthorizedFileSet;
@@ -33,6 +36,7 @@ public class RunService {
   private final WorkspaceService workspaces;
   private final BugService bugs;
   private final AgentContextAssembler contexts;
+  private final WorkflowScheduler workflows;
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
   private final Set<String> paused = ConcurrentHashMap.newKeySet();
@@ -44,13 +48,15 @@ public class RunService {
       ObjectMapper json,
       WorkspaceService workspaces,
       BugService bugs,
-      AgentContextAssembler contexts) {
+      AgentContextAssembler contexts,
+      WorkflowScheduler workflows) {
     this.repository = repository;
     this.agent = agent;
     this.json = json;
     this.workspaces = workspaces;
     this.bugs = bugs;
     this.contexts = contexts;
+    this.workflows = workflows;
   }
 
   /** 重启后不能假设此前未结束的调用已经成功。 */
@@ -170,12 +176,45 @@ public class RunService {
     var limits =
         new RunLimits(
             rounds, tools, perTool, tokenLimit, identicalLimit, seconds, agentRounds, agentTools);
+    boolean reviewPlan = Boolean.TRUE.equals(request.reviewPlan());
+    WorkflowTemplate template =
+        request.workflowTemplate() == null ? null : workflows.template(request.workflowTemplate());
+    if (reviewPlan && template == null) throw new IllegalArgumentException("只有动态模板支持执行前确认。");
+    if (template == null && request.nodeBudgets() != null && !request.nodeBudgets().isEmpty())
+      throw new IllegalArgumentException("只有动态模板支持节点预算。");
+    if (template != null) {
+      template.scope().authorizationDigest(task);
+      if (template.scope().requiresBug() && !bugs.supports(task.bugId()))
+        throw new IllegalArgumentException("所选模拟 Bug 不存在或当前不受支持。");
+      template = template.withNodeBudgets(request.nodeBudgets());
+    }
     String createdMessage =
         mode == ModelMode.DEEPSEEK
             ? "任务已创建：AgentScope 使用 DeepSeek Flash，可调用模拟工具。"
             : "任务已创建：AgentScope 使用模拟模型和模拟工具。";
-    repository.createTaskAndFirstRun(
-        task, java.util.UUID.fromString(runId), limits, createdMessage);
+    if (template == null) {
+      repository.createTaskAndFirstRun(
+          task, java.util.UUID.fromString(runId), limits, createdMessage);
+    } else {
+      repository.createTaskAndFirstRun(
+          task,
+          java.util.UUID.fromString(runId),
+          limits,
+          reviewPlan ? "工作流计划已保存，等待用户确认。" : "工作流计划已保存，等待执行。",
+          template,
+          reviewPlan);
+    }
+    if (!reviewPlan) dispatchInitial(runId);
+    return runId;
+  }
+
+  /** 一个计划版本只接受一次确认。 */
+  public synchronized void approvePlan(String runId, java.util.UUID planVersionId) {
+    workflows.approvePlan(runId, planVersionId);
+    dispatchInitial(runId);
+  }
+
+  private void dispatchInitial(String runId) {
     try {
       executor.submit(() -> execute(runId, CheckpointStage.BEFORE_TOOL, null, false));
     } catch (java.util.concurrent.RejectedExecutionException e) {
@@ -191,7 +230,6 @@ public class RunService {
               0,
               null));
     }
-    return runId;
   }
 
   /** 排队中的任务立即终止；运行中的任务通过信号协作取消。 */
@@ -247,6 +285,13 @@ public class RunService {
   public synchronized String recover(String oldId, String checkpointId) {
     RunSnapshot original = repository.runSnapshot(oldId);
     if (original.status() != RunStatus.INTERRUPTED) throw new IllegalStateException("只有中断的运行可以恢复。");
+    if (workflows.plan(oldId) != null) {
+      String nextId = RunRepository.id();
+      workflows.recover(
+          oldId, java.util.UUID.fromString(checkpointId), java.util.UUID.fromString(nextId));
+      dispatchRecovery(nextId, CheckpointStage.BEFORE_TOOL, null);
+      return nextId;
+    }
     TaskDefinition task = repository.taskDefinition(original.taskId().toString());
     CheckpointSnapshot checkpoint = repository.checkedCheckpoint(checkpointId);
     if (!checkpoint.runId().equals(original.id())) throw new IllegalArgumentException("检查点不属于该运行。");
@@ -263,23 +308,29 @@ public class RunService {
 
     String nextId = RunRepository.id();
     repository.createRecoveryRun(java.util.UUID.fromString(nextId), original, checkpoint);
+    dispatchRecovery(nextId, checkpoint.stage(), checkpoint.toolResult());
+    return nextId;
+  }
+
+  private void dispatchRecovery(String nextId, CheckpointStage stage, String previousResult) {
     try {
-      executor.submit(() -> execute(nextId, checkpoint.stage(), checkpoint.toolResult(), true));
+      executor.submit(() -> execute(nextId, stage, previousResult, true));
     } catch (java.util.concurrent.RejectedExecutionException e) {
       repository.rejectRecoveryBeforeDispatch(nextId);
     }
-    return nextId;
   }
 
   private void execute(String id, CheckpointStage stage, String previousResult, boolean recovery) {
     RunSnapshot run;
     TaskDefinition task;
+    WorkflowPlan workflow;
     // 与排队取消共享同一把锁，保证已取消的任务不会再次被启动。
     synchronized (this) {
       run = repository.runSnapshot(id);
       if (run.status() != RunStatus.PENDING) return;
       try {
         task = repository.taskDefinition(run.taskId().toString());
+        workflow = workflows.plan(id);
       } catch (RuntimeException invalid) {
         repository.finishStoppedRun(
             new dev.workbench.task.StopCompletion(
@@ -293,6 +344,7 @@ public class RunService {
                 null));
         return;
       }
+      if (workflow != null && workflow.approvedAt() == null) return;
       repository.update(
           id, RunStatus.RUNNING, null, null, run.rounds(), run.tools(), run.elapsedMs());
     }
@@ -306,6 +358,14 @@ public class RunService {
             cancelled,
             task.roleBudgets(),
             task.toolBudgets());
+    if (workflow != null) {
+      try {
+        workflows.execute(id, workflow, task, control, this);
+      } finally {
+        clearControl(id);
+      }
+      return;
+    }
     String agentId = RunRepository.id();
     boolean agentStarted = false;
     AgentRole activeRole = AgentRole.ANALYST;
@@ -392,7 +452,7 @@ public class RunService {
                 new AgentExecutionRequest(
                     AgentRole.ANALYST,
                     agentId,
-                    contexts.assemble(new AgentContextInput(task, id, initial)),
+                    contexts.assembleInput(new AgentContextInput(task, id, initial)),
                     task.workspaceId(),
                     task.fileScopes(),
                     false,
@@ -468,7 +528,7 @@ public class RunService {
                     : HandoffSource.MOCK_MODEL,
                 coderId);
         codingInput = attachTestChecks(codingInput, initial);
-        String codingPrompt = serializeHandoff(codingInput);
+        AgentInput codingPrompt = handoffInput(codingInput);
         repository.handoff(HandoffDirection.AGENT_TRANSFER, codingInput);
         repository.event(id, EventType.DELEGATED, "分析交接已准备，计划接收实例：" + coderId);
         repository.startAgentFromHandoff(
@@ -558,7 +618,7 @@ public class RunService {
                   : HandoffSource.MOCK_MODEL,
               reviewerId);
       transfer = attachTestChecks(transfer, initial, regression);
-      String reviewInput = serializeHandoff(transfer);
+      AgentInput reviewInput = handoffInput(transfer);
       repository.handoff(HandoffDirection.AGENT_TRANSFER, transfer);
       repository.event(id, EventType.DELEGATED, "审查交接已准备，计划接收实例：" + reviewerId);
       repository.startAgentFromHandoff(
@@ -707,10 +767,14 @@ public class RunService {
           dev.workbench.domain.StopCause.UNCLASSIFIED_FAILURE,
           "执行失败，请结合运行记录检查模型、工具或状态。");
     } finally {
-      cancelled.remove(id);
-      paused.remove(id);
-      pauseMonitors.remove(id);
+      clearControl(id);
     }
+  }
+
+  private void clearControl(String id) {
+    cancelled.remove(id);
+    paused.remove(id);
+    pauseMonitors.remove(id);
   }
 
   /** 仅记录固定原因，不将路径、文件内容或异常详情写入用户轨迹。 */
@@ -764,9 +828,17 @@ public class RunService {
   }
 
   /** 发送给审查 Agent 的内容与持久化交接一致，便于追踪信息来源。 */
-  private String serializeHandoff(Handoff handoff) {
+  private AgentInput handoffInput(Handoff handoff) {
     try {
-      return json.writeValueAsString(handoff);
+      var sources = new java.util.ArrayList<AgentInput.Source>();
+      sources.add(
+          new AgentInput.Source(
+              AgentInput.Kind.HANDOFF, handoff.handoffId().toString(), handoff.schemaVersion()));
+      if (handoff.testCheckIds() != null) {
+        for (var check : handoff.testCheckIds())
+          sources.add(new AgentInput.Source(AgentInput.Kind.BUG_CHECK, check.toString(), null));
+      }
+      return new AgentInput(json.writeValueAsString(handoff), sources);
     } catch (JsonProcessingException e) {
       throw new IllegalStateException("无法序列化 Agent 交接信息。", e);
     }

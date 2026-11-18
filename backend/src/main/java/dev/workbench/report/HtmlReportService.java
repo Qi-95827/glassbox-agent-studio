@@ -6,6 +6,7 @@ import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.RunMetricsService;
 import dev.workbench.orchestration.Handoff;
 import dev.workbench.task.RunRepository;
+import dev.workbench.task.WorkflowExecutionRepository;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.WorkspaceService;
 import java.util.Map;
@@ -22,6 +23,7 @@ public class HtmlReportService {
   private final PlanRepository plans;
   private final RunMetricsService metrics;
   private final MemoryService memories;
+  private final WorkflowExecutionRepository workflows;
 
   public HtmlReportService(
       RunRepository repository,
@@ -30,7 +32,8 @@ public class HtmlReportService {
       ApprovalService approvals,
       PlanRepository plans,
       RunMetricsService metrics,
-      MemoryService memories) {
+      MemoryService memories,
+      WorkflowExecutionRepository workflows) {
     this.repository = repository;
     this.workspaces = workspaces;
     this.bugs = bugs;
@@ -38,6 +41,7 @@ public class HtmlReportService {
     this.plans = plans;
     this.metrics = metrics;
     this.memories = memories;
+    this.workflows = workflows;
   }
 
   /** 仅输出固定枚举和计数，不读取或拼接用户、模型和工具的自由文本。 */
@@ -65,7 +69,7 @@ public class HtmlReportService {
     html.append("<section><h2>协作步骤</h2><ul>");
     for (var node : nodes)
       html.append("<li>")
-          .append(escape(node.role().displayName()))
+          .append(escape(node.label() == null ? node.role().displayName() : node.label()))
           .append(" · ")
           .append(escape(node.status().name()))
           .append("</li>");
@@ -124,6 +128,7 @@ public class HtmlReportService {
     appendRequirements(html, run.get("TASK_ID").toString());
     appendBudgetPolicies(html, taskDefinition.roleBudgets(), taskDefinition.toolBudgets());
     appendPlanAndAgents(html, runId);
+    appendWorkflowMetrics(html, runId);
     appendMemoryReferences(html, runId);
     appendHandoffs(html, runId);
     appendCalls(html, runId);
@@ -309,9 +314,10 @@ public class HtmlReportService {
       html.append("<li>步骤 ")
           .append(node.sequence())
           .append(" · ")
-          .append(escape(node.role()))
+          .append(escape(node.label() == null ? node.role() : node.label()))
           .append(" · ")
           .append(escape(node.status()));
+      if (node.systemCheck()) html.append(" · 系统检查：").append(escape(node.checkRef().toString()));
       if (!node.dependencyIds().isEmpty()) {
         html.append(" · 前置：");
         var names =
@@ -321,9 +327,12 @@ public class HtmlReportService {
                         nodes.stream()
                             .filter(candidate -> candidate.id().equals(id))
                             .findFirst()
-                            .orElseThrow()
-                            .role()
-                            .name())
+                            .orElseThrow())
+                .map(
+                    prerequisite ->
+                        prerequisite.label() == null
+                            ? prerequisite.role().name()
+                            : prerequisite.label())
                 .toList();
         html.append(escape(String.join("、", names)));
       }
@@ -372,6 +381,50 @@ public class HtmlReportService {
       html.append("</li>");
     }
     html.append("</ul><p>工具装配不代表已经调用；实际调用仍需权限及参数校验。</p></section>");
+  }
+
+  /** 计划、检查与实际台账的汇总；不把未启动调用或未知用量推算成成功。 */
+  private void appendWorkflowMetrics(StringBuilder html, String runId) {
+    var summary = metrics.workflow(runId);
+    html.append("<section><h2>计划、检查与调用统计</h2><p>计划节点：")
+        .append(summary.nodes())
+        .append("；")
+        .append(
+            summary.nodeStatusCounts().entrySet().stream()
+                .map(entry -> entry.getKey().name() + " " + entry.getValue())
+                .collect(java.util.stream.Collectors.joining("、")))
+        .append("。系统检查记录：")
+        .append(summary.checks())
+        .append("；")
+        .append(
+            summary.checkStatusCounts().entrySet().stream()
+                .map(entry -> entry.getKey().name() + " " + entry.getValue())
+                .collect(java.util.stream.Collectors.joining("、")))
+        .append("；未执行检查节点：")
+        .append(summary.unexecutedChecks())
+        .append("。</p><p>实际启动模型调用：")
+        .append(summary.modelCalls())
+        .append("；工具调用：")
+        .append(summary.toolCalls())
+        .append("；用量未知的模型调用：")
+        .append(summary.unknownTokenCalls())
+        .append("。未启动的调用不计入实际次数。</p><ul>");
+    var checks = workflows.workflowChecks(runId);
+    for (var check : checks)
+      html.append("<li>检查 ")
+          .append(escape(check.check().toString()))
+          .append(" · ")
+          .append(escape(check.status().name()))
+          .append(" · ")
+          .append(escape(check.summary() == null ? "无摘要" : check.summary()))
+          .append(
+              check.externalEvidenceId() == null
+                  ? ""
+                  : " · 外部证据：" + escape(check.externalEvidenceId()))
+          .append(Boolean.FALSE.equals(check.evidenceCurrent()) ? " · 证据已过期" : "")
+          .append("</li>");
+    if (checks.isEmpty()) html.append("<li>没有已执行的系统检查。</li>");
+    html.append("</ul></section>");
   }
 
   private void appendHandoffs(StringBuilder html, String runId) {

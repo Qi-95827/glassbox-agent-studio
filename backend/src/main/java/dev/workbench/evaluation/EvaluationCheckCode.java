@@ -19,5 +19,16 @@ public enum EvaluationCheckCode {
   /** 重复调用保护是运行停止的明确原因。 */
   REPEAT_STOP_CAUSE,
   /** 重复保护生效前仅启动允许次数的工具。 */
-  REPEAT_TOOL_COUNT
+  REPEAT_TOOL_COUNT,
+  DYNAMIC_SAVED_PLAN,
+  DYNAMIC_INDEPENDENT_INSTANCES,
+  DYNAMIC_MERGE_RECEIPTS,
+  DYNAMIC_MODEL_CALLS,
+  DYNAMIC_BUDGET_STOP,
+  /** 系统检查记录状态与样本预期一致。 */
+  DYNAMIC_CHECK_STATUS,
+  /** 通过的检查记录了本次输入来源和结果证据。 */
+  DYNAMIC_CHECK_EVIDENCE,
+  /** 检查阻塞后没有启动下游 Agent、模型或工具调用。 */
+  DYNAMIC_CHECK_BLOCKED
 }

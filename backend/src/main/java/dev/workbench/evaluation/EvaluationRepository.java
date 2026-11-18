@@ -23,23 +23,27 @@ public class EvaluationRepository {
   }
 
   public void create(String id) {
+    create(id, SeedSuite.Variant.LOCAL_AGENT_V2);
+  }
+
+  public void create(String id, SeedSuite.Variant suite) {
     tx.executeWithoutResult(
         s -> {
           String time = RunRepository.now();
-          String definition = SeedSuite.snapshot(json);
+          String definition = SeedSuite.snapshot(json, suite);
           db.update(
               "INSERT INTO"
                   + " evaluation_batches(id,suite,status,created_at,finished_at,definition_json,definition_sha256)"
                   + " VALUES(?,?,?,?,?,?,?)",
               id,
-              SeedSuite.CODE,
+              suite.name(),
               EvaluationStatus.RUNNING.name(),
               time,
               null,
               definition,
               SeedSuite.sha256(definition));
           int sequence = 0;
-          for (SeedCase sample : SeedCase.values()) {
+          for (SeedCase sample : suite.cases()) {
             db.update(
                 "INSERT INTO evaluation_cases VALUES(?,?,?,?,?,?,?,?)",
                 RunRepository.id(),

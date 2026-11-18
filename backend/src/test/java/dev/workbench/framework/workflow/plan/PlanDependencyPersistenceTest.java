@@ -3,6 +3,8 @@ package dev.workbench.framework.workflow.plan;
 import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.domain.AgentRole;
+import dev.workbench.domain.InvocationStatus;
+import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.agent.definition.AgentDefinitionRegistry;
 import java.util.List;
 import java.util.UUID;
@@ -55,6 +57,72 @@ class PlanDependencyPersistenceTest {
   }
 
   @Test
+  void unregisteredSystemCheckRejectsPlanBeforeAnyRecordIsWritten() {
+    var definitions =
+        new AgentDefinitionRegistry(
+            new dev.workbench.agent.AgentRoleRegistry(),
+            new dev.workbench.framework.skill.SkillRegistry(),
+            List.of(
+                () ->
+                    new dev.workbench.framework.agent.definition.AgentDefinition(
+                        new AgentDefinitionRef("test-reader", 1),
+                        "测试读取",
+                        "只读取授权文件。",
+                        AgentRole.ANALYST,
+                        List.of(dev.workbench.domain.ToolKind.WORKSPACE_READ),
+                        List.of())));
+    plans =
+        new PlanRepository(
+            db,
+            new PlanFactory(new PlanValidator()),
+            definitions,
+            new dev.workbench.framework.workflow.check.SystemCheckRegistry(
+                List.of(new dev.workbench.framework.workflow.check.AuthorizedReadEvidenceCheck())));
+    var template =
+        new WorkflowTemplate(
+            "bad-check",
+            1,
+            WorkflowTemplate.Scope.WORKSPACE_READ_ONLY,
+            List.of(
+                new WorkflowTemplate.Step(
+                    "inspect",
+                    "读取授权文件",
+                    "analysis",
+                    new AgentDefinitionRef("test-reader", 1),
+                    List.of()),
+                WorkflowTemplate.Step.systemCheck(
+                    "check",
+                    "未知检查",
+                    "verification",
+                    new dev.workbench.framework.workflow.check.SystemCheckRef("unknown-check", 1),
+                    List.of("inspect"))));
+    var task =
+        new dev.workbench.domain.TaskDefinition(
+            UUID.randomUUID(),
+            "目标",
+            dev.workbench.domain.Scenario.NORMAL,
+            dev.workbench.domain.ModelMode.MOCK,
+            "ws-1",
+            "a.txt",
+            false,
+            null,
+            false,
+            List.of(),
+            List.of(),
+            dev.workbench.domain.TaskEntryKind.GENERAL,
+            List.of("a.txt"));
+    var failure =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                plans.initializeWorkflow(
+                    UUID.randomUUID().toString(), template, task, true, "2026-01-01T00:00:00Z"));
+    assertTrue(failure.getMessage().contains("未注册的系统检查"));
+    assertEquals(0, db.queryForObject("SELECT COUNT(*) FROM workflow_plans", Integer.class));
+    assertEquals(0, db.queryForObject("SELECT COUNT(*) FROM plan_nodes", Integer.class));
+  }
+
+  @Test
   void persistsDefinitionReferencesBeforeAnyAgentStartsAndRejectsPartialReferences() {
     String run = UUID.randomUUID().toString();
     plans.initialize(run, false);
@@ -93,6 +161,48 @@ class PlanDependencyPersistenceTest {
         IllegalStateException.class,
         () ->
             plans.startNode(run, first.id(), UUID.randomUUID().toString(), "2026-11-17T00:00:00Z"));
+  }
+
+  @Test
+  void handoffSenderMustBeCompletedDirectDependencyOrExplicitlyReusedSource() {
+    String run = UUID.randomUUID().toString();
+    String analyst = UUID.randomUUID().toString();
+    String coder = UUID.randomUUID().toString();
+    String time = "2026-11-17T00:00:00Z";
+    plans.initialize(run, true);
+    plans.start(run, analyst, AgentRole.ANALYST, time);
+    assertThrows(
+        IllegalStateException.class,
+        () -> plans.requireDirectDependencySender(run, AgentRole.CODER, UUID.fromString(analyst)));
+    plans.finish(analyst, InvocationStatus.COMPLETED, time);
+    plans.requireDirectDependencySender(run, AgentRole.CODER, UUID.fromString(analyst));
+    plans.start(run, coder, AgentRole.CODER, time);
+    plans.finish(coder, InvocationStatus.COMPLETED, time);
+    plans.requireDirectDependencySender(run, AgentRole.REVIEWER, UUID.fromString(coder));
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            plans.requireDirectDependencySender(run, AgentRole.REVIEWER, UUID.fromString(analyst)));
+    var nodes = plans.find(run);
+    db.update(
+        "INSERT INTO plan_node_dependencies(run_id,node_id,prerequisite_id) VALUES(?,?,?)",
+        run,
+        nodes.getLast().id().toString(),
+        nodes.getFirst().id().toString());
+    plans.requireDirectDependencySender(run, AgentRole.REVIEWER, UUID.fromString(analyst));
+    plans.requireDirectDependencySender(run, AgentRole.REVIEWER, UUID.fromString(coder));
+    assertThrows(
+        IllegalStateException.class,
+        () -> plans.requireDirectDependencySender(run, AgentRole.ANALYST, UUID.fromString(coder)));
+
+    String recovered = UUID.randomUUID().toString();
+    plans.initialize(recovered, false);
+    plans.reuseAnalysis(recovered, analyst, time);
+    plans.requireDirectDependencySender(recovered, AgentRole.REVIEWER, UUID.fromString(analyst));
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            plans.requireDirectDependencySender(recovered, AgentRole.REVIEWER, UUID.randomUUID()));
   }
 
   @Test

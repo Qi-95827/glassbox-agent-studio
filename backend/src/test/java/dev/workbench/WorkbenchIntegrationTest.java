@@ -9,21 +9,31 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.AgentRole;
+import dev.workbench.domain.EventType;
 import dev.workbench.domain.HandoffDirection;
 import dev.workbench.domain.HandoffSource;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.RunStatus;
+import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.evaluation.CaseStatus;
 import dev.workbench.evaluation.EvaluationRepository;
 import dev.workbench.evaluation.EvaluationService;
 import dev.workbench.evaluation.EvaluationStatus;
+import dev.workbench.framework.agent.assembly.AgentAssemblyPlanner;
 import dev.workbench.framework.event.EventQueryService;
+import dev.workbench.framework.model.AgentModelRegistry;
+import dev.workbench.framework.workflow.check.SystemCheckRef;
+import dev.workbench.framework.workflow.check.SystemCheckStatus;
+import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
 import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.view.ExecutionViewService;
 import dev.workbench.memory.MemoryCategory;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.MonitoringService;
@@ -33,15 +43,27 @@ import dev.workbench.orchestration.Handoff;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.report.HtmlReportService;
 import dev.workbench.task.RunRepository;
+import dev.workbench.task.WorkflowExecutionRepository;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.GitActionStatus;
 import dev.workbench.workspace.WorkspaceCommitService;
 import dev.workbench.workspace.WorkspaceService;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ToolResultBlock;
+import io.agentscope.core.message.ToolUseBlock;
+import io.agentscope.core.model.ChatResponse;
+import io.agentscope.core.model.GenerateOptions;
+import io.agentscope.core.model.Model;
+import io.agentscope.core.model.ToolSchema;
+import io.agentscope.extensions.model.openai.exception.RateLimitException;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,7 +71,9 @@ import org.springframework.boot.test.autoconfigure.actuate.observability.AutoCon
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import reactor.core.publisher.Flux;
 
 @AutoConfigureMockMvc
 @AutoConfigureObservability
@@ -62,12 +86,13 @@ import org.springframework.test.web.servlet.MockMvc;
 class WorkbenchIntegrationTest {
   @Autowired RunService service;
   @Autowired RunRepository repo;
+  @Autowired WorkflowExecutionRepository workflowRuns;
   @Autowired JdbcTemplate db;
   @Autowired HtmlReportService reports;
-  @Autowired WorkspaceService workspaces;
   @Autowired ApprovalService approvals;
   @Autowired WorkspaceCommitService commits;
   @Autowired PlanRepository plans;
+  @Autowired ExecutionViewService executionViews;
   @Autowired MockMvc mvc;
   @Autowired EvaluationService evaluations;
   @Autowired EvaluationRepository evaluationRecords;
@@ -77,6 +102,1194 @@ class WorkbenchIntegrationTest {
   @Autowired MeterRegistry meters;
   @Autowired MonitoringService monitoring;
   @Autowired io.agentscope.core.state.AgentStateStore agentStates;
+  @MockitoSpyBean AgentModelRegistry workflowModelRegistry;
+  @MockitoSpyBean AgentAssemblyPlanner assemblyPlanner;
+  @MockitoSpyBean WorkspaceService workspaces;
+
+  @Test
+  void reviewedWorkflowRunsIndependentInstancesAndJoinsBothInputs() throws Exception {
+    String id =
+        createDynamicWorkflow(
+            true,
+            3,
+            "{\"requirements\":{\"maxModelCalls\":1},\"constraints\":{\"maxModelCalls\":1}}");
+    var plan = plans.workflowPlan(id);
+    var nodes = plans.find(id);
+    assertTrue(plan.reviewRequired());
+    assertNull(plan.approvedAt());
+    assertEquals("PENDING", repo.run(id).get("STATUS"));
+    assertEquals(3, nodes.size());
+    assertEquals(nodes.get(0).definitionRef(), nodes.get(1).definitionRef());
+    assertNotEquals(nodes.get(0).id(), nodes.get(1).id());
+    assertEquals(1, nodes.get(0).budget().maxModelCalls());
+    assertEquals(1, nodes.get(1).budget().maxModelCalls());
+    assertTrue(
+        nodes.stream().allMatch(n -> n.agentId() == null && plan.id().equals(n.planVersionId())));
+    assertTrue(workflowRuns.workflowAttempts(id).isEmpty());
+    assertTrue(repo.models(id).isEmpty());
+    mvc.perform(get("/api/runs/{id}", id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.workflowPlan.approvedAt").isEmpty())
+        .andExpect(jsonPath("$.workflowAttempts.length()").value(0))
+        .andExpect(jsonPath("$.planNodes[2].dependencyIds.length()").value(2));
+    mvc.perform(post("/api/runs/{id}/plans/{version}/approve", id, java.util.UUID.randomUUID()))
+        .andExpect(status().isBadRequest());
+    mvc.perform(post("/api/runs/{id}/plans/{version}/approve", id, plan.id()))
+        .andExpect(status().isOk());
+    mvc.perform(post("/api/runs/{id}/plans/{version}/approve", id, plan.id()))
+        .andExpect(status().isBadRequest());
+
+    assertEquals("COMPLETED", await(id).get("STATUS"));
+    var attempts = workflowRuns.workflowAttempts(id);
+    assertEquals(3, attempts.size());
+    assertEquals(3, attempts.stream().map(a -> a.agentId()).distinct().count());
+    assertEquals(3, repo.models(id).size());
+    var snapshots = repo.agentAssemblies(id);
+    assertEquals(3, snapshots.size());
+    assertEquals(
+        2, snapshots.stream().filter(s -> s.snapshot().budget().nodeLimits() != null).count());
+    assertEquals(
+        3,
+        snapshots.stream().map(s -> s.snapshot().components().input().sha256()).distinct().count());
+    var mergeSnapshot =
+        snapshots.stream()
+            .filter(snapshot -> snapshot.agentId().equals(attempts.getLast().agentId()))
+            .findFirst()
+            .orElseThrow()
+            .snapshot();
+    assertEquals("mock", mergeSnapshot.components().model().name());
+    assertEquals(3, mergeSnapshot.budget().limits().maxRounds());
+    assertEquals(
+        attempts.subList(0, 2).stream().map(a -> a.id().toString()).toList(),
+        mergeSnapshot.components().input().sources().stream()
+            .filter(
+                s -> s.kind() == dev.workbench.framework.context.AgentInput.Kind.WORKFLOW_ATTEMPT)
+            .map(s -> s.id())
+            .toList());
+    assertEquals(3, repo.run(id).get("ROUNDS"));
+    assertTrue(repo.tools(id).isEmpty());
+    assertEquals(2, workflowRuns.workflowHandoffs(id).size());
+    assertTrue(
+        workflowRuns.workflowHandoffs(id).stream()
+            .allMatch(h -> h.receiverAttemptId().equals(attempts.getLast().id())));
+    var first = workflowInput(attempts.get(0).agentId());
+    var second = workflowInput(attempts.get(1).agentId());
+    var merged = workflowInput(attempts.get(2).agentId());
+    assertEquals("需求与验收分析", first.path("step").asText());
+    assertEquals("约束与风险分析", second.path("step").asText());
+    assertTrue(first.path("dependencies").isEmpty());
+    assertTrue(second.path("dependencies").isEmpty());
+    assertEquals(2, merged.path("dependencies").size());
+    for (int i = 0; i < 2; i++) {
+      var input = merged.path("dependencies").get(i);
+      assertEquals(attempts.get(i).agentId().toString(), input.path("agentId").asText());
+      assertFalse(input.path("result").asText().isBlank());
+    }
+    mvc.perform(get("/api/runs/{id}", id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.agentAssemblies.length()").value(3))
+        .andExpect(jsonPath("$.workflowAttempts.length()").value(3))
+        .andExpect(jsonPath("$.workflowHandoffs.length()").value(2));
+  }
+
+  @Test
+  void executionViewExposesPlanFocusBlockingActionsAndStructuredEventRefs() throws Exception {
+    String id = createDynamicWorkflow(true, 3);
+    var plan = plans.workflowPlan(id);
+
+    var pending = executionViews.view(id);
+    assertEquals(ExecutionViewService.SCHEMA_VERSION, pending.schemaVersion());
+    assertEquals(id, pending.runId());
+    assertEquals("PENDING", pending.runStatus());
+    assertEquals(plan.id().toString(), pending.plan().id());
+    assertEquals(3, pending.nodes().size());
+    assertEquals(2, pending.edges().size());
+    assertTrue(pending.focus().active().isEmpty());
+    assertTrue(
+        pending.blocking().stream().anyMatch(item -> "PLAN_APPROVAL_REQUIRED".equals(item.code())));
+    assertTrue(
+        pending.availableActions().stream()
+            .anyMatch(item -> "APPROVE_PLAN".equals(item.actionCode()) && item.enabled()));
+    assertEquals(0, pending.counts().modelCalls());
+    assertEquals(0, pending.counts().toolCalls());
+    var plannedMerge = pending.nodes().getLast();
+    assertFalse(plannedMerge.ready());
+    var plannedDetail = executionViews.detail(id, plannedMerge.id());
+    assertTrue(plannedDetail.attempts().isEmpty());
+    assertTrue(plannedDetail.checks().isEmpty());
+    assertEquals(2, plannedDetail.dependencies().size());
+
+    mvc.perform(
+            get("/api/runs/{id}/execution-view", id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nodes.length()").value(3))
+        .andExpect(jsonPath("$.edges.length()").value(2))
+        .andExpect(jsonPath("$.blocking[0].code").value("PLAN_APPROVAL_REQUIRED"));
+    mvc.perform(
+            get("/api/runs/{id}/execution-view/nodes/{nodeId}", id, java.util.UUID.randomUUID()))
+        .andExpect(status().isBadRequest());
+
+    mvc.perform(post("/api/runs/{id}/plans/{version}/approve", id, plan.id()))
+        .andExpect(status().isOk());
+    assertEquals("COMPLETED", await(id).get("STATUS"));
+
+    var completed = executionViews.view(id);
+    assertEquals("COMPLETED", completed.runStatus());
+    assertTrue(completed.nodes().stream().allMatch(node -> "COMPLETED".equals(node.status())));
+    assertEquals(3, completed.counts().modelCalls());
+    assertEquals(
+        3, completed.nodes().stream().mapToInt(node -> node.attemptCount()).sum());
+    assertTrue(completed.focus().active().isEmpty());
+    assertTrue(completed.blocking().isEmpty());
+
+    var mergeDetail = executionViews.detail(id, completed.nodes().getLast().id());
+    assertEquals(1, mergeDetail.attempts().size());
+    assertEquals(1, mergeDetail.attempts().getFirst().models().size());
+    assertEquals(2, mergeDetail.inboundHandoffs().size());
+    assertNotNull(mergeDetail.result());
+    assertTrue(
+        mergeDetail.nodeEvents().stream()
+            .anyMatch(
+                event -> "MODEL_STARTED".equals(event.type()) && event.modelCallId() != null));
+    assertTrue(
+        mergeDetail.nodeEvents().stream()
+            .anyMatch(
+                event -> "AGENT_STARTED".equals(event.type()) && event.attemptId() != null));
+
+    var page = eventQuery.page(id, 0, 200);
+    assertTrue(
+        page.events().stream()
+            .anyMatch(
+                event ->
+                    event.type() == EventType.PLAN_APPROVED
+                        && plan.id().equals(event.planVersionId())));
+    assertTrue(
+        page.events().stream()
+            .anyMatch(
+                event ->
+                    event.type() == EventType.AGENT_STARTED
+                        && event.nodeId() != null
+                        && event.attemptId() != null));
+    assertTrue(page.events().stream().anyMatch(event -> event.modelCallId() != null));
+  }
+
+  @Test
+  void failedAssemblySnapshotRollsBackLegacyProjectionsAndDoesNotCallModel() throws Exception {
+    String id = createDynamicWorkflow(true, 3);
+    var plan = plans.workflowPlan(id);
+    var taskId = repo.runSnapshot(id).taskId();
+    db.execute(
+        "ALTER TABLE agent_assemblies ADD CONSTRAINT reject_snapshot_fixture "
+            + "CHECK (POSITION('"
+            + taskId
+            + "' IN CAST(payload AS VARCHAR)) = 0)");
+    try {
+      service.approvePlan(id, plan.id());
+      assertEquals("FAILED", await(id).get("STATUS"));
+      assertEquals(1, repo.agents(id).size());
+      assertNull(repo.agents(id).getFirst().get("DEFINITION_ID"));
+      assertTrue(repo.skills(id).isEmpty());
+      assertTrue(repo.agentToolGrants(id).isEmpty());
+      assertTrue(repo.agentAssemblies(id).isEmpty());
+      assertTrue(repo.models(id).isEmpty());
+      assertTrue(repo.tools(id).isEmpty());
+    } finally {
+      db.execute("ALTER TABLE agent_assemblies DROP CONSTRAINT reject_snapshot_fixture");
+    }
+  }
+
+  @Test
+  void workflowSharesBudgetAndDoesNotCompleteAnUnfundedJoin() throws Exception {
+    String id = createDynamicWorkflow(false, 2);
+    assertEquals("LIMITED", await(id).get("STATUS"));
+    assertEquals(2, repo.run(id).get("ROUNDS"));
+    assertEquals(2, repo.models(id).size());
+    assertEquals("MODEL_ROUND_LIMIT", repo.run(id).get("STOP_CAUSE"));
+    assertEquals(PlanNodeStatus.LIMITED, plans.find(id).getLast().status());
+    assertEquals(InvocationStatus.LIMITED, workflowRuns.workflowAttempts(id).getLast().status());
+    assertNull(repo.run(id).get("RESULT"));
+  }
+
+  @Test
+  void cancellingAPlanBeforeApprovalLeavesNoAttempts() throws Exception {
+    String id = createDynamicWorkflow(true, 3);
+    service.cancel(id);
+    assertEquals("CANCELLED", await(id).get("STATUS"));
+    assertTrue(workflowRuns.workflowAttempts(id).isEmpty());
+    assertTrue(plans.find(id).stream().allMatch(node -> node.status() == PlanNodeStatus.SKIPPED));
+    assertThrows(
+        IllegalStateException.class, () -> service.approvePlan(id, plans.workflowPlan(id).id()));
+  }
+
+  @Test
+  void assemblyRejectionSurfacesReasonBeforeAnyModelOrToolCall() throws Exception {
+    org.mockito.Mockito.doThrow(new IllegalStateException("Agent 定义或版本不存在：text-analysis@99"))
+        .when(assemblyPlanner)
+        .plan(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyBoolean(),
+            org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.anyBoolean());
+    String id = createDynamicWorkflow(false, 3);
+    var run = await(id);
+    assertEquals("FAILED", run.get("STATUS"));
+    assertTrue(run.get("REASON").toString().contains("定义或版本不存在"));
+    assertTrue(repo.models(id).isEmpty());
+    assertTrue(repo.tools(id).isEmpty());
+    assertEquals(1, repo.agents(id).size());
+    assertEquals("FAILED", repo.agents(id).getFirst().get("STATUS"));
+  }
+
+  @Test
+  void cancelledDynamicRunStaysTerminalWhenModelRespondsLater() throws Exception {
+    Model delayed =
+        new Model() {
+          @Override
+          public String getModelName() {
+            return "delayed-fixture";
+          }
+
+          @Override
+          public Flux<ChatResponse> stream(
+              List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+            return Flux.just(
+                    ChatResponse.builder()
+                        .content(List.of(TextBlock.builder().text("晚到的模型结果").build()))
+                        .build())
+                .delayElements(java.time.Duration.ofMillis(700));
+          }
+        };
+    org.mockito.Mockito.doReturn(
+            new AgentModelRegistry.SelectedModel(
+                delayed,
+                new AgentModelRegistry.ModelReference(
+                    dev.workbench.domain.ModelMode.MOCK, delayed.getModelName(), 1)))
+        .when(workflowModelRegistry)
+        .select(
+            org.mockito.ArgumentMatchers.argThat(
+                request ->
+                    request != null
+                        && request.definitionRef() != null
+                        && "text-analysis".equals(request.definitionRef().id())));
+    String id = createDynamicWorkflow(false, 4);
+    for (int i = 0; i < 100 && repo.models(id).isEmpty(); i++) Thread.sleep(50);
+    assertFalse(repo.models(id).isEmpty());
+    service.cancel(id);
+    assertEquals("CANCELLED", await(id).get("STATUS"));
+    Thread.sleep(900);
+    assertEquals("CANCELLED", repo.run(id).get("STATUS"));
+    assertTrue(repo.models(id).stream().noneMatch(call -> "COMPLETED".equals(call.get("STATUS"))));
+    assertTrue(
+        repo.events(id).stream()
+            .anyMatch(event -> EventType.CANCELLED.name().equals(event.get("EVENT_TYPE"))));
+  }
+
+  @Test
+  void modifiedDependencyCannotBeApprovedOrUsedForEarlyExecution() throws Exception {
+    String id = createDynamicWorkflow(true, 3);
+    var plan = plans.workflowPlan(id);
+    var target = plans.find(id).getLast();
+    db.update(
+        "DELETE FROM plan_node_dependencies WHERE run_id=? AND node_id=? AND prerequisite_id=?",
+        id,
+        target.id().toString(),
+        target.dependencyIds().getLast().toString());
+    mvc.perform(post("/api/runs/{id}/plans/{version}/approve", id, plan.id()))
+        .andExpect(status().isBadRequest());
+    assertNull(plans.workflowPlan(id).approvedAt());
+    assertTrue(repo.models(id).isEmpty());
+    service.cancel(id);
+  }
+
+  @Test
+  void readOnlyWorkspaceWorkflowPassesOnlyConfirmedToolEvidenceToSummary(@TempDir Path temp)
+      throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\",\"second.txt\"]");
+    var plan = plans.workflowPlan(id);
+    assertEquals(
+        dev.workbench.framework.workflow.plan.WorkflowTemplate.Scope.WORKSPACE_READ_ONLY,
+        plan.scope());
+    assertTrue(plans.find(id).getFirst().workspaceRead());
+    assertFalse(plans.find(id).getLast().workspaceRead());
+    assertTrue(repo.models(id).isEmpty());
+    assertTrue(repo.tools(id).isEmpty());
+
+    mvc.perform(post("/api/runs/{id}/plans/{version}/approve", id, plan.id()))
+        .andExpect(status().isOk());
+    assertEquals("COMPLETED", await(id).get("STATUS"));
+    var attempts = workflowRuns.workflowAttempts(id);
+    var invocation = repo.tools(id).getFirst();
+    assertEquals(1, repo.tools(id).size());
+    assertEquals(attempts.getFirst().agentId().toString(), invocation.get("AGENT_ID"));
+    assertEquals("COMPLETED", invocation.get("STATUS"));
+    assertEquals(2, invocation.get("TOOL_VERSION"));
+    var receipt = workflowRuns.workflowHandoffs(id).getFirst();
+    var evidence = receipt.toolEvidence().getFirst();
+    assertEquals(attempts.getLast().agentId(), receipt.receiverAgentId());
+    assertEquals(invocation.get("ID"), evidence.toolCallId().toString());
+    assertEquals(ToolKind.WORKSPACE_READ, evidence.tool());
+    assertEquals(2, evidence.version());
+    var analystInput = workflowInput(attempts.getFirst().agentId());
+    assertEquals("authorized.txt", analystInput.path("authorizedFiles").get(0).asText());
+    assertEquals(2, analystInput.path("authorizedFiles").size());
+    var summaryInput = workflowInput(attempts.getLast().agentId());
+    assertTrue(summaryInput.path("authorizedFiles").isEmpty());
+    assertEquals(
+        evidence.toolCallId().toString(),
+        summaryInput
+            .path("dependencies")
+            .get(0)
+            .path("toolEvidence")
+            .get(0)
+            .path("toolCallId")
+            .asText());
+    var summaryAssembly =
+        repo.agentAssemblies(id).stream()
+            .filter(item -> item.agentId().equals(receipt.receiverAgentId()))
+            .findFirst()
+            .orElseThrow()
+            .snapshot()
+            .components();
+    assertTrue(summaryAssembly.tools().isEmpty());
+    assertNull(summaryAssembly.authorization().workspaceId());
+    assertEquals(
+        1,
+        summaryAssembly.input().sources().stream()
+            .filter(
+                source ->
+                    source.kind() == dev.workbench.framework.context.AgentInput.Kind.TOOL_CALL)
+            .count());
+    var completedCheckpoints = workflowCheckpointViews(id);
+    assertTrue(completedCheckpoints.size() > 0);
+    assertTrue(
+        completedCheckpoints.findValues("available").stream().noneMatch(node -> node.asBoolean()));
+    mvc.perform(get("/api/runs/{id}", id))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.workflowHandoffs[0].toolEvidence[0].toolCallId")
+                .value(evidence.toolCallId().toString()));
+  }
+
+  @Test
+  void workspaceWorkflowRejectsGrantChangesAfterPlanning(@TempDir Path temp) throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\"]");
+    var plan = plans.workflowPlan(id);
+    db.update(
+        "UPDATE tasks SET file_scope=?,file_scopes_json=? WHERE id=?",
+        "second.txt",
+        "[\"second.txt\"]",
+        repo.runSnapshot(id).taskId().toString());
+    mvc.perform(post("/api/runs/{id}/plans/{version}/approve", id, plan.id()))
+        .andExpect(status().isBadRequest());
+    assertNull(plans.workflowPlan(id).approvedAt());
+    assertTrue(repo.models(id).isEmpty());
+    assertTrue(repo.tools(id).isEmpty());
+    service.cancel(id);
+  }
+
+  @Test
+  void systemCheckGatesReadOnlyWorkflowAndIsTraceable(@TempDir Path temp) throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\"]");
+    var plan = plans.workflowPlan(id);
+    service.approvePlan(id, plan.id());
+    assertEquals("COMPLETED", await(id).get("STATUS"));
+
+    var nodes = plans.find(id);
+    assertEquals(3, nodes.size());
+    assertEquals(PlanNodeKind.SYSTEM_CHECK, nodes.get(1).kind());
+    assertEquals(new SystemCheckRef("authorized-read-evidence", 1), nodes.get(1).checkRef());
+    assertNull(nodes.get(1).agentId());
+    assertNull(nodes.get(1).role());
+    assertEquals(PlanNodeStatus.COMPLETED, nodes.get(1).status());
+
+    var attempts = workflowRuns.workflowAttempts(id);
+    assertEquals(2, attempts.size());
+    assertEquals(2, repo.agents(id).size());
+    // 读取节点产生一次工具轮次，另有一次结论调用；检查节点不增加任何模型调用。
+    assertEquals(3, repo.models(id).size());
+    var agentIds =
+        attempts.stream()
+            .map(attempt -> attempt.agentId().toString())
+            .collect(java.util.stream.Collectors.toSet());
+    assertTrue(
+        repo.models(id).stream()
+            .allMatch(call -> agentIds.contains(call.get("AGENT_ID").toString())));
+    assertEquals(1, repo.tools(id).size());
+
+    var checks = workflowRuns.workflowChecks(id);
+    assertEquals(1, checks.size());
+    var check = checks.getFirst();
+    assertEquals(SystemCheckStatus.PASSED, check.status());
+    assertEquals(nodes.get(1).id(), check.nodeId());
+    assertEquals(1, check.attemptNo());
+    assertEquals(64, check.inputsSha256().length());
+    assertNotNull(check.finishedAt());
+    assertEquals(1, check.inputs().size());
+    assertEquals(PlanNodeKind.AGENT, check.inputs().getFirst().sourceKind());
+    assertEquals(attempts.getFirst().id(), check.inputs().getFirst().sourceAttemptId());
+
+    // 检查结论进入下游输入，并以独立收据记录接收，不伪造 Agent 尝试。
+    var summaryInput = workflowInput(attempts.getLast().agentId());
+    boolean checkDependency = false;
+    for (var dependency : summaryInput.path("dependencies")) {
+      if ("SYSTEM_CHECK".equals(dependency.path("kind").asText())) {
+        checkDependency = true;
+        assertEquals(check.id().toString(), dependency.path("checkId").asText());
+        assertFalse(dependency.path("result").asText().isBlank());
+      }
+    }
+    assertTrue(checkDependency);
+    assertEquals(
+        1,
+        db.queryForObject(
+            "SELECT COUNT(*) FROM workflow_handoff_checks WHERE check_id=?",
+            Integer.class,
+            check.id().toString()));
+    assertTrue(
+        repo.events(id).stream()
+            .anyMatch(event -> EventType.CHECK_STARTED.name().equals(event.get("EVENT_TYPE"))));
+    assertTrue(
+        repo.events(id).stream()
+            .anyMatch(event -> EventType.CHECK_FINISHED.name().equals(event.get("EVENT_TYPE"))));
+    mvc.perform(get("/api/runs/{id}", id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.workflowChecks.length()").value(1))
+        .andExpect(jsonPath("$.workflowChecks[0].status").value("PASSED"))
+        .andExpect(jsonPath("$.planNodes[1].kind").value("SYSTEM_CHECK"))
+        .andExpect(jsonPath("$.workflowMetrics.checks").value(1))
+        .andExpect(jsonPath("$.workflowMetrics.checkStatusCounts.PASSED").value(1))
+        .andExpect(jsonPath("$.workflowMetrics.modelCalls").value(3));
+    var report = reports.render(id);
+    assertTrue(report.contains("计划、检查与调用统计"));
+    assertTrue(report.contains("authorized-read-evidence@1"));
+  }
+
+  @Test
+  void failedSystemCheckBlocksDownstreamWithoutAgentOrModelCalls(@TempDir Path temp)
+      throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    Model model =
+        new Model() {
+          @Override
+          public String getModelName() {
+            return "check-block-fixture";
+          }
+
+          @Override
+          public Flux<ChatResponse> stream(
+              List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+            return Flux.just(
+                ChatResponse.builder()
+                    .content(List.of(TextBlock.builder().text("未读取文件的分析结论").build()))
+                    .build());
+          }
+        };
+    org.mockito.Mockito.doReturn(
+            new AgentModelRegistry.SelectedModel(
+                model,
+                new AgentModelRegistry.ModelReference(
+                    dev.workbench.domain.ModelMode.MOCK, model.getModelName(), 1)))
+        .when(workflowModelRegistry)
+        .select(
+            org.mockito.ArgumentMatchers.argThat(
+                request ->
+                    request != null
+                        && request.definitionRef() != null
+                        && "workspace-analysis".equals(request.definitionRef().id())));
+
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\"]");
+    var plan = plans.workflowPlan(id);
+    service.approvePlan(id, plan.id());
+    var run = await(id);
+    assertEquals("BLOCKED", run.get("STATUS"));
+    assertEquals("CHECK_FAILED", run.get("STOP_CAUSE"));
+    assertTrue(run.get("REASON").toString().contains("未发现"));
+
+    var nodes = plans.find(id);
+    assertEquals(PlanNodeStatus.COMPLETED, nodes.get(0).status());
+    assertEquals(PlanNodeStatus.FAILED, nodes.get(1).status());
+    assertEquals(PlanNodeStatus.SKIPPED, nodes.get(2).status());
+    assertEquals(1, workflowRuns.workflowAttempts(id).size());
+    assertEquals(1, repo.models(id).size());
+    assertTrue(repo.tools(id).isEmpty());
+    var checks = workflowRuns.workflowChecks(id);
+    assertEquals(1, checks.size());
+    assertEquals(SystemCheckStatus.FAILED, checks.getFirst().status());
+    assertTrue(checks.getFirst().summary().contains("未发现"));
+    mvc.perform(get("/api/runs/{id}", id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.workflowChecks[0].status").value("FAILED"))
+        .andExpect(jsonPath("$.planNodes[2].status").value("SKIPPED"));
+  }
+
+  @Test
+  void systemCheckClaimRejectsDuplicateAndKeepsAgentCount(@TempDir Path temp) throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\"]");
+    var plan = plans.workflowPlan(id);
+    var nodes = plans.find(id);
+    workflowRuns.approveWorkflow(id, plan.id());
+    repo.update(id, RunStatus.RUNNING, null, null, 0, 0, 0);
+    var claim = workflowRuns.claimWorkflowNode(id, plan.id(), nodes.get(0).id(), "工作流测试");
+    repo.recordAgentDefinition(
+        id, claim.agentId(), claim.node().definitionRef(), claim.node().definitionSha256());
+    repo.finishAgent(claim.agentId(), InvocationStatus.COMPLETED, "固定分析结果");
+    var check = workflowRuns.claimWorkflowCheck(id, plan.id(), nodes.get(1).id());
+    assertEquals(1, check.attemptNo());
+    assertEquals(1, workflowRuns.workflowChecks(id).size());
+    assertThrows(
+        IllegalStateException.class,
+        () -> workflowRuns.claimWorkflowCheck(id, plan.id(), nodes.get(1).id()));
+    assertEquals(1, workflowRuns.workflowChecks(id).size());
+    assertEquals(1, workflowRuns.workflowAttempts(id).size());
+    assertEquals(1, repo.agents(id).size());
+    assertTrue(repo.models(id).isEmpty());
+  }
+
+  @Test
+  void systemCheckClaimRollsBackWithoutLeavingPartialCheck(@TempDir Path temp) throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\"]");
+    var plan = plans.workflowPlan(id);
+    var nodes = plans.find(id);
+    workflowRuns.approveWorkflow(id, plan.id());
+    repo.update(id, RunStatus.RUNNING, null, null, 0, 0, 0);
+    var claim = workflowRuns.claimWorkflowNode(id, plan.id(), nodes.get(0).id(), "工作流测试");
+    repo.recordAgentDefinition(
+        id, claim.agentId(), claim.node().definitionRef(), claim.node().definitionSha256());
+    repo.finishAgent(claim.agentId(), InvocationStatus.COMPLETED, "固定分析结果");
+    db.execute(
+        "ALTER TABLE workflow_checks ADD CONSTRAINT reject_check_row"
+            + " CHECK(node_id<>'"
+            + nodes.get(1).id()
+            + "')");
+    try {
+      assertThrows(
+          org.springframework.dao.DataIntegrityViolationException.class,
+          () -> workflowRuns.claimWorkflowCheck(id, plan.id(), nodes.get(1).id()));
+      assertEquals(PlanNodeStatus.PENDING, plans.find(id).get(1).status());
+      assertTrue(workflowRuns.workflowChecks(id).isEmpty());
+      assertEquals(1, workflowRuns.workflowAttempts(id).size());
+    } finally {
+      db.execute("ALTER TABLE workflow_checks DROP CONSTRAINT reject_check_row");
+    }
+  }
+
+  @Test
+  void unsupportedNodeKindCannotBePersistedWithoutFakingInstances(@TempDir Path temp)
+      throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\"]");
+    // 数据库约束是节点类型的第一道拒绝边界；仓储读取另对未知类型显式报错。
+    assertThrows(
+        org.springframework.dao.DataIntegrityViolationException.class,
+        () ->
+            db.update(
+                "UPDATE plan_nodes SET node_kind='SYSTEM_ACTION' WHERE run_id=? AND sequence_no=2",
+                id));
+    assertTrue(workflowRuns.workflowAttempts(id).isEmpty());
+    assertTrue(workflowRuns.workflowChecks(id).isEmpty());
+  }
+
+  @Test
+  void dynamicWriteIsScopedAndGoesToIndependentReview(@TempDir Path temp) throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    var model = workflowWriterFixture("文件由受控写入用例更新");
+    org.mockito.Mockito.doReturn(
+            new AgentModelRegistry.SelectedModel(
+                model,
+                new AgentModelRegistry.ModelReference(
+                    dev.workbench.domain.ModelMode.MOCK, "workflow-write-fixture", 1)))
+        .when(workflowModelRegistry)
+        .select(
+            org.mockito.ArgumentMatchers.argThat(
+                request ->
+                    request != null
+                        && request.definitionRef() != null
+                        && request.role() == AgentRole.CODER
+                        && request.definitionRef().id().equals("workspace-edit")));
+
+    String id = createWriteWorkflow(workspace.id(), true);
+    var plan = plans.workflowPlan(id);
+    var nodes = plans.find(id);
+    assertEquals(
+        java.util.List.of(AgentRole.ANALYST, AgentRole.CODER, AgentRole.REVIEWER),
+        nodes.stream().map(node -> node.role()).toList());
+    assertFalse(nodes.getFirst().workspaceWrite());
+    assertTrue(nodes.get(1).workspaceWrite());
+    assertFalse(nodes.getLast().workspaceRead());
+    assertTrue(repo.tools(id).isEmpty());
+
+    service.approvePlan(id, plan.id());
+    var completed = await(id);
+    assertEquals("BLOCKED", completed.get("STATUS"));
+    assertTrue(completed.get("REASON").toString().contains("等待核对"));
+    Path written = Path.of(workspace.workspacePath()).resolve("authorized.txt");
+    assertEquals("文件由受控写入用例更新", Files.readString(written));
+    assertEquals(
+        "无授权", Files.readString(Path.of(workspace.workspacePath()).resolve("unlisted.txt")));
+    assertEquals(
+        "受控样例", Files.readString(Path.of(workspace.repositoryPath()).resolve("authorized.txt")));
+
+    var attempts = workflowRuns.workflowAttempts(id);
+    var write =
+        repo.tools(id).stream()
+            .filter(tool -> ToolKind.WORKSPACE_WRITE.recordName().equals(tool.get("TOOL_NAME")))
+            .findFirst()
+            .orElseThrow();
+    assertEquals(attempts.get(1).agentId().toString(), write.get("AGENT_ID"));
+    assertEquals("COMPLETED", write.get("STATUS"));
+    assertTrue(
+        workflowRuns.workflowHandoffs(id).stream()
+            .anyMatch(
+                receipt ->
+                    receipt.receiverAgentId().equals(attempts.getLast().agentId())
+                        && receipt.toolEvidence().stream()
+                            .anyMatch(
+                                evidence ->
+                                    evidence.tool() == ToolKind.WORKSPACE_WRITE
+                                        && evidence
+                                            .toolCallId()
+                                            .toString()
+                                            .equals(write.get("ID")))));
+    var review =
+        repo.agentAssemblies(id).stream()
+            .filter(recorded -> recorded.agentId().equals(attempts.getLast().agentId()))
+            .findFirst()
+            .orElseThrow();
+    assertEquals(AgentRole.REVIEWER, review.snapshot().components().authorization().profile());
+    assertTrue(review.snapshot().components().tools().isEmpty());
+    assertTrue(workflowCheckpointViews(id).isEmpty());
+  }
+
+  @Test
+  void uncertainDynamicWriteStopsWithoutReplayOrReview(@TempDir Path temp) throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    var model = workflowWriterFixture("写入结果未知的内容");
+    org.mockito.Mockito.doReturn(
+            new AgentModelRegistry.SelectedModel(
+                model,
+                new AgentModelRegistry.ModelReference(
+                    dev.workbench.domain.ModelMode.MOCK, "workflow-write-fixture", 1)))
+        .when(workflowModelRegistry)
+        .select(
+            org.mockito.ArgumentMatchers.argThat(
+                request ->
+                    request != null
+                        && request.definitionRef() != null
+                        && request.role() == AgentRole.CODER
+                        && request.definitionRef().id().equals("workspace-edit")));
+    org.mockito.Mockito.doThrow(new IllegalStateException("模拟写入已发生但结果未知"))
+        .when(workspaces)
+        .write(
+            org.mockito.ArgumentMatchers.eq(workspace.id()),
+            org.mockito.ArgumentMatchers.eq("authorized.txt"),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyString());
+
+    String id = createWriteWorkflow(workspace.id(), true);
+    service.approvePlan(id, plans.workflowPlan(id).id());
+    var run = await(id);
+    assertEquals("FAILED", run.get("STATUS"));
+    assertEquals("TOOL_EFFECT_UNKNOWN", run.get("STOP_CAUSE"));
+    var nodes = plans.find(id);
+    assertEquals(PlanNodeStatus.COMPLETED, nodes.get(0).status());
+    assertEquals(PlanNodeStatus.FAILED, nodes.get(1).status());
+    assertEquals(PlanNodeStatus.SKIPPED, nodes.get(2).status());
+    assertEquals(2, workflowRuns.workflowAttempts(id).size());
+    assertTrue(
+        repo.tools(id).stream()
+            .anyMatch(
+                tool ->
+                    ToolKind.WORKSPACE_WRITE.recordName().equals(tool.get("TOOL_NAME"))
+                        && "FAILED".equals(tool.get("STATUS"))));
+  }
+
+  @Test
+  void dynamicWriteRequiresExplicitGrantAndMockModeLeavesFilesIntact(@TempDir Path temp)
+      throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    mvc.perform(
+            post("/api/tasks")
+                .contentType("application/json")
+                .content(workspaceWriteTaskJson(workspace.id(), false)))
+        .andExpect(status().isBadRequest());
+    String id = createWriteWorkflow(workspace.id(), true);
+    service.approvePlan(id, plans.workflowPlan(id).id());
+    var completed = await(id);
+    assertEquals("BLOCKED", completed.get("STATUS"));
+    assertTrue(completed.get("REASON").toString().contains("尚无成功写入记录"));
+    assertTrue(
+        repo.tools(id).stream()
+            .noneMatch(
+                tool -> ToolKind.WORKSPACE_WRITE.recordName().equals(tool.get("TOOL_NAME"))));
+    assertEquals(
+        "受控样例", Files.readString(Path.of(workspace.workspacePath()).resolve("authorized.txt")));
+  }
+
+  @Test
+  void modelRateLimitRetriesWithNewInstanceAndRetainsTheFailedCall() throws Exception {
+    selectRetryFixture(
+        "text-synthesis",
+        attempt ->
+            attempt == 0
+                ? rateLimitResponse()
+                : Flux.just(
+                    ChatResponse.builder()
+                        .content(List.of(TextBlock.builder().text("重试后完成汇总").build()))
+                        .build()));
+    String id = createDynamicWorkflow(false, 4);
+    assertEquals("COMPLETED", await(id).get("STATUS"));
+    assertEquals(4, repo.run(id).get("ROUNDS"));
+    assertEquals(4, repo.models(id).size());
+    assertEquals(2, plans.workflowPlan(id).maxAttempts());
+    var attempts = workflowRuns.workflowAttempts(id);
+    var first = attempts.get(2);
+    var second = attempts.get(3);
+    assertEquals(first.nodeId(), second.nodeId());
+    assertNotEquals(first.id(), second.id());
+    assertNotEquals(first.agentId(), second.agentId());
+    assertEquals(1, first.number());
+    assertEquals(2, second.number());
+    assertEquals(InvocationStatus.FAILED, first.status());
+    assertEquals(StopCause.MODEL_RATE_LIMIT, first.stopCause());
+    assertEquals(InvocationStatus.COMPLETED, second.status());
+    var rejected =
+        repo.models(id).stream()
+            .filter(call -> first.agentId().toString().equals(call.get("AGENT_ID")))
+            .findFirst()
+            .orElseThrow();
+    assertEquals("FAILED", rejected.get("STATUS"));
+    assertNull(rejected.get("INPUT_TOKENS"));
+    assertNull(rejected.get("OUTPUT_TOKENS"));
+    assertEquals(2, workflowInput(second.agentId()).path("dependencies").size());
+    assertEquals(4, workflowRuns.workflowHandoffs(id).size());
+    assertTrue(
+        repo.events(id).stream()
+            .anyMatch(
+                event -> EventType.NODE_RETRY_SCHEDULED.name().equals(event.get("EVENT_TYPE"))));
+
+    var retryView = executionViews.view(id);
+    var retryNode =
+        retryView.nodes().stream()
+            .filter(node -> node.id().equals(first.nodeId().toString()))
+            .findFirst()
+            .orElseThrow();
+    assertEquals(2, retryNode.attemptCount());
+    assertEquals("COMPLETED", retryNode.status());
+    var retryDetail = executionViews.detail(id, retryNode.id());
+    assertEquals(2, retryDetail.attempts().size());
+    assertEquals("MODEL_RATE_LIMIT", retryDetail.attempts().get(0).stopCause());
+    assertEquals(1, retryDetail.attempts().get(0).models().size());
+    assertEquals("FAILED", retryDetail.attempts().get(0).models().get(0).status());
+  }
+
+  @Test
+  void rateLimitDoesNotRetryAnExhaustedNodeOrExceedTheAttemptCap() throws Exception {
+    selectRetryFixture("text-synthesis", attempt -> rateLimitResponse());
+    for (String budgets : List.of("{\"synthesis\":{\"maxModelCalls\":1}}", "{}")) {
+      String id = createDynamicWorkflow(false, 8, budgets);
+      var run = await(id);
+      assertEquals("FAILED", run.get("STATUS"));
+      assertEquals("MODEL_RATE_LIMIT", run.get("STOP_CAUSE"));
+      int expected = budgets.equals("{}") ? 4 : 3;
+      assertEquals(expected, repo.models(id).size());
+      assertEquals(expected, workflowRuns.workflowAttempts(id).size());
+    }
+  }
+
+  @Test
+  void rateLimitAfterAnActualToolCallDoesNotReplayTheNode(@TempDir Path temp) throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    selectRetryFixture(
+        "workspace-analysis",
+        attempt ->
+            attempt == 0
+                ? Flux.just(
+                    ChatResponse.builder()
+                        .content(
+                            List.of(
+                                ToolUseBlock.builder()
+                                    .id("retry-fixture-read")
+                                    .name("read_authorized_file")
+                                    .input(Map.of())
+                                    .content("{}")
+                                    .build()))
+                        .build())
+                : rateLimitResponse());
+    String id = createWorkspaceWorkflow(workspace.id(), "[\"authorized.txt\"]");
+    service.approvePlan(id, plans.workflowPlan(id).id());
+    var run = await(id);
+    assertEquals("FAILED", run.get("STATUS"));
+    assertEquals("MODEL_RATE_LIMIT", run.get("STOP_CAUSE"));
+    assertEquals(2, repo.models(id).size());
+    assertEquals(1, repo.tools(id).size());
+    assertEquals(1, workflowRuns.workflowAttempts(id).size());
+    assertTrue(workflowRuns.workflowHandoffs(id).isEmpty());
+  }
+
+  private void selectRetryFixture(
+      String definition, java.util.function.IntFunction<Flux<ChatResponse>> response) {
+    Model model =
+        new Model() {
+          private final AtomicInteger calls = new AtomicInteger();
+
+          public String getModelName() {
+            return "fixture-rate-limit";
+          }
+
+          public Flux<ChatResponse> stream(
+              List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+            return response.apply(calls.getAndIncrement());
+          }
+        };
+    org.mockito.Mockito.doReturn(
+            new AgentModelRegistry.SelectedModel(
+                model,
+                new AgentModelRegistry.ModelReference(
+                    dev.workbench.domain.ModelMode.MOCK, model.getModelName(), 1),
+                RateLimitException.class::isInstance))
+        .when(workflowModelRegistry)
+        .select(
+            org.mockito.ArgumentMatchers.argThat(
+                request ->
+                    request != null
+                        && request.definitionRef() != null
+                        && definition.equals(request.definitionRef().id())));
+  }
+
+  private static Flux<ChatResponse> rateLimitResponse() {
+    return Flux.error(new RateLimitException("模拟 HTTP 429", null, "fixture-body"));
+  }
+
+  @Test
+  void nodeCallLimitsStopExecutionWhileTheRunBudgetStillHasRoom(@TempDir Path temp)
+      throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    for (String expected : List.of("NODE_TOOL_LIMIT", "NODE_MODEL_LIMIT")) {
+      String nodeBudget =
+          expected.equals("NODE_TOOL_LIMIT") ? "{\"maxToolCalls\":0}" : "{\"maxModelCalls\":1}";
+      String id =
+          createWorkspaceWorkflow(
+              workspace.id(), "[\"authorized.txt\"]", "{\"inspect\":" + nodeBudget + "}", 5, 3);
+      var plan = plans.workflowPlan(id);
+      service.approvePlan(id, plan.id());
+      var result = await(id);
+      assertEquals("LIMITED", result.get("STATUS"));
+      assertEquals(expected, result.get("STOP_CAUSE"));
+      assertEquals(1, result.get("ROUNDS"));
+      assertEquals(expected.equals("NODE_TOOL_LIMIT") ? 0 : 1, repo.tools(id).size());
+      assertEquals(PlanNodeStatus.SKIPPED, plans.find(id).getLast().status());
+    }
+  }
+
+  private static String workspaceWriteTaskJson(String workspaceId, boolean writeEnabled) {
+    return """
+    {"goal":"修改授权字段","workflowTemplate":"workspace-change","reviewPlan":true,"modelMode":"mock",
+     "workspaceId":"%s","fileScopes":["authorized.txt"],"writeEnabled":%s,"maxRounds":8,"maxTools":5}
+    """
+        .formatted(workspaceId, writeEnabled);
+  }
+
+  private String createWriteWorkflow(String workspaceId, boolean writeEnabled) throws Exception {
+    var response =
+        mvc.perform(
+                post("/api/tasks")
+                    .contentType("application/json")
+                    .content(workspaceWriteTaskJson(workspaceId, writeEnabled)))
+            .andExpect(status().isOk())
+            .andReturn();
+    return new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(response.getResponse().getContentAsString())
+        .path("runId")
+        .asText();
+  }
+
+  private static Model workflowWriterFixture(String replacement) {
+    return new Model() {
+      private final AtomicInteger rounds = new AtomicInteger();
+      private final ObjectMapper json = new ObjectMapper();
+
+      @Override
+      public String getModelName() {
+        return "workflow-write-fixture";
+      }
+
+      @Override
+      public Flux<ChatResponse> stream(
+          List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+        int round = rounds.getAndIncrement();
+        try {
+          if (round > 1)
+            return Flux.just(
+                ChatResponse.builder()
+                    .content(List.of(TextBlock.builder().text("已请求修改，等待审查。").build()))
+                    .build());
+          Map<String, Object> arguments = Map.of();
+          if (round == 1) {
+            String receipt =
+                messages.stream()
+                    .flatMap(message -> message.getContentBlocks(ToolResultBlock.class).stream())
+                    .map(result -> ((TextBlock) result.getOutput().getFirst()).getText())
+                    .reduce((first, last) -> last)
+                    .orElseThrow();
+            String expected = json.readTree(receipt).path("data").path("sha256").asText();
+            arguments = Map.of("expectedSha256", expected, "content", replacement);
+          }
+          var toolUse =
+              ToolUseBlock.builder()
+                  .id("workflow-fixture-" + round)
+                  .name(round == 0 ? "read_authorized_file" : "write_authorized_file")
+                  .input(arguments)
+                  .content(json.writeValueAsString(arguments))
+                  .build();
+          return Flux.just(ChatResponse.builder().content(List.of(toolUse)).build());
+        } catch (JsonProcessingException e) {
+          return Flux.error(e);
+        }
+      }
+    };
+  }
+
+  private String createWorkspaceWorkflow(String workspaceId, String files) throws Exception {
+    return createWorkspaceWorkflow(workspaceId, files, "{}", 3, 1);
+  }
+
+  private String createWorkspaceWorkflow(
+      String workspaceId, String files, String budgets, int rounds, int tools) throws Exception {
+    var response =
+        mvc.perform(
+                post("/api/tasks")
+                    .contentType("application/json")
+                    .content(
+                        """
+                        {"goal":"分析受控文件","workflowTemplate":"workspace-analysis","reviewPlan":true,
+                         "modelMode":"mock","workspaceId":"%s","fileScopes":%s,"nodeBudgets":%s,
+                         "maxRounds":%d,"maxTools":%d}
+                        """
+                            .formatted(workspaceId, files, budgets, rounds, tools)))
+            .andExpect(status().isOk())
+            .andReturn();
+    return new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(response.getResponse().getContentAsString())
+        .path("runId")
+        .asText();
+  }
+
+  private dev.workbench.workspace.WorkspaceService.Workspace createWorkspaceWorkflowFixture(
+      Path temp) throws Exception {
+    Path source = Files.createDirectory(temp.resolve("repo"));
+    runGit(source, "init", "-b", "main");
+    runGit(source, "config", "user.email", "test@example.invalid");
+    runGit(source, "config", "user.name", "Test");
+    Files.writeString(source.resolve("authorized.txt"), "受控样例", StandardCharsets.UTF_8);
+    Files.writeString(source.resolve("second.txt"), "第二个文件", StandardCharsets.UTF_8);
+    Files.writeString(source.resolve("unlisted.txt"), "无授权", StandardCharsets.UTF_8);
+    runGit(source, "add", ".");
+    runGit(source, "commit", "-m", "fixture");
+    return workspaces.create(source.toString(), "main");
+  }
+
+  @Test
+  void workflowClaimRollsBackWhenASecondHandoffCannotBeSaved() throws Exception {
+    String id = createDynamicWorkflow(true, 3);
+    var plan = plans.workflowPlan(id);
+    var nodes = plans.find(id);
+    workflowRuns.approveWorkflow(id, plan.id());
+    repo.update(id, RunStatus.RUNNING, null, null, 0, 0, 0);
+    for (int i = 0; i < 2; i++) {
+      var claim = workflowRuns.claimWorkflowNode(id, plan.id(), nodes.get(i).id(), "工作流测试");
+      repo.recordAgentDefinition(
+          id, claim.agentId(), claim.node().definitionRef(), claim.node().definitionSha256());
+      repo.finishAgent(claim.agentId(), InvocationStatus.COMPLETED, "固定测试结果 " + i);
+    }
+    var denied = workflowRuns.workflowAttempts(id).getLast().id();
+    db.execute(
+        "ALTER TABLE workflow_handoffs ADD CONSTRAINT reject_test_handoff "
+            + "CHECK(sender_attempt_id<>'"
+            + denied
+            + "')");
+    try {
+      assertThrows(
+          org.springframework.dao.DataAccessException.class,
+          () -> workflowRuns.claimWorkflowNode(id, plan.id(), nodes.getLast().id(), "工作流测试"));
+      assertEquals(PlanNodeStatus.PENDING, plans.find(id).getLast().status());
+      assertEquals(2, repo.agents(id).size());
+      assertEquals(2, workflowRuns.workflowAttempts(id).size());
+      assertTrue(workflowRuns.workflowHandoffs(id).isEmpty());
+    } finally {
+      db.execute("ALTER TABLE workflow_handoffs DROP CONSTRAINT reject_test_handoff");
+      repo.update(id, RunStatus.INTERRUPTED, "故障注入结束", null, 0, 0, 0);
+    }
+  }
+
+  @Test
+  void workflowRecoveryReusesSettledSourceAndContinuesSharedBudget() throws Exception {
+    String original = startWorkflowAtSafeBoundary();
+    var plan = plans.workflowPlan(original);
+    var nodes = plans.find(original);
+    var first = workflowRuns.claimWorkflowNode(original, plan.id(), nodes.getFirst().id(), "工作流测试");
+    String modelId = RunRepository.id();
+    repo.recordAgentDefinition(
+        original, first.agentId(), first.node().definitionRef(), first.node().definitionSha256());
+    repo.startModel(modelId, original, first.agentId(), ModelKind.MOCK);
+    repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
+    repo.update(original, RunStatus.RUNNING, null, null, 1, 0, 20);
+    workflowRuns.finishWorkflowNode(original, plan.id(), first.agentId(), "已保存的分析", 1, 0, 20);
+    repo.finishStoppedRun(
+        new dev.workbench.task.StopCompletion(
+            java.util.UUID.fromString(original),
+            null,
+            dev.workbench.domain.StopCause.INTERRUPTED,
+            "模拟节点边界中断",
+            1,
+            0,
+            25,
+            null));
+    var checkpoints = workflowCheckpointViews(original);
+    assertEquals(2, checkpoints.size());
+    assertFalse(checkpoints.get(0).path("available").asBoolean());
+    var saved = checkpoints.get(1);
+    assertTrue(saved.path("available").asBoolean());
+    String checkpointId = saved.path("id").asText();
+    var interruptedView = executionViews.view(original);
+    assertTrue(
+        interruptedView.blocking().stream()
+            .anyMatch(item -> "RUN_INTERRUPTED".equals(item.code())));
+    assertTrue(
+        interruptedView.availableActions().stream()
+            .anyMatch(
+                item ->
+                    "RECOVER".equals(item.actionCode())
+                        && item.enabled()
+                        && checkpointId.equals(item.checkpointId())));
+
+    db.update("UPDATE agent_invocations SET result=? WHERE id=?", "已篡改", first.agentId());
+    assertThrows(IllegalStateException.class, () -> service.recover(original, checkpointId));
+    db.update("UPDATE agent_invocations SET result=? WHERE id=?", "已保存的分析", first.agentId());
+
+    String recovered = service.recover(original, checkpointId);
+    assertEquals("COMPLETED", await(recovered).get("STATUS"));
+    assertEquals("INTERRUPTED", repo.run(original).get("STATUS"));
+    assertEquals(1, repo.models(original).size());
+    assertEquals(2, repo.models(recovered).size());
+    assertEquals(3, repo.run(recovered).get("ROUNDS"));
+    assertEquals(5, repo.reportedTokens(recovered).knownTokens());
+    assertEquals(PlanNodeStatus.REUSED, plans.find(recovered).getFirst().status());
+    assertEquals(1, plans.find(recovered).get(1).budget().maxModelCalls());
+    assertEquals(first.agentId(), plans.find(recovered).getFirst().sourceAgentId().toString());
+    assertEquals(2, workflowRuns.workflowAttempts(recovered).size());
+    assertEquals(2, workflowRuns.workflowHandoffs(recovered).size());
+    var merge = workflowInput(workflowRuns.workflowAttempts(recovered).getLast().agentId());
+    assertEquals(original, merge.path("dependencies").get(0).path("sourceRunId").asText());
+    assertEquals("已保存的分析", merge.path("dependencies").get(0).path("result").asText());
+    assertThrows(IllegalStateException.class, () -> service.recover(original, checkpointId));
+
+    var recoveredView = executionViews.view(recovered);
+    assertNotNull(recoveredView.recovery());
+    assertEquals(original, recoveredView.recovery().parentRunId());
+    assertEquals(checkpointId, recoveredView.recovery().sourceCheckpointId());
+    assertEquals(1, recoveredView.recovery().reusedNodes().size());
+    assertEquals(
+        first.agentId().toString(),
+        recoveredView.recovery().reusedNodes().getFirst().sourceAgentId());
+    assertNotNull(recoveredView.recovery().inherited());
+    assertEquals(2, recoveredView.recovery().newModelCalls());
+    assertEquals(
+        1,
+        recoveredView.nodes().stream()
+            .filter(node -> "REUSED".equals(node.status()))
+            .count());
+  }
+
+  @Test
+  void workflowRecoveryRefusesABoundaryFollowedByAnInterruptedAttempt() throws Exception {
+    String original = startWorkflowAtSafeBoundary();
+    var plan = plans.workflowPlan(original);
+    var claim =
+        workflowRuns.claimWorkflowNode(
+            original, plan.id(), plans.find(original).getFirst().id(), "工作流测试");
+    workflowRuns.finishWorkflowStoppedRun(
+        original,
+        java.util.UUID.fromString(claim.agentId()),
+        dev.workbench.domain.StopCause.INTERRUPTED,
+        "模拟在途尝试中断",
+        0,
+        0,
+        15);
+    var saved = workflowCheckpointViews(original).get(0);
+    assertFalse(saved.path("available").asBoolean());
+    assertThrows(
+        IllegalStateException.class, () -> service.recover(original, saved.path("id").asText()));
+  }
+
+  private String startWorkflowAtSafeBoundary() throws Exception {
+    String id = createDynamicWorkflow(true, 3, "{\"constraints\":{\"maxModelCalls\":1}}");
+    var plan = plans.workflowPlan(id);
+    workflowRuns.approveWorkflow(id, plan.id());
+    repo.update(id, RunStatus.RUNNING, null, null, 0, 0, 0);
+    workflowRuns.checkpointBeforeFirstNode(id, plan.id(), 0);
+    return id;
+  }
+
+  private com.fasterxml.jackson.databind.JsonNode workflowCheckpointViews(String id)
+      throws Exception {
+    var response =
+        mvc.perform(get("/api/runs/{id}", id))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    return new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(response)
+        .path("workflowCheckpoints");
+  }
+
+  private String createDynamicWorkflow(boolean review, int rounds) throws Exception {
+    return createDynamicWorkflow(review, rounds, "{}");
+  }
+
+  private String createDynamicWorkflow(boolean review, int rounds, String budgets)
+      throws Exception {
+    var response =
+        mvc.perform(
+                post("/api/tasks")
+                    .contentType("application/json")
+                    .content(
+                        """
+                        {"goal":"工作流测试","modelMode":"mock","workflowTemplate":"dual-analysis",
+                         "reviewPlan":%s,"maxRounds":%d,"maxTools":0,"nodeBudgets":%s}
+                        """
+                            .formatted(review, rounds, budgets)))
+            .andExpect(status().isOk())
+            .andReturn();
+    return new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(response.getResponse().getContentAsString())
+        .path("runId")
+        .asText();
+  }
+
+  private com.fasterxml.jackson.databind.JsonNode workflowInput(java.util.UUID instance)
+      throws Exception {
+    var state =
+        agentStates
+            .get(
+                null, instance.toString(), "agent_state", io.agentscope.core.state.AgentState.class)
+            .orElseThrow();
+    assertEquals(instance.toString(), state.getSessionId());
+    String content =
+        state.getContext().stream()
+            .map(io.agentscope.core.message.Msg::getTextContent)
+            .filter(text -> text != null && text.startsWith("{\"goal\""))
+            .findFirst()
+            .orElseThrow();
+    return new com.fasterxml.jackson.databind.ObjectMapper().readTree(content);
+  }
 
   @Test
   void workspaceCandidatesAreReadOnlyAndDoNotGrantTaskPermissions(@TempDir Path temp)
@@ -140,6 +1353,22 @@ class WorkbenchIntegrationTest {
                 null,
                 true));
     assertEquals("COMPLETED", await(id).get("STATUS"));
+    var readerAssembly =
+        repo.agentAssemblies(id).stream()
+            .map(record -> record.snapshot().components())
+            .filter(assembly -> assembly.authorization().profile() == AgentRole.ANALYST)
+            .findFirst()
+            .orElseThrow();
+    assertEquals(1, readerAssembly.authorization().fileCount());
+    assertFalse(readerAssembly.authorization().writeAuthorized());
+    assertEquals(1, readerAssembly.tools().get(ToolKind.WORKSPACE_READ));
+    assertTrue(
+        readerAssembly.input().sources().stream()
+            .anyMatch(
+                source ->
+                    source.kind() == dev.workbench.framework.context.AgentInput.Kind.MEMORY
+                        && source.id().equals(savedMemory.id().toString())
+                        && source.version() == savedMemory.version()));
     assertTrue(
         repo.events(id).stream()
             .anyMatch(
@@ -2719,6 +3948,80 @@ class WorkbenchIntegrationTest {
   }
 
   @Test
+  void completedButNonAdjacentAgentCannotProvideReviewerHandoff() {
+    var taskId = java.util.UUID.randomUUID();
+    var runId = java.util.UUID.randomUUID();
+    String analyst = java.util.UUID.randomUUID().toString();
+    String coder = java.util.UUID.randomUUID().toString();
+    String reviewer = java.util.UUID.randomUUID().toString();
+    String goal = "校验交接依赖";
+    var task =
+        new dev.workbench.domain.TaskDefinition(
+            taskId,
+            goal,
+            dev.workbench.domain.Scenario.NORMAL,
+            dev.workbench.domain.ModelMode.MOCK,
+            null,
+            null,
+            true,
+            null,
+            false,
+            java.util.List.of(),
+            java.util.List.of(),
+            dev.workbench.domain.TaskEntryKind.GENERAL);
+    repo.createTaskAndFirstRun(
+        task, runId, new dev.workbench.task.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
+    repo.startAgent(analyst, runId.toString(), goal, AgentRole.ANALYST);
+    repo.finishAgent(analyst, InvocationStatus.COMPLETED, "分析完成");
+    repo.startAgent(coder, runId.toString(), goal, AgentRole.CODER);
+    repo.finishAgent(coder, InvocationStatus.COMPLETED, "开发完成");
+    var wrongHandoff =
+        new Handoff(
+            taskId.toString(),
+            runId.toString(),
+            analyst,
+            dev.workbench.domain.HandoffParty.ANALYSIS_AGENT,
+            dev.workbench.domain.HandoffParty.REVIEW_AGENT,
+            goal,
+            java.util.List.of(),
+            dev.workbench.domain.HandoffStatus.COMPLETED,
+            "分析结果",
+            runId.toString(),
+            java.util.List.of(),
+            HandoffSource.MOCK_MODEL,
+            reviewer);
+    repo.handoff(HandoffDirection.AGENT_TRANSFER, wrongHandoff);
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            repo.startAgentFromHandoff(
+                reviewer, runId.toString(), goal, AgentRole.REVIEWER, wrongHandoff.handoffId()));
+    assertEquals(2, repo.agents(runId.toString()).size());
+    assertEquals(PlanNodeStatus.PENDING, plans.find(runId.toString()).getLast().status());
+    assertNull(repo.handoffs(runId.toString()).getFirst().get("RECEIVER_AGENT_ID"));
+
+    var correctHandoff =
+        new Handoff(
+            taskId.toString(),
+            runId.toString(),
+            coder,
+            dev.workbench.domain.HandoffParty.CODING_AGENT,
+            dev.workbench.domain.HandoffParty.REVIEW_AGENT,
+            goal,
+            java.util.List.of(),
+            dev.workbench.domain.HandoffStatus.COMPLETED,
+            "开发结果",
+            runId.toString(),
+            java.util.List.of(),
+            HandoffSource.MOCK_MODEL,
+            reviewer);
+    repo.handoff(HandoffDirection.AGENT_TRANSFER, correctHandoff);
+    repo.startAgentFromHandoff(
+        reviewer, runId.toString(), goal, AgentRole.REVIEWER, correctHandoff.handoffId());
+    assertEquals(PlanNodeStatus.RUNNING, plans.find(runId.toString()).getLast().status());
+  }
+
+  @Test
   void planRejectsReviewBeforeAnalysisAndLeavesNoInvocation() {
     String runId = java.util.UUID.randomUUID().toString();
     plans.initialize(runId, false);
@@ -2940,6 +4243,124 @@ class WorkbenchIntegrationTest {
     assertEquals(CaseStatus.FAILED, result.status());
     assertEquals(checks, result.checks());
     evaluationRecords.finishBatch(batch, EvaluationStatus.COMPLETED);
+  }
+
+  @Test
+  void dynamicEvaluationUsesVersionedWorkflowPlansAndRecordedHandoffs() throws Exception {
+    var started =
+        mvc.perform(post("/api/evaluations").param("suite", "DYNAMIC_WORKFLOW_V1"))
+            .andExpect(status().isOk())
+            .andReturn();
+    String id =
+        new ObjectMapper().readTree(started.getResponse().getContentAsString()).path("id").asText();
+    for (int i = 0; i < 150 && evaluationRecords.get(id).status() == EvaluationStatus.RUNNING; i++)
+      Thread.sleep(100);
+    var batch = evaluationRecords.get(id);
+    assertEquals(EvaluationStatus.COMPLETED, batch.status());
+    assertEquals("DYNAMIC_WORKFLOW_V1", batch.suite());
+    assertEquals(
+        dev.workbench.evaluation.SeedSuite.sha256(batch.definitionJson()),
+        batch.definitionSha256());
+    assertTrue(batch.definitionJson().contains("\"template\":\"dual-analysis\""));
+
+    var cases = evaluationRecords.cases(id);
+    assertEquals(2, cases.size());
+    assertTrue(
+        cases.stream().allMatch(result -> result.status() == CaseStatus.PASSED), cases.toString());
+    assertTrue(
+        cases.stream()
+            .flatMap(result -> result.checks().stream())
+            .allMatch(check -> check.passed()));
+    assertEquals(
+        List.of(3, 2),
+        cases.stream().map(result -> repo.models(result.runId().toString()).size()).toList());
+    assertEquals(2, workflowRuns.workflowHandoffs(cases.getFirst().runId().toString()).size());
+    mvc.perform(get("/api/evaluations/{id}", id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.batch.suite").value("DYNAMIC_WORKFLOW_V1"))
+        .andExpect(jsonPath("$.cases[0].checks.length()").value(6))
+        .andExpect(jsonPath("$.cases[1].checks.length()").value(6));
+
+    String baseline = RunRepository.id();
+    evaluationRecords.create(baseline);
+    evaluationRecords.finishBatch(baseline, EvaluationStatus.INTERRUPTED);
+    mvc.perform(get("/api/evaluations/compare").param("baseline", baseline).param("candidate", id))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.sameSuite").value(false))
+        .andExpect(jsonPath("$.comparableDefinition").value(false));
+  }
+
+  @Test
+  void dynamicCheckEvaluationCoversSuccessAndBlockedCounterexample() throws Exception {
+    var started =
+        mvc.perform(post("/api/evaluations").param("suite", "DYNAMIC_CHECK_V1"))
+            .andExpect(status().isOk())
+            .andReturn();
+    String id =
+        new ObjectMapper().readTree(started.getResponse().getContentAsString()).path("id").asText();
+    for (int i = 0; i < 600 && evaluationRecords.get(id).status() == EvaluationStatus.RUNNING; i++)
+      Thread.sleep(100);
+    var batch = evaluationRecords.get(id);
+    assertEquals(EvaluationStatus.COMPLETED, batch.status(), String.valueOf(batch));
+    assertEquals("DYNAMIC_CHECK_V1", batch.suite());
+    assertTrue(batch.definitionJson().contains("\"template\":\"workspace-analysis\""));
+    assertTrue(batch.definitionJson().contains("\"template\":\"bug-fix\""));
+    var cases = evaluationRecords.cases(id);
+    assertEquals(2, cases.size());
+    assertTrue(
+        cases.stream().allMatch(result -> result.status() == CaseStatus.PASSED), cases.toString());
+    assertTrue(
+        cases.stream()
+            .flatMap(result -> result.checks().stream())
+            .allMatch(check -> check.passed()));
+
+    var success = cases.getFirst();
+    String successRun = success.runId().toString();
+    assertEquals("COMPLETED", repo.run(successRun).get("STATUS"));
+    assertEquals(3, repo.models(successRun).size());
+    assertEquals(1, workflowRuns.workflowChecks(successRun).size());
+    assertEquals(
+        dev.workbench.framework.workflow.check.SystemCheckStatus.PASSED,
+        workflowRuns.workflowChecks(successRun).getFirst().status());
+
+    var blocked = cases.getLast();
+    String blockedRun = blocked.runId().toString();
+    assertEquals("BLOCKED", repo.run(blockedRun).get("STATUS"));
+    assertEquals("CHECK_FAILED", repo.run(blockedRun).get("STOP_CAUSE"));
+    assertEquals(
+        dev.workbench.framework.workflow.check.SystemCheckStatus.BLOCKED,
+        workflowRuns.workflowChecks(blockedRun).getFirst().status());
+    assertTrue(repo.agents(blockedRun).isEmpty());
+    assertTrue(repo.models(blockedRun).isEmpty());
+    assertTrue(repo.tools(blockedRun).isEmpty());
+
+    var successView = executionViews.view(successRun);
+    assertEquals("COMPLETED", successView.runStatus());
+    assertTrue(
+        successView.nodes().stream()
+            .anyMatch(node -> "SYSTEM_CHECK".equals(node.kind()) && "COMPLETED".equals(node.status())));
+    var blockedView = executionViews.view(blockedRun);
+    assertEquals("BLOCKED", blockedView.runStatus());
+    assertTrue(
+        blockedView.blocking().stream()
+            .anyMatch(
+                item ->
+                    "CHECK_FAILED".equals(item.code())
+                        && item.nodeId() != null
+                        && !item.blockingNodeIds().isEmpty()));
+    assertTrue(
+        blockedView.availableActions().stream()
+            .noneMatch(item -> "CANCEL".equals(item.actionCode())));
+    var blockedCheckNode =
+        blockedView.nodes().stream()
+            .filter(node -> "SYSTEM_CHECK".equals(node.kind()))
+            .findFirst()
+            .orElseThrow();
+    assertEquals("FAILED", blockedCheckNode.status());
+    var blockedDetail = executionViews.detail(blockedRun, blockedCheckNode.id());
+    assertFalse(blockedDetail.checks().isEmpty());
+    assertNotNull(blockedDetail.checks().getFirst().summary());
+    assertTrue(blockedDetail.attempts().isEmpty());
   }
 
   @Test

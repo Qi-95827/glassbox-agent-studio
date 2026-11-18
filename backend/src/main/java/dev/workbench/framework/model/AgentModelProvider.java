@@ -8,5 +8,15 @@ import io.agentscope.core.model.Model;
 public interface AgentModelProvider {
   ModelMode mode();
 
+  /** 已配置的适配器行为发生不兼容变化时更新版本。 */
+  default int configurationVersion() {
+    return 1;
+  }
+
   Model create(AgentExecutionRequest request);
+
+  /** 仅在能从可信适配器错误确认服务拒绝请求时返回真。 */
+  default boolean isRateLimitRejection(Throwable error) {
+    return false;
+  }
 }

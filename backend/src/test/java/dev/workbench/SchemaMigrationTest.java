@@ -66,6 +66,10 @@ class SchemaMigrationTest {
                   new dev.workbench.framework.workflow.plan.PlanValidator()));
       assertEquals(
           1, db.queryForObject("SELECT COUNT(*) FROM plan_node_dependencies", Integer.class));
+      assertEquals(0, db.queryForObject("SELECT COUNT(*) FROM workflow_checks", Integer.class));
+      assertEquals(
+          dev.workbench.framework.workflow.plan.PlanNodeKind.AGENT,
+          repository.find(run).getFirst().kind());
       assertEquals(
           java.util.List.of(UUID.fromString(analyst)),
           repository.find(run).getLast().dependencyIds());
@@ -238,6 +242,70 @@ class SchemaMigrationTest {
         assertNull(rows.getObject(4));
         assertNull(rows.getString(5));
       }
+    }
+  }
+
+  @Test
+  void schemaReappliesAfterDynamicPlanWithSystemCheckNode() throws Exception {
+    String name = "restart_migration_" + UUID.randomUUID().toString().replace("-", "");
+    String runId = UUID.randomUUID().toString();
+    String planId = UUID.randomUUID().toString();
+    try (var connection = DriverManager.getConnection("jdbc:h2:mem:" + name, "sa", "")) {
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      var db =
+          new org.springframework.jdbc.core.JdbcTemplate(
+              new org.springframework.jdbc.datasource.SingleConnectionDataSource(connection, true));
+      db.update(
+          "INSERT INTO tasks(id,goal,scenario,created_at) VALUES('restart-task','重启验证','normal',?)",
+          "2026-01-01T00:00:00Z");
+      db.update(
+          "INSERT INTO"
+              + " runs(id,task_id,status,rounds,tools,max_rounds,max_tools,max_seconds,elapsed_ms,created_at,updated_at)"
+              + " VALUES(?, 'restart-task','COMPLETED',0,0,8,6,90,10,?,?)",
+          runId,
+          "2026-01-01T00:00:00Z",
+          "2026-01-01T00:00:00Z");
+      db.update(
+          "INSERT INTO"
+              + " workflow_plans(id,run_id,plan_version,template_id,template_version,review_required,approved_at,scope_type,authorization_sha256)"
+              + " VALUES(?,?,1,'workspace-analysis',2,false,?,'WORKSPACE_READ_ONLY',?)",
+          planId,
+          runId,
+          "2026-01-01T00:00:01Z",
+          "a".repeat(64));
+      db.update(
+          "INSERT INTO plan_nodes(id,run_id,sequence_no,status,plan_version_id,node_key,node_label,"
+              + "phase_key,permission_role,definition_id,definition_version,definition_sha256,node_kind,workspace_read)"
+              + " VALUES(?,?,1,'PENDING',?,'inspect','分析授权文件','analysis','ANALYST','workspace-analysis',1,?,"
+              + " 'AGENT',TRUE)",
+          UUID.randomUUID().toString(),
+          runId,
+          planId,
+          "b".repeat(64));
+      db.update(
+          "INSERT INTO"
+              + " plan_nodes(id,run_id,sequence_no,status,plan_version_id,node_key,node_label,phase_key,node_kind,check_id,check_version)"
+              + " VALUES(?,?,2,'PENDING',?,'evidence-check',"
+              + "'核对授权读取证据','verification','SYSTEM_CHECK','authorized-read-evidence',1)",
+          UUID.randomUUID().toString(),
+          runId,
+          planId);
+
+      // 应用在同一数据库上重启时会再次执行完整脚本；旧的 shape 约束不得因检查节点而失败。
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
+      assertEquals(2, db.queryForObject("SELECT COUNT(*) FROM plan_nodes", Integer.class));
+      assertEquals(
+          "SYSTEM_CHECK",
+          db.queryForObject(
+              "SELECT node_kind FROM plan_nodes WHERE check_id='authorized-read-evidence'",
+              String.class));
+      assertEquals(
+          1,
+          db.queryForObject(
+              "SELECT COUNT(*) FROM information_schema.table_constraints WHERE"
+                  + " table_name='PLAN_NODES' AND constraint_name='PLAN_NODE_SHAPE_V2'",
+              Integer.class));
     }
   }
 }

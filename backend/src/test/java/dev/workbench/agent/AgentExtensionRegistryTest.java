@@ -16,9 +16,11 @@ import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.framework.tool.AgentToolContext;
 import dev.workbench.framework.tool.AgentToolProvider;
 import dev.workbench.framework.tool.AgentToolRegistry;
-import dev.workbench.framework.tool.ToolGateway;
+import dev.workbench.framework.tool.ToolSpecification;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.model.Model;
-import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolCallParam;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -58,8 +60,8 @@ class AgentExtensionRegistryTest {
   @Test
   void onlyPlannedToolIsCreatedAndRegisteredWithAgentScope() {
     var used = new ArrayList<ToolKind>();
-    var first = provider(ToolKind.SIMULATED_INSPECTION, 1, used, new ExampleTool());
-    var unused = provider(ToolKind.WORKSPACE_READ, 1, used, new ExampleTool());
+    var first = provider(ToolKind.SIMULATED_INSPECTION, 1, used, example("example_extension"));
+    var unused = provider(ToolKind.WORKSPACE_READ, 1, used, example("unused_extension"));
     var registry = new AgentToolRegistry(List.of(first, unused));
     var toolkit = registry.assemble(Map.of(ToolKind.SIMULATED_INSPECTION, 1), context());
     assertEquals(List.of(ToolKind.SIMULATED_INSPECTION), used);
@@ -68,10 +70,11 @@ class AgentExtensionRegistryTest {
   }
 
   @Test
-  void extensionCanUseSharedGatewayForRuntimeAndStructuredResult() throws Exception {
+  void registeredExtensionAlwaysRecordsAnActualCallAndStructuredResult() throws Exception {
     var context = context();
+    var id = UUID.randomUUID();
     when(context.runtime().beforeTool(eq(ToolKind.SIMULATED_INSPECTION), eq(1), anyString()))
-        .thenReturn(UUID.randomUUID());
+        .thenReturn(id);
     var registry =
         new AgentToolRegistry(
             List.of(
@@ -79,39 +82,57 @@ class AgentExtensionRegistryTest {
                     ToolKind.SIMULATED_INSPECTION,
                     1,
                     new ArrayList<>(),
-                    new ControlledExampleTool(context))));
+                    example("controlled_extension"))));
     var toolkit = registry.assemble(Map.of(ToolKind.SIMULATED_INSPECTION, 1), context);
-    var call =
-        io.agentscope.core.message.ToolUseBlock.builder()
-            .id("extension-call")
-            .name("controlled_extension")
-            .input(Map.of())
-            .content("{}")
-            .build();
-    var result =
-        toolkit
-            .callTool(
-                io.agentscope.core.tool.ToolCallParam.builder()
-                    .toolUseBlock(call)
-                    .input(Map.of())
-                    .build())
-            .block();
+    var result = toolkit.callTool(call("controlled_extension")).block();
     assertNotNull(result);
-    var value =
-        new ObjectMapper()
-            .readTree(
-                ((io.agentscope.core.message.TextBlock) result.getOutput().getFirst()).getText());
-    if (value.isTextual()) value = new ObjectMapper().readTree(value.asText());
+    var value = context.json().readTree(((TextBlock) result.getOutput().getFirst()).getText());
     assertEquals("SUCCEEDED", value.path("status").asText());
     assertEquals("SIMULATED_INSPECTION", value.path("toolId").asText());
+    assertEquals(id.toString(), value.path("toolCallId").asText());
     verify(context.runtime()).beforeTool(eq(ToolKind.SIMULATED_INSPECTION), eq(1), anyString());
     verify(context.runtime()).toolResult("模拟扩展完成。");
   }
 
   @Test
-  void rejectsDuplicateMissingMismatchedAndMultiToolProviders() {
+  void budgetRejectionPreventsAllProviderCallbacks() {
+    var context = context();
+    var stopped =
+        new dev.workbench.framework.control.StopExecution(
+            dev.workbench.domain.StopCause.TOOL_CALL_LIMIT, "工具总次数达到上限");
+    when(context.runtime().beforeTool(eq(ToolKind.SIMULATED_INSPECTION), eq(1), anyString()))
+        .thenThrow(stopped);
+    var spec =
+        new ToolSpecification<String>(
+            "controlled_extension",
+            "扩展工具",
+            List.of(),
+            List.of(),
+            "开始",
+            arguments -> fail("未通过预算校验，不能运行提供者校验"),
+            (arguments, check) -> fail("未通过预算校验，不能运行业务动作"),
+            (arguments, result) -> fail("没有工具结果"));
+    var registry =
+        new AgentToolRegistry(
+            List.of(provider(ToolKind.SIMULATED_INSPECTION, 1, new ArrayList<>(), spec)));
+    var toolkit = registry.assemble(Map.of(ToolKind.SIMULATED_INSPECTION, 1), context);
+    assertSame(
+        stopped,
+        assertThrows(
+            dev.workbench.framework.control.StopExecution.class,
+            () ->
+                toolkit
+                    .getTool("controlled_extension")
+                    .callAsync(call("controlled_extension"))
+                    .block()));
+    assertSame(stopped, context.failure().get());
+    verify(context.runtime(), never()).toolResult(any());
+  }
+
+  @Test
+  void rejectsDuplicateMissingAndMismatchedProvidersAndDuplicateNames() {
     var used = new ArrayList<ToolKind>();
-    var one = provider(ToolKind.SIMULATED_INSPECTION, 1, used, new ExampleTool());
+    var one = provider(ToolKind.SIMULATED_INSPECTION, 1, used, example("example_extension"));
     assertThrows(IllegalArgumentException.class, () -> new AgentToolRegistry(List.of(one, one)));
     var registry = new AgentToolRegistry(List.of(one));
     assertThrows(
@@ -121,20 +142,37 @@ class AgentExtensionRegistryTest {
         IllegalStateException.class,
         () -> registry.assemble(Map.of(ToolKind.SIMULATED_INSPECTION, 2), context()));
     assertTrue(used.isEmpty());
-    var multi =
+
+    var wrongVersion =
         new AgentToolRegistry(
-            List.of(provider(ToolKind.SIMULATED_INSPECTION, 1, used, new MultipleTools())));
+            List.of(
+                provider(ToolKind.SIMULATED_INSPECTION, 2, used, example("example_extension"))));
     assertThrows(
         IllegalStateException.class,
-        () -> multi.assemble(Map.of(ToolKind.SIMULATED_INSPECTION, 1), context()));
-    var overwriting =
-        new AgentToolRegistry(
-            List.of(one, provider(ToolKind.WORKSPACE_READ, 1, used, new OverwritingTools())));
+        () -> wrongVersion.assemble(Map.of(ToolKind.SIMULATED_INSPECTION, 1), context()));
+    assertTrue(used.isEmpty());
+
+    var missingSpec =
+        new AgentToolRegistry(List.of(provider(ToolKind.SIMULATED_INSPECTION, 1, used, null)));
     assertThrows(
-        RuntimeException.class,
+        IllegalStateException.class,
+        () -> missingSpec.assemble(Map.of(ToolKind.SIMULATED_INSPECTION, 1), context()));
+    var workspace =
+        new AgentToolContext(
+            new ObjectMapper(),
+            "work",
+            List.of("a.txt"),
+            Scenario.NORMAL,
+            mock(AgentRuntime.class),
+            new AtomicReference<>());
+    var sameName =
+        new AgentToolRegistry(
+            List.of(one, provider(ToolKind.WORKSPACE_READ, 1, used, example("example_extension"))));
+    assertThrows(
+        IllegalStateException.class,
         () ->
-            overwriting.assemble(
-                Map.of(ToolKind.SIMULATED_INSPECTION, 1, ToolKind.WORKSPACE_READ, 1), context()));
+            sameName.assemble(
+                Map.of(ToolKind.SIMULATED_INSPECTION, 1, ToolKind.WORKSPACE_READ, 1), workspace));
   }
 
   @Test
@@ -229,8 +267,31 @@ class AgentExtensionRegistryTest {
         new AtomicReference<>());
   }
 
+  private static ToolCallParam call(String name) {
+    var use =
+        ToolUseBlock.builder()
+            .id("extension-call")
+            .name(name)
+            .input(Map.of())
+            .content("{}")
+            .build();
+    return ToolCallParam.builder().toolUseBlock(use).input(use.getInput()).build();
+  }
+
+  private static ToolSpecification<String> example(String name) {
+    return new ToolSpecification<>(
+        name,
+        "测试扩展",
+        List.of(),
+        List.of(),
+        "模拟扩展开始。",
+        arguments -> {},
+        (arguments, check) -> "结果",
+        (arguments, result) -> "模拟扩展完成。");
+  }
+
   private static AgentToolProvider provider(
-      ToolKind kind, int version, List<ToolKind> used, Object tool) {
+      ToolKind kind, int version, List<ToolKind> used, ToolSpecification<?> specification) {
     return new AgentToolProvider() {
       public ToolKind kind() {
         return kind;
@@ -240,63 +301,10 @@ class AgentExtensionRegistryTest {
         return version;
       }
 
-      public Object create(AgentToolContext context) {
+      public ToolSpecification<?> create(Scope scope) {
         used.add(kind);
-        return tool;
+        return specification;
       }
     };
-  }
-
-  public static class ExampleTool {
-    @Tool(name = "example_extension", description = "测试扩展")
-    public String run() {
-      return "ok";
-    }
-  }
-
-  /** 演示扩展工具复用网关，而非自行绕过预算和调用记录。 */
-  public static class ControlledExampleTool {
-    private final ToolGateway gateway;
-
-    ControlledExampleTool(AgentToolContext context) {
-      this.gateway = context.gateway();
-    }
-
-    @Tool(name = "controlled_extension", description = "受控的测试扩展", readOnly = true)
-    public String run() {
-      return gateway.execute(
-          ToolKind.SIMULATED_INSPECTION,
-          1,
-          dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.SIMULATED_INSPECTION),
-          dev.workbench.framework.tool.ToolEffect.READ_ONLY,
-          "模拟扩展开始。",
-          result -> "模拟扩展完成。",
-          () -> "结果");
-    }
-  }
-
-  public static class MultipleTools {
-    @Tool(name = "first_extension", description = "第一个测试扩展")
-    public String first() {
-      return "ok";
-    }
-
-    @Tool(name = "second_extension", description = "第二个测试扩展")
-    public String second() {
-      return "ok";
-    }
-  }
-
-  /** 模拟错误扩展重复声明既有工具名并额外注册另一个名称。 */
-  public static class OverwritingTools {
-    @Tool(name = "example_extension", description = "覆盖已有名称")
-    public String overwrite() {
-      return "bad";
-    }
-
-    @Tool(name = "extra_extension", description = "额外工具")
-    public String extra() {
-      return "bad";
-    }
   }
 }

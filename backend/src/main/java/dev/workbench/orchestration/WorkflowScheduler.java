@@ -1,0 +1,287 @@
+package dev.workbench.orchestration;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.domain.CheckpointStage;
+import dev.workbench.domain.EventType;
+import dev.workbench.domain.InvocationStatus;
+import dev.workbench.domain.StopCause;
+import dev.workbench.domain.TaskDefinition;
+import dev.workbench.framework.agent.execution.AgentExecutionRequest;
+import dev.workbench.framework.agent.execution.AgentExecutor;
+import dev.workbench.framework.context.AgentInput;
+import dev.workbench.framework.control.RunControl;
+import dev.workbench.framework.control.StopExecution;
+import dev.workbench.framework.model.ModelRateLimitException;
+import dev.workbench.framework.tool.UncertainToolEffectException;
+import dev.workbench.framework.workflow.check.StaleEvidenceException;
+import dev.workbench.framework.workflow.check.SystemCheckRegistry;
+import dev.workbench.framework.workflow.check.SystemCheckRequest;
+import dev.workbench.framework.workflow.check.SystemCheckResult;
+import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.WorkflowPlan;
+import dev.workbench.framework.workflow.plan.WorkflowTemplate;
+import dev.workbench.task.RunRepository;
+import dev.workbench.task.WorkflowExecutionRepository;
+import dev.workbench.task.WorkflowRecoveryRepository;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.springframework.stereotype.Component;
+
+/** 按持久化依赖顺序执行受控计划；整个运行共享一个控制器。 */
+@Component
+class WorkflowScheduler {
+  private final RunRepository repository;
+  private final PlanRepository plans;
+  private final WorkflowExecutionRepository workflowRuns;
+  private final WorkflowRecoveryRepository recovery;
+  private final AgentExecutor agent;
+  private final ObjectMapper json;
+  private final Map<String, WorkflowTemplate> templates;
+  private final SystemCheckRegistry checks;
+
+  WorkflowScheduler(
+      RunRepository repository,
+      PlanRepository plans,
+      WorkflowExecutionRepository workflowRuns,
+      WorkflowRecoveryRepository recovery,
+      AgentExecutor agent,
+      ObjectMapper json,
+      List<WorkflowTemplate> templates,
+      SystemCheckRegistry checks) {
+    this.repository = repository;
+    this.plans = plans;
+    this.workflowRuns = workflowRuns;
+    this.recovery = recovery;
+    this.agent = agent;
+    this.json = json;
+    this.templates =
+        templates.stream()
+            .collect(Collectors.toUnmodifiableMap(WorkflowTemplate::id, Function.identity()));
+    this.checks = checks;
+  }
+
+  WorkflowTemplate template(String id) {
+    var template = templates.get(id);
+    if (template == null) throw new IllegalArgumentException("不支持该工作流模板。");
+    return template;
+  }
+
+  WorkflowPlan plan(String runId) {
+    return plans.workflowPlan(runId);
+  }
+
+  void approvePlan(String runId, UUID planVersionId) {
+    workflowRuns.approveWorkflow(runId, planVersionId);
+  }
+
+  void recover(String runId, UUID checkpointId, UUID nextRunId) {
+    recovery.recover(runId, checkpointId, nextRunId);
+  }
+
+  /** 认领与提交使用同一进程的控制边界，模型执行期间释放运行控制锁。 */
+  void execute(
+      String runId, WorkflowPlan plan, TaskDefinition task, RunControl control, Object stateLock) {
+    UUID activeAgent = null;
+    try {
+      plan.requireTaskAuthorization(task);
+      repository.event(runId, EventType.RUN_STARTED, "已保存的工作流开始执行。");
+      control.atBoundary(
+          stateLock,
+          () -> {
+            workflowRuns.checkpointBeforeFirstNode(runId, plan.id(), control.elapsed());
+            return null;
+          });
+      while (true) {
+        var node = plans.nextReady(plans.checkedWorkflowNodes(runId, plan));
+        if (node == null) throw new IllegalStateException("工作流没有可继续执行的节点。");
+        if (node.systemCheck()) {
+          // 检查节点不创建 Agent 实例，也不消耗模型或工具预算。
+          var claimed =
+              control.atBoundary(
+                  stateLock, () -> workflowRuns.claimWorkflowCheck(runId, plan.id(), node.id()));
+          SystemCheckResult result;
+          try {
+            result =
+                checks
+                    .resolve(claimed.node().checkRef())
+                    .run(
+                        new SystemCheckRequest(
+                            UUID.fromString(runId),
+                            task,
+                            claimed.node().id(),
+                            claimed.node().key(),
+                            claimed.node().label(),
+                            claimed.node().checkRef(),
+                            claimed.inputs(),
+                            control::check));
+          } catch (StopExecution stop) {
+            throw stop;
+          } catch (RuntimeException failure) {
+            result =
+                SystemCheckResult.blocked("系统检查执行失败，不能确认检查条件。", failure.getClass().getSimpleName());
+          }
+          SystemCheckResult settled = result;
+          boolean ended =
+              control.atBoundary(
+                  stateLock,
+                  () ->
+                      workflowRuns.finishWorkflowCheck(
+                          runId,
+                          plan.id(),
+                          claimed.checkId(),
+                          settled,
+                          control.rounds(),
+                          control.tools(),
+                          control.elapsed()));
+          if (ended) return;
+          continue;
+        }
+        // 认领返回的输入来自同一事务内已验证的交接，读取不到任一上游会整体回滚。
+        var attempt =
+            control.atBoundary(
+                stateLock,
+                () -> workflowRuns.claimWorkflowNode(runId, plan.id(), node.id(), task.goal()));
+        String id = attempt.agentId();
+        activeAgent = UUID.fromString(id);
+        var nodePolicy =
+            attempt.node().budget() == null
+                ? null
+                : new RunControl.NodePolicy(attempt.node().id(), attempt.node().budget());
+        String result;
+        try {
+          result = executeAttempt(runId, task, attempt, control, nodePolicy);
+        } catch (ModelRateLimitException rejected) {
+          control.finishModel(InvocationStatus.FAILED, null, null, rejected.getMessage());
+          boolean requeued =
+              control.atBoundary(
+                  stateLock,
+                  () ->
+                      control.hasModelRetryBudget(nodePolicy)
+                          && workflowRuns.requeueAfterRateLimit(runId, plan.id(), id));
+          if (!requeued) throw rejected;
+          activeAgent = null;
+          control.waitForModelRetry();
+          continue;
+        }
+        boolean completed =
+            control.atBoundary(
+                stateLock,
+                () ->
+                    workflowRuns.finishWorkflowNode(
+                        runId,
+                        plan.id(),
+                        id,
+                        result,
+                        control.rounds(),
+                        control.tools(),
+                        control.elapsed()));
+        activeAgent = null;
+        if (completed) return;
+      }
+    } catch (StopExecution e) {
+      stop(runId, activeAgent, control, e.stopCause(), e.getMessage());
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      stop(runId, activeAgent, control, StopCause.INTERRUPTED, "进程中断，未结束的模型结果未知。");
+    } catch (ModelRateLimitException e) {
+      stop(runId, activeAgent, control, StopCause.MODEL_RATE_LIMIT, "模型请求被限流拒绝，当前节点无法继续自动重试。");
+    } catch (UncertainToolEffectException e) {
+      stop(runId, activeAgent, control, StopCause.TOOL_EFFECT_UNKNOWN, "工具写入结果未知，请先核对工作区状态。");
+    } catch (StaleEvidenceException e) {
+      stop(runId, activeAgent, control, StopCause.CHECK_FAILED, e.getMessage());
+    } catch (IllegalArgumentException | IllegalStateException e) {
+      // 装配、版本、授权或上下文约束拒绝：保留项目生成的安全原因，便于从运行详情定位。
+      String detail = e.getMessage() == null ? "未提供原因。" : e.getMessage();
+      if (detail.length() > 400) detail = detail.substring(0, 399) + "…";
+      stop(runId, activeAgent, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行被拒绝：" + detail);
+    } catch (Exception e) {
+      stop(runId, activeAgent, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行失败，请查看节点与调用记录。");
+    }
+  }
+
+  private String executeAttempt(
+      String runId,
+      TaskDefinition task,
+      WorkflowExecutionRepository.ClaimedNode attempt,
+      RunControl control,
+      RunControl.NodePolicy nodePolicy)
+      throws InterruptedException, com.fasterxml.jackson.core.JsonProcessingException {
+    var node = attempt.node();
+    var files = node.workspaceRead() ? task.fileScopes() : List.<String>of();
+    var input =
+        new StepInput(
+            task.goal(),
+            node.label(),
+            task.entryKind().guidance(),
+            task.constraints(),
+            task.acceptanceCriteria(),
+            files,
+            attempt.dependencies());
+    String id = attempt.agentId();
+    var request =
+        new AgentExecutionRequest(
+            node.role(),
+            id,
+            stepInput(task, attempt, json.writeValueAsString(input)),
+            node.workspaceRead() ? task.workspaceId() : null,
+            files,
+            node.workspaceWrite(),
+            task.scenario(),
+            task.modelMode(),
+            CheckpointStage.BEFORE_TOOL,
+            null,
+            new ControlledAgentRuntime(runId, id, control, repository, nodePolicy),
+            node.definitionRef(),
+            node.definitionSha256());
+    return limited(agent.execute(request), 1900);
+  }
+
+  private void stop(
+      String runId, UUID agentId, RunControl control, StopCause cause, String reason) {
+    InvocationStatus status = InvocationStatus.fromRunStatus(cause.status());
+    control.finishModel(status, null, null, reason);
+    control.finishTool(status, null, reason);
+    workflowRuns.finishWorkflowStoppedRun(
+        runId, agentId, cause, reason, control.rounds(), control.tools(), control.elapsed());
+  }
+
+  private static String limited(String text, int max) {
+    return text.length() <= max ? text : text.substring(0, max - 1) + "…";
+  }
+
+  private static AgentInput stepInput(
+      TaskDefinition task, WorkflowExecutionRepository.ClaimedNode attempt, String text) {
+    var sources = new java.util.ArrayList<AgentInput.Source>();
+    sources.add(new AgentInput.Source(AgentInput.Kind.TASK, task.id().toString(), null));
+    sources.add(
+        new AgentInput.Source(AgentInput.Kind.WORKFLOW_NODE, attempt.node().id().toString(), null));
+    for (var dependency : attempt.dependencies()) {
+      if (dependency.kind() == dev.workbench.framework.workflow.plan.PlanNodeKind.SYSTEM_CHECK) {
+        sources.add(
+            new AgentInput.Source(
+                AgentInput.Kind.SYSTEM_CHECK, dependency.checkId().toString(), null));
+        continue;
+      }
+      sources.add(
+          new AgentInput.Source(
+              AgentInput.Kind.WORKFLOW_ATTEMPT, dependency.attemptId().toString(), null));
+      for (var evidence : dependency.toolEvidence())
+        sources.add(
+            new AgentInput.Source(
+                AgentInput.Kind.TOOL_CALL, evidence.toolCallId().toString(), evidence.version()));
+    }
+    return new AgentInput(text, sources);
+  }
+
+  private record StepInput(
+      String goal,
+      String step,
+      String entryGuidance,
+      List<String> constraints,
+      List<String> acceptanceCriteria,
+      List<String> authorizedFiles,
+      List<WorkflowExecutionRepository.WorkflowInput> dependencies) {}
+}

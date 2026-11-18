@@ -1,77 +1,51 @@
 package dev.workbench.agent;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.workbench.domain.ToolKind;
-import dev.workbench.framework.agent.execution.AgentRuntime;
-import dev.workbench.framework.tool.ToolContracts;
-import dev.workbench.framework.tool.ToolEffect;
-import dev.workbench.framework.tool.ToolFingerprint;
-import dev.workbench.framework.tool.ToolGateway;
-import dev.workbench.framework.tool.UncertainToolEffectException;
+import dev.workbench.framework.tool.ToolSpecification;
 import dev.workbench.workspace.WorkspaceService;
-import dev.workbench.workspace.WorkspaceVersionConflict;
-import io.agentscope.core.tool.Tool;
-import io.agentscope.core.tool.ToolParam;
-import java.util.concurrent.atomic.AtomicReference;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 
-/** 仅在用户显式授权写入时注册；必须先读取对应文件取得版本摘要。 */
+/** 单文件写入要求任务写授权，并在工作区服务内核对文件版本。 */
 public final class WorkspaceWriteTool {
-  private final WorkspaceService service;
-  private final String id, scope;
-  private final ToolGateway gateway;
+  static final ToolSpecification.Parameter EXPECTED =
+      new ToolSpecification.Parameter("expectedSha256", "最近一次读取获得的 SHA-256");
+  static final ToolSpecification.Parameter CONTENT =
+      new ToolSpecification.Parameter("content", "完整的新文件内容");
 
-  WorkspaceWriteTool(
-      WorkspaceService service,
-      String id,
-      String scope,
-      ObjectMapper json,
-      AgentRuntime runtime,
-      AtomicReference<RuntimeException> failure) {
-    this.service = service;
-    this.id = id;
-    this.scope = scope;
-    this.gateway = new ToolGateway(json, runtime, failure);
-  }
+  private WorkspaceWriteTool() {}
 
-  @Tool(
-      name = "write_authorized_file",
-      description = "保存用户授权的文件；必须提供读取时的 SHA-256，不可访问其他文件。",
-      concurrencySafe = false)
-  public String write(
-      @ToolParam(name = "expectedSha256", description = "最近一次读取获得的 SHA-256") String expected,
-      @ToolParam(name = "content", description = "完整的新文件内容") String content) {
-    return gateway.execute(
-        ToolKind.WORKSPACE_WRITE,
-        ToolContracts.SINGLE_FILE_VERSION,
-        ToolFingerprint.of(ToolKind.WORKSPACE_WRITE, id, scope, expected, content),
-        ToolEffect.WRITE,
+  static ToolSpecification<WriteReceipt> specification(
+      WorkspaceService service, String id, String scope) {
+    return new ToolSpecification<>(
+        "write_authorized_file",
+        "保存用户授权的文件；必须提供读取时的 SHA-256，不可访问其他文件。",
+        List.of(EXPECTED, CONTENT),
+        List.of(id, scope),
         "修改用户授权的工作区文件。",
-        receipt -> "已修改授权文件，尚需审查和测试。",
-        () -> validateInput(expected, content),
-        () -> writeFile(service, id, scope, expected, content));
+        arguments -> validateInput(arguments.get("expectedSha256"), arguments.get("content")),
+        (arguments, check) ->
+            writeFile(
+                service, id, scope, arguments.get("expectedSha256"), arguments.get("content")),
+        (arguments, receipt) -> "已修改授权文件，尚需审查和测试。",
+        (arguments, receipt) ->
+            dev.workbench.framework.tool.ResourceVersion.encode(
+                java.util.Map.of(scope, receipt.sha256())));
   }
 
-  /** 只检查输入，不读取或修改工作区；调用次数仍计入预算。 */
+  /** 只检查输入，不读取或修改工作区。 */
   static void validateInput(String expected, String content) {
     if (expected == null
         || !expected.matches("[0-9a-fA-F]{64}")
         || content == null
-        || content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 1_000_000)
+        || content.getBytes(StandardCharsets.UTF_8).length > 1_000_000)
       throw new IllegalArgumentException("写入参数无效。");
   }
 
   static WriteReceipt writeFile(
       WorkspaceService service, String id, String scope, String expected, String content) {
-    try {
-      return new WriteReceipt(service.write(id, scope, expected, content).sha256());
-    } catch (WorkspaceVersionConflict e) {
-      // 此异常只在替换目标文件前抛出，可以安全提示重新读取。
-      throw e;
-    } catch (RuntimeException e) {
-      throw new UncertainToolEffectException(e);
-    }
+    return new WriteReceipt(service.write(id, scope, expected, content).sha256());
   }
 
-  /** 只向模型返回新版本摘要，不在成功回执中重复文件正文。 */
+  /** 写入回执保留新版本摘要。 */
   public record WriteReceipt(String sha256) {}
 }

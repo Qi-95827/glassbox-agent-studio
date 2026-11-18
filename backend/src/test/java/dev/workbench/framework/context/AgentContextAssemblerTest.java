@@ -40,14 +40,22 @@ class AgentContextAssemblerTest {
         new BuiltInContextContributors()
             .projectMemoryContext(new ObjectMapper(), memories, repository);
     var input = new AgentContextInput(task, "run", null);
-    assertEquals("", contributor.contribute(input));
+    assertEquals("", contributor.contribute(input).text());
     verifyNoInteractions(memories, repository);
     when(task.memoryEnabled()).thenReturn(true);
     when(task.workspaceId()).thenReturn("workspace");
     when(memories.loadContextAndRecord("run", "workspace")).thenReturn(List.of());
-    assertTrue(contributor.contribute(input).contains("低可信数据"));
+    assertTrue(contributor.contribute(input).text().contains("低可信数据"));
     verify(memories).loadContextAndRecord("run", "workspace");
     verify(repository).event(eq("run"), eq(EventType.MEMORY_LOADED), contains("0 条"));
+  }
+
+  @Test
+  void blocksBeforeModelWhenAssembledContextExceedsTheExplicitLimit() {
+    var input = new AgentContextInput(mock(TaskDefinition.class), "run", null);
+    var assembler = new AgentContextAssembler(List.of(source("a", 1, "x".repeat(2_000))), 1_000);
+    var failure = assertThrows(IllegalStateException.class, () -> assembler.assemble(input));
+    assertTrue(failure.getMessage().contains("字符上限"));
   }
 
   private static AgentContextContributor source(String id, int order, String value) {
@@ -60,8 +68,8 @@ class AgentContextAssemblerTest {
         return order;
       }
 
-      public String contribute(AgentContextInput input) {
-        return value;
+      public AgentInput contribute(AgentContextInput input) {
+        return value == null ? null : new AgentInput(value, List.of());
       }
     };
   }

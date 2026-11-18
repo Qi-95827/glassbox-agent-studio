@@ -14,4 +14,11 @@ public enum ModelKind {
   public String code() {
     return code;
   }
+
+  public static ModelKind forMode(ModelMode mode) {
+    return switch (mode) {
+      case MOCK -> MOCK;
+      case DEEPSEEK -> DEEPSEEK_FLASH;
+    };
+  }
 }

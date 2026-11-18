@@ -8,6 +8,11 @@ public interface AgentContextContributor {
   /** 排序值相同时按标识排序，保证装配顺序稳定。 */
   int order();
 
-  /** 不适用时返回空字符串；不得扩大用户权限。 */
-  String contribute(AgentContextInput input);
+  /** 来源的格式或行为发生不兼容变更时更新版本。 */
+  default int version() {
+    return 1;
+  }
+
+  /** 不适用时返回空文本；标记实际包含在文本中的来源引用。 */
+  AgentInput contribute(AgentContextInput input);
 }

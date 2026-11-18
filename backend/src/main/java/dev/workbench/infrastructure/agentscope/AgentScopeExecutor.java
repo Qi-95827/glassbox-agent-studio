@@ -3,6 +3,7 @@ package dev.workbench.infrastructure.agentscope;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.CheckpointStage;
 import dev.workbench.framework.agent.assembly.AgentAssemblyPlanner;
+import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.definition.AgentDefinition;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.agent.execution.AgentExecutor;
@@ -27,6 +28,8 @@ import org.springframework.stereotype.Component;
 /** 使用 AgentScope 的 ReActAgent 运行已选角色，项目控制器负责限额与记录。 */
 @Component
 public class AgentScopeExecutor implements AgentExecutor {
+  private static final int MAX_ITERATIONS = 20;
+  private static final int MAX_FRAMEWORK_RETRIES = 1;
   private final ObjectMapper json;
   private final AgentStateStore stateStore;
   private final AgentAssemblyPlanner assemblyPlanner;
@@ -72,9 +75,7 @@ public class AgentScopeExecutor implements AgentExecutor {
             request.writeEnabled());
     AtomicReference<RuntimeException> failure = new AtomicReference<>();
     AgentDefinition definition = assembly.definition();
-    runtime.definitionResolved(definition.ref(), assembly.definitionSha256());
     var selectedSkills = assembly.skills();
-    runtime.skillsLoaded(selectedSkills.stream().map(skill -> skill.reference()).toList());
     String skillGuidance =
         selectedSkills.stream()
             .map(skill -> "【" + skill.name() + "】" + skill.guidance())
@@ -82,8 +83,31 @@ public class AgentScopeExecutor implements AgentExecutor {
     var toolContext =
         new AgentToolContext(json, workspaceId, scopedFiles, scenario, runtime, failure);
     Toolkit toolkit = tools.assemble(assembly.toolVersions(), toolContext);
-    runtime.toolsLoaded(assembly.toolVersions());
-    Model controlled = new ControlledModel(models.create(request), mode, runtime, failure);
+    var selectedModel = models.select(request);
+    Model controlled =
+        new ControlledModel(
+            selectedModel.model(), mode, runtime, failure, selectedModel.rateLimitRejection());
+    var authorization =
+        new AgentAssemblySnapshot.Authorization(
+            1,
+            role,
+            role.version(),
+            workspaceId,
+            scopedFiles.size(),
+            scopedFiles.isEmpty() ? null : scopeDigest(scopedFiles),
+            request.writeEnabled());
+    var components =
+        new AgentAssemblySnapshot.Components(
+            definition.ref(),
+            assembly.definitionSha256(),
+            selectedModel.reference(),
+            MAX_ITERATIONS,
+            MAX_FRAMEWORK_RETRIES,
+            selectedSkills.stream().map(skill -> skill.reference()).toList(),
+            assembly.toolVersions(),
+            authorization,
+            new AgentAssemblySnapshot.Input(
+                AgentAssemblySnapshot.sha256(goal), request.context().sources()));
     try (ReActAgent agent =
         ReActAgent.builder()
             .name(definition.name())
@@ -93,9 +117,10 @@ public class AgentScopeExecutor implements AgentExecutor {
             .defaultSessionId(agentId)
             .conflictPolicy(ConflictPolicy.FAIL)
             .toolkit(toolkit)
-            .maxIters(20)
-            .maxRetries(1)
+            .maxIters(MAX_ITERATIONS)
+            .maxRetries(MAX_FRAMEWORK_RETRIES)
             .build()) {
+      runtime.assemblyResolved(components);
       var future = agent.call(goal).toFuture();
       try {
         while (true) {
@@ -119,6 +144,14 @@ public class AgentScopeExecutor implements AgentExecutor {
       } finally {
         future.cancel(true);
       }
+    }
+  }
+
+  private String scopeDigest(List<String> paths) {
+    try {
+      return AgentAssemblySnapshot.sha256(json.writeValueAsString(paths));
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new IllegalStateException("无法计算工作区授权范围摘要。", e);
     }
   }
 }

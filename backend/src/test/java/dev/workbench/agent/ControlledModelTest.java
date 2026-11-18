@@ -61,6 +61,22 @@ class ControlledModelTest {
   }
 
   @Test
+  void partialResponsePreventsRateLimitRejectionClassification() {
+    var error = new IllegalStateException("已有分片后的错误");
+    when(delegate.stream(anyList(), anyList(), isNull()))
+        .thenReturn(Flux.concat(Flux.just(ChatResponse.builder().build()), Flux.error(error)));
+    var restricted =
+        new ControlledModel(delegate, ModelMode.MOCK, runtime, failure, failure -> true);
+    assertSame(
+        error,
+        assertThrows(
+            IllegalStateException.class,
+            () -> restricted.stream(List.of(), List.of(), null).collectList().block()));
+    assertNull(failure.get());
+    verify(runtime, never()).modelResult(any(), any());
+  }
+
+  @Test
   void cancellationDoesNotPretendTheModelCompleted() {
     when(delegate.stream(anyList(), anyList(), isNull()))
         .thenReturn(Flux.concat(Flux.just(ChatResponse.builder().build()), Flux.never()));

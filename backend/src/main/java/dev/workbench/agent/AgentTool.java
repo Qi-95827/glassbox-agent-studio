@@ -1,45 +1,23 @@
 package dev.workbench.agent;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.Scenario;
-import dev.workbench.domain.ToolKind;
-import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.tool.SimulatedTool;
-import dev.workbench.framework.tool.ToolContracts;
-import dev.workbench.framework.tool.ToolEffect;
-import dev.workbench.framework.tool.ToolFingerprint;
-import dev.workbench.framework.tool.ToolGateway;
-import io.agentscope.core.tool.Tool;
-import java.util.concurrent.atomic.AtomicReference;
+import dev.workbench.framework.tool.ToolSpecification;
+import java.util.List;
 
-/** 使用标准工具注册机制；只有 AgentScope 收到模型工具调用时才执行。 */
+/** 声明模拟检查动作，定期接受网关提供的运行检查。 */
 public final class AgentTool {
-  private final SimulatedTool delegate;
-  private final Scenario scenario;
-  private final AgentRuntime runtime;
-  private final ToolGateway gateway;
+  private AgentTool() {}
 
-  AgentTool(
-      SimulatedTool delegate,
-      Scenario scenario,
-      ObjectMapper json,
-      AgentRuntime runtime,
-      AtomicReference<RuntimeException> failure) {
-    this.delegate = delegate;
-    this.scenario = scenario;
-    this.runtime = runtime;
-    this.gateway = new ToolGateway(json, runtime, failure);
-  }
-
-  @Tool(name = "inspect_simulated_issue", description = "检查模拟问题。结果为模拟数据，不访问真实仓库。", readOnly = true)
-  public String inspect() {
-    return gateway.execute(
-        ToolKind.SIMULATED_INSPECTION,
-        ToolContracts.SIMULATED_VERSION,
-        ToolFingerprint.of(ToolKind.SIMULATED_INSPECTION, scenario.code()),
-        ToolEffect.READ_ONLY,
+  static ToolSpecification<String> specification(SimulatedTool delegate, Scenario scenario) {
+    return new ToolSpecification<>(
+        "inspect_simulated_issue",
+        "检查模拟问题。结果为模拟数据，不访问真实仓库。",
+        List.of(),
+        List.of(scenario.code()),
         "AgentScope 调用了模拟检查工具。",
-        result -> result,
-        () -> delegate.execute(scenario, runtime::check));
+        arguments -> {},
+        (arguments, check) -> delegate.execute(scenario, check),
+        (arguments, result) -> result);
   }
 }

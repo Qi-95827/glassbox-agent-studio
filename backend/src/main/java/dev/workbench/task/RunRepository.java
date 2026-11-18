@@ -3,12 +3,14 @@ package dev.workbench.task;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.*;
+import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.skill.SkillAssignment;
 import dev.workbench.framework.skill.SkillId;
 import dev.workbench.framework.skill.SkillRef;
 import dev.workbench.framework.tool.AgentToolGrant;
 import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.orchestration.Handoff;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -55,9 +57,16 @@ public class RunRepository {
 
   public List<Map<String, Object>> tasks() {
     return db.queryForList(
-        "SELECT t.*, (SELECT r.status FROM runs r WHERE r.task_id=t.id ORDER BY r.created_at DESC"
-            + " LIMIT 1) AS status, (SELECT r.id FROM runs r WHERE r.task_id=t.id ORDER BY"
-            + " r.created_at DESC LIMIT 1) AS run_id FROM tasks t ORDER BY t.created_at DESC");
+        """
+        SELECT t.*,r.status,r.id AS run_id,
+          (r.status='PENDING' AND p.review_required IS TRUE AND p.approved_at IS NULL)
+          AS plan_review_pending
+        FROM tasks t
+        LEFT JOIN runs r ON r.id=(SELECT latest.id FROM runs latest WHERE latest.task_id=t.id
+          ORDER BY latest.created_at DESC,latest.id DESC LIMIT 1)
+        LEFT JOIN workflow_plans p ON p.run_id=r.id
+        ORDER BY t.created_at DESC
+        """);
   }
 
   public Map<String, Object> task(String id) {
@@ -245,6 +254,54 @@ public class RunRepository {
 
   /** 历史计划引用和摘要可同时为空；不根据当前定义伪造历史摘要。 */
   public record PlannedAgentDefinition(AgentDefinitionRef reference, String sha256) {}
+
+  /** 完整装配及兼容查询所需投影在同一事务内发布。 */
+  public void recordAgentAssembly(String runId, String agentId, AgentAssemblySnapshot snapshot) {
+    tx.executeWithoutResult(
+        ignored -> {
+          var selected = snapshot.components();
+          var planned = plannedDefinitionForAgent(runId, agentId);
+          if (planned.reference() != null
+              && (!planned.reference().equals(selected.definition())
+                  || !planned.sha256().equals(selected.definitionSha256())))
+            throw new IllegalStateException("Agent 实际装配与计划指定的定义不一致。");
+          if (agentRole(runId, agentId) != selected.authorization().profile())
+            throw new IllegalStateException("Agent 装配权限与已认领实例不一致。");
+          recordAgentDefinition(runId, agentId, selected.definition(), selected.definitionSha256());
+          recordAgentSkills(agentId, selected.skills());
+          recordAgentVersionedToolGrants(agentId, selected.tools());
+          try {
+            db.update(
+                "INSERT INTO agent_assemblies(agent_id,recorded_at,payload) VALUES(?,?,?)",
+                agentId,
+                now(),
+                json.writeValueAsString(snapshot));
+          } catch (JsonProcessingException e) {
+            throw new IllegalStateException("实际装配快照无法保存。", e);
+          }
+        });
+  }
+
+  /** 历史没有快照的实例不会由现行配置推测补齐。 */
+  public List<AgentAssemblySnapshot.Recorded> agentAssemblies(String runId) {
+    return db.query(
+        """
+        SELECT s.agent_id,s.recorded_at,s.payload FROM agent_assemblies s
+        JOIN agent_invocations a ON a.id=s.agent_id
+        WHERE a.run_id=? ORDER BY a.created_at,a.id
+        """,
+        (row, index) -> {
+          try {
+            return new AgentAssemblySnapshot.Recorded(
+                UUID.fromString(row.getString("agent_id")),
+                Instant.parse(row.getString("recorded_at")),
+                json.readValue(row.getString("payload"), AgentAssemblySnapshot.class));
+          } catch (JsonProcessingException e) {
+            throw new IllegalStateException("实际装配快照版本不受支持或内容无法读取。", e);
+          }
+        },
+        runId);
+  }
 
   /** 仅记录运行中实例实际解析的定义；历史空值不自动推断。 */
   public void recordAgentDefinition(
@@ -469,13 +526,25 @@ public class RunRepository {
 
   public void finishTool(
       String id, InvocationStatus status, String result, String error, long duration) {
+    finishTool(id, status, result, error, duration, null);
+  }
+
+  /** 只读工具的资源版本与调用终态一起保存；旧调用没有该证据时保持为空。 */
+  public void finishTool(
+      String id,
+      InvocationStatus status,
+      String result,
+      String error,
+      long duration,
+      String resourceVersion) {
     db.update(
-        "UPDATE tool_invocations SET status=?,result=?,error_message=?,duration_ms=?,updated_at=?"
-            + " WHERE id=? AND status='RUNNING'",
+        "UPDATE tool_invocations SET status=?,result=?,error_message=?,duration_ms=?,"
+            + "resource_version=?,updated_at=? WHERE id=? AND status='RUNNING'",
         status.name(),
         result,
         error,
         duration,
+        resourceVersion,
         now(),
         id);
   }
@@ -601,6 +670,8 @@ public class RunRepository {
                   InvocationStatus.COMPLETED.name());
           if (completed == null || completed != 1)
             throw new IllegalStateException("上游 Agent 尚未完成，不能接收交接。");
+          // 交接字段有效并不代表发送者属于当前接收节点的直接依赖。
+          plans.requireDirectDependencySender(runId, role, UUID.fromString(handoff.agentId()));
           String time = now();
           startAgentRecord(id, runId, goal, role, time);
           db.update(
@@ -617,6 +688,10 @@ public class RunRepository {
   /** 由调用方提供事务，确保计划节点和 Agent 调用一起写入。 */
   private void startAgentRecord(String id, String runId, String goal, AgentRole role, String time) {
     plans.start(runId, id, role, time);
+    insertAgent(id, runId, goal, role, time);
+  }
+
+  void insertAgent(String id, String runId, String goal, AgentRole role, String time) {
     db.update(
         "INSERT INTO"
             + " agent_invocations(id,run_id,role_name,task_goal,status,result,created_at,updated_at,role_code,role_version)"
@@ -712,29 +787,35 @@ public class RunRepository {
     tx.executeWithoutResult(
         ignored -> {
           String runId = completion.runId().toString();
-          RunStatus status = completion.cause().status();
           if (completion.agentId() != null)
             finishAgent(
-                completion.agentId().toString(), InvocationStatus.fromRunStatus(status), null);
-          update(
+                completion.agentId().toString(),
+                InvocationStatus.fromRunStatus(completion.cause().status()),
+                null);
+          settleStoppedRun(
               runId,
-              status,
+              completion.cause(),
               completion.reason(),
-              null,
               completion.rounds(),
               completion.tools(),
-              completion.elapsedMs(),
-              completion.cause());
-          EventType eventType =
-              switch (status) {
-                case INTERRUPTED -> EventType.INTERRUPTED;
-                case FAILED -> EventType.FAILED;
-                default -> EventType.fromStopStatus(status);
-              };
-          event(runId, eventType, completion.reason());
+              completion.elapsedMs());
           if (completion.systemHandoff() != null)
             handoff(HandoffDirection.RESULT, completion.systemHandoff());
         });
+  }
+
+  void settleStoppedRun(
+      String runId, StopCause cause, String reason, int rounds, int tools, long elapsed) {
+    RunStatus status = cause.status();
+    update(runId, status, reason, null, rounds, tools, elapsed, cause);
+    EventType eventType =
+        switch (status) {
+          case INTERRUPTED -> EventType.INTERRUPTED;
+          case FAILED -> EventType.FAILED;
+          case BLOCKED -> EventType.BLOCKED;
+          default -> EventType.fromStopStatus(status);
+        };
+    event(runId, eventType, reason);
   }
 
   public List<Map<String, Object>> checkpoints(String id) {
@@ -809,6 +890,16 @@ public class RunRepository {
   /** 首运行及计划与任务、创建事件同事务，避免持久化出孤立的半成品。 */
   public void createTaskAndFirstRun(
       TaskDefinition task, UUID runId, RunLimits limits, String message) {
+    createTaskAndFirstRun(task, runId, limits, message, null, false);
+  }
+
+  public void createTaskAndFirstRun(
+      TaskDefinition task,
+      UUID runId,
+      RunLimits limits,
+      String message,
+      WorkflowTemplate workflow,
+      boolean reviewRequired) {
     tx.executeWithoutResult(
         status -> {
           createTask(
@@ -860,7 +951,9 @@ public class RunRepository {
               0,
               task.writeEnabled(),
               limits.maxAgentRounds(),
-              limits.maxAgentTools());
+              limits.maxAgentTools(),
+              workflow,
+              reviewRequired);
           event(runId.toString(), EventType.TASK_CREATED, message);
         });
   }
@@ -892,6 +985,35 @@ public class RunRepository {
               EventType.RECOVERY_STARTED,
               "从运行 " + original.id() + " 的检查点恢复；原历史保留。");
         });
+  }
+
+  /** 调用方在源运行锁和恢复校验事务内创建副本。 */
+  void createWorkflowRecoveryRun(
+      UUID id,
+      RunSnapshot original,
+      WorkflowTemplate template,
+      boolean reviewRequired,
+      int rounds,
+      int tools,
+      long elapsed) {
+    createRun(
+        id.toString(),
+        original.taskId().toString(),
+        original.id().toString(),
+        Math.max(original.rounds(), rounds),
+        Math.max(original.tools(), tools),
+        original.maxRounds(),
+        original.maxTools(),
+        original.maxPerTool(),
+        original.maxReportedTokens(),
+        original.maxIdenticalTools(),
+        original.maxSeconds(),
+        Math.max(original.elapsedMs(), elapsed),
+        false,
+        original.maxAgentRounds(),
+        original.maxAgentTools(),
+        template,
+        reviewRequired);
   }
 
   /** 仅在线程池明确拒绝时调用；记录成功后父运行才允许再次申请恢复。 */
@@ -1096,6 +1218,44 @@ public class RunRepository {
       boolean includeCoder,
       Integer maxAgentRounds,
       Integer maxAgentTools) {
+    createRun(
+        id,
+        taskId,
+        parent,
+        rounds,
+        tools,
+        maxRounds,
+        maxTools,
+        maxPerTool,
+        maxReportedTokens,
+        maxIdenticalTools,
+        maxSeconds,
+        elapsed,
+        includeCoder,
+        maxAgentRounds,
+        maxAgentTools,
+        null,
+        false);
+  }
+
+  private void createRun(
+      String id,
+      String taskId,
+      String parent,
+      int rounds,
+      int tools,
+      int maxRounds,
+      int maxTools,
+      int maxPerTool,
+      Long maxReportedTokens,
+      Integer maxIdenticalTools,
+      int maxSeconds,
+      long elapsed,
+      boolean includeCoder,
+      Integer maxAgentRounds,
+      Integer maxAgentTools,
+      WorkflowTemplate workflow,
+      boolean reviewRequired) {
     String now = now();
     tx.executeWithoutResult(
         s -> {
@@ -1122,7 +1282,8 @@ public class RunRepository {
               maxIdenticalTools,
               maxAgentRounds,
               maxAgentTools);
-          plans.initialize(id, includeCoder);
+          if (workflow == null) plans.initialize(id, includeCoder);
+          else plans.initializeWorkflow(id, workflow, taskDefinition(taskId), reviewRequired, now);
         });
   }
 
@@ -1135,6 +1296,29 @@ public class RunRepository {
   public int countAgentToolCalls(String agentId) {
     return db.queryForObject(
         "SELECT COUNT(*) FROM tool_invocations WHERE agent_id=?", Integer.class, agentId);
+  }
+
+  /** 累计节点的全部尝试，所有已记录启动的调用占用预算。 */
+  public int countNodeModelCalls(String runId, UUID nodeId) {
+    return db.queryForObject(
+        """
+        SELECT COUNT(*) FROM model_invocations i JOIN workflow_attempts a ON a.agent_id=i.agent_id
+        WHERE i.run_id=? AND a.node_id=?
+        """,
+        Integer.class,
+        runId,
+        nodeId.toString());
+  }
+
+  public int countNodeToolCalls(String runId, UUID nodeId) {
+    return db.queryForObject(
+        """
+        SELECT COUNT(*) FROM tool_invocations i JOIN workflow_attempts a ON a.agent_id=i.agent_id
+        WHERE i.run_id=? AND a.node_id=?
+        """,
+        Integer.class,
+        runId,
+        nodeId.toString());
   }
 
   /** 按记录顺序倒查当前运行及恢复祖先，遇到不同调用立即停止。 */
@@ -1218,12 +1402,60 @@ public class RunRepository {
   }
 
   public void event(String runId, EventType type, String message) {
+    event(runId, type, message, EventRef.empty());
+  }
+
+  /** 写入带结构化归属的事件；空关联与旧接口行为一致。 */
+  public void event(String runId, EventType type, String message, EventRef ref) {
+    EventRef checked = ref == null ? EventRef.empty() : ref;
     db.update(
-        "INSERT INTO events(run_id,event_type,message,created_at) VALUES(?,?,?,?)",
+        "INSERT INTO"
+            + " events(run_id,event_type,message,created_at,plan_version_id,node_id,attempt_id,"
+            + "agent_id,check_id,model_call_id,tool_call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         runId,
         type.name(),
         message,
-        now());
+        now(),
+        text(checked.planVersionId()),
+        text(checked.nodeId()),
+        text(checked.attemptId()),
+        text(checked.agentId()),
+        text(checked.checkId()),
+        text(checked.modelCallId()),
+        text(checked.toolCallId()));
+  }
+
+  /**
+   * 按 Agent 实例查找已持久化的节点和尝试。
+   *
+   * <p>只返回实际存在的归属；兼容流程或尚未认领的实例保持空值，不从角色或计划顺序推断。
+   */
+  public EventRef eventRefForAgent(String runId, String agentId) {
+    var rows =
+        db.query(
+            """
+            SELECT n.plan_version_id,n.id AS node_id,a.id AS attempt_id
+            FROM agent_invocations i
+            LEFT JOIN plan_nodes n ON n.run_id=i.run_id AND n.agent_id=i.id
+            LEFT JOIN workflow_attempts a ON a.agent_id=i.id AND a.node_id=n.id
+            WHERE i.run_id=? AND i.id=?
+            """,
+            (row, index) ->
+                EventRef.agent(java.util.UUID.fromString(agentId))
+                    .withPlan(nullableUuid(row.getString("plan_version_id")))
+                    .withNode(nullableUuid(row.getString("node_id")))
+                    .withAttempt(nullableUuid(row.getString("attempt_id"))),
+            runId,
+            agentId);
+    return rows.isEmpty() ? EventRef.agent(java.util.UUID.fromString(agentId)) : rows.getFirst();
+  }
+
+  private static String text(java.util.UUID value) {
+    return value == null ? null : value.toString();
+  }
+
+  private static java.util.UUID nullableUuid(String value) {
+    return value == null || value.isBlank() ? null : java.util.UUID.fromString(value);
   }
 
   public void update(
@@ -1543,7 +1775,10 @@ public class RunRepository {
     tx.executeWithoutResult(
         s -> {
           List<Map<String, Object>> active =
-              db.queryForList("SELECT id FROM runs WHERE status IN ('PENDING','RUNNING','PAUSED')");
+              db.queryForList(
+                  "SELECT r.id,p.id AS plan_id FROM runs r LEFT JOIN workflow_plans p ON"
+                      + " p.run_id=r.id WHERE r.status IN ('PENDING','RUNNING','PAUSED') AND NOT"
+                      + " (p.id IS NOT NULL AND p.approved_at IS NULL AND r.status='PENDING')");
           for (var row : active) {
             String id = row.get("ID").toString();
             db.update(
@@ -1552,7 +1787,10 @@ public class RunRepository {
                 now(),
                 id);
             plans.settle(id, now());
-            event(id, EventType.INTERRUPTED, "运行中断，可查看检查点并选择恢复。");
+            event(
+                id,
+                EventType.INTERRUPTED,
+                row.get("PLAN_ID") == null ? "运行中断，可查看支持的检查点。" : "动态工作流中断，已保留执行记录。可查询检查点的可用状态。");
           }
           db.update(
               "UPDATE agent_invocations SET status='INTERRUPTED',updated_at=? WHERE"

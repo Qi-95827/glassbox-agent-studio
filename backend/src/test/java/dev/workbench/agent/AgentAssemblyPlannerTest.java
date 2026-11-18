@@ -50,4 +50,35 @@ class AgentAssemblyPlannerTest {
         IllegalArgumentException.class,
         () -> dev.workbench.framework.tool.ToolContracts.versionFor(null, 1));
   }
+
+  @Test
+  void rejectsMissingVersionSummaryMismatchAndDifferentPermissionProfile() {
+    var analystRef =
+        dev.workbench.framework.agent.definition.AgentDefinitionRegistry.builtinReference(
+            AgentRole.ANALYST);
+    var coderRef =
+        dev.workbench.framework.agent.definition.AgentDefinitionRegistry.builtinReference(
+            AgentRole.CODER);
+    var missing =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                planner.plan(
+                    AgentRole.ANALYST,
+                    new dev.workbench.framework.agent.definition.AgentDefinitionRef("missing", 1),
+                    false,
+                    0,
+                    false));
+    assertTrue(missing.getMessage().contains("定义或版本不存在"));
+    var stale =
+        assertThrows(
+            IllegalStateException.class,
+            () -> planner.plan(AgentRole.ANALYST, analystRef, "0".repeat(64), false, 0, false));
+    assertTrue(stale.getMessage().contains("摘要不一致"));
+    var profile =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> planner.plan(AgentRole.ANALYST, coderRef, false, 0, false));
+    assertTrue(profile.getMessage().contains("权限配置不一致"));
+  }
 }

@@ -24,13 +24,27 @@ public final class DemoModel implements Model {
   private final boolean workspaceAvailable;
   private final Scenario scenario;
   private final List<String> fileScopes;
+  private final boolean textOnly;
+  private final boolean workflowInput;
 
   public DemoModel(
       AgentRole role, boolean workspaceAvailable, Scenario scenario, List<String> fileScopes) {
+    this(role, workspaceAvailable, scenario, fileScopes, false, false);
+  }
+
+  DemoModel(
+      AgentRole role,
+      boolean workspaceAvailable,
+      Scenario scenario,
+      List<String> fileScopes,
+      boolean textOnly,
+      boolean workflowInput) {
     this.role = role;
     this.workspaceAvailable = workspaceAvailable;
     this.scenario = scenario;
     this.fileScopes = List.copyOf(fileScopes);
+    this.textOnly = textOnly;
+    this.workflowInput = workflowInput;
   }
 
   public String getModelName() {
@@ -39,6 +53,14 @@ public final class DemoModel implements Model {
 
   public Flux<ChatResponse> stream(
       List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+    if (textOnly) {
+      if (!tools.isEmpty()) return Flux.error(new IllegalStateException("纯文本 Agent 不应获得工具。"));
+      return Flux.just(
+          ChatResponse.builder()
+              .content(
+                  List.of(TextBlock.builder().text("模拟文本分析已返回。示例：核对任务目标、适用约束和可验证的验收条件。").build()))
+              .build());
+    }
     if (role == AgentRole.REVIEWER) {
       boolean received =
           messages.stream()
@@ -62,11 +84,13 @@ public final class DemoModel implements Model {
     if (role == AgentRole.CODER) {
       boolean received =
           messages.stream()
+              .map(Msg::getTextContent)
+              .filter(java.util.Objects::nonNull)
               .anyMatch(
-                  message ->
-                      message.getTextContent() != null
-                          && message.getTextContent().contains("analysis-agent")
-                          && message.getTextContent().contains("evidenceEventIds"));
+                  text ->
+                      workflowInput
+                          ? containsWorkflowDependency(text)
+                          : text.contains("analysis-agent") && text.contains("evidenceEventIds"));
       if (!received) return Flux.error(new IllegalStateException("开发 Agent 未收到分析交接。"));
     }
     int callIndex = calls.getAndIncrement();
@@ -115,6 +139,17 @@ public final class DemoModel implements Model {
                                 : "模拟分析完成：建议核对输入、预期行为并准备回归验证。尚无真实测试结果。")
                         .build()))
             .build());
+  }
+
+  private static boolean containsWorkflowDependency(String text) {
+    try {
+      var input = JSON.readTree(text);
+      return input != null
+          && input.path("dependencies").isArray()
+          && !input.path("dependencies").isEmpty();
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      return false;
+    }
   }
 
   /** 测试模型只能在工具包装结果明确成功时继续，不能把框架错误消息当成执行证据。 */

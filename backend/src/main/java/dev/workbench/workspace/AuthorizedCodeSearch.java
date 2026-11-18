@@ -2,6 +2,7 @@ package dev.workbench.workspace;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** 只在服务端绑定的授权文件集合中执行有界的字面文本搜索。 */
 public final class AuthorizedCodeSearch {
@@ -31,10 +32,12 @@ public final class AuthorizedCodeSearch {
     java.util.Objects.requireNonNull(scope);
     java.util.Objects.requireNonNull(check);
     List<Match> matches = new ArrayList<>();
+    var versions = new java.util.LinkedHashMap<String, String>();
     boolean truncated = false;
     for (String path : scope.paths()) {
       check.run();
       var file = workspaces.read(workspaceId, path);
+      versions.put(path, file.sha256());
       var lines = file.content().lines().iterator();
       int lineNumber = 0;
       while (lines.hasNext()) {
@@ -57,17 +60,23 @@ public final class AuthorizedCodeSearch {
       }
       // 即使达到匹配上限，也继续检查其他授权文件是否可读，避免将局部结果误报为完整搜索。
     }
-    return new SearchResult(matches, truncated);
+    return new SearchResult(matches, truncated, versions);
   }
 
   /** 内容摘要与行文本来自同一次单文件读取；不能代替后续写入前的版本检查。 */
   public record Match(
       String path, int line, String excerpt, boolean lineTruncated, String sha256) {}
 
-  /** truncated 表示至少发现一个结果因数量上限未返回。 */
-  public record SearchResult(List<Match> matches, boolean truncated) {
+  /** {@code versions} 覆盖本次实际读取的全部授权文件，供恢复时核对版本。 */
+  public record SearchResult(List<Match> matches, boolean truncated, Map<String, String> versions) {
     public SearchResult {
       matches = List.copyOf(matches);
+      versions = Map.copyOf(versions);
+    }
+
+    /** 兼容不需要版本映射的旧调用。 */
+    public SearchResult(List<Match> matches, boolean truncated) {
+      this(matches, truncated, Map.of());
     }
   }
 }

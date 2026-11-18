@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
-/** 包装工具的控制、记录和结构化结果；权限仍由具体工具与服务端校验。 */
+/** 统一检查实例权限、控制调用，并记录结构化结果。 */
 public final class ToolGateway {
   private final ObjectMapper json;
   private final AgentRuntime runtime;
@@ -48,8 +48,30 @@ public final class ToolGateway {
       Function<T, String> summary,
       Runnable validate,
       Callable<T> action) {
+    return execute(kind, toolVersion, fingerprint, effect, start, summary, validate, null, action);
+  }
+
+  /**
+   * 额外记录这次调用观察到的资源版本，作为只读工作区恢复的证据。
+   *
+   * <p>版本在动作成功后计算；失败或拒绝的调用不产生版本证据。
+   */
+  public <T> String execute(
+      ToolKind kind,
+      int toolVersion,
+      String fingerprint,
+      ToolEffect effect,
+      String start,
+      Function<T, String> summary,
+      Runnable validate,
+      Function<T, String> resourceVersion,
+      Callable<T> action) {
     if (toolVersion < 1) throw new IllegalArgumentException("工具版本无效。");
     synchronized (runtime) {
+      // 同一轮中的后续工具也不能越过此前的受控停止或结果未知状态。
+      var stopped = failure.get();
+      if (stopped != null) throw stopped;
+      boolean actionStarted = false;
       try {
         var callId = runtime.beforeTool(kind, toolVersion, fingerprint);
         Instant started = Instant.now();
@@ -69,9 +91,13 @@ public final class ToolGateway {
               ToolResult.ErrorCode.INVALID_ARGUMENT,
               "工具输入不符合约束，请检查参数和授权范围后再决定是否重试。");
         }
+        runtime.check();
         try {
+          actionStarted = true;
           data = action.call();
         } catch (WorkspaceVersionConflict e) {
+          // 此异常的契约要求在文件替换之前报告版本冲突。
+          actionStarted = false;
           return rejected(
               callId,
               kind,
@@ -82,7 +108,7 @@ public final class ToolGateway {
               ToolResult.ErrorCode.STALE_VERSION,
               "文件版本已变化，请重新读取授权文件后再决定是否修改。");
         } catch (IllegalArgumentException e) {
-          if (effect == ToolEffect.WRITE) throw new UncertainToolEffectException(e);
+          if (effect == ToolEffect.WRITE) throw e;
           return rejected(
               callId,
               kind,
@@ -109,27 +135,34 @@ public final class ToolGateway {
                     data,
                     null));
         String safeSummary = summary.apply(data);
+        String observedVersion = resourceVersion == null ? null : resourceVersion.apply(data);
         runtime.event(EventType.TOOL_FINISHED, safeSummary);
-        runtime.toolResult(safeSummary);
+        if (observedVersion == null) runtime.toolResult(safeSummary);
+        else runtime.toolResult(safeSummary, observedVersion);
         return value;
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
-        var error = new IllegalStateException("工具执行被中断，结果可能未知。", e);
-        failure.set(error);
-        throw error;
+        throw recordFailure(effect, actionStarted, new IllegalStateException("工具执行被中断，结果可能未知。", e));
       } catch (RuntimeException e) {
-        failure.set(e);
-        throw e;
+        throw recordFailure(effect, actionStarted, e);
       } catch (JsonProcessingException e) {
-        var error = new IllegalStateException("工具结果无法序列化，写操作状态需检查。", e);
-        failure.set(error);
-        throw error;
+        throw recordFailure(effect, actionStarted, new IllegalStateException("工具结果无法序列化。", e));
       } catch (Exception e) {
-        var error = new IllegalStateException("工具执行失败，写操作状态需检查。", e);
-        failure.set(error);
-        throw error;
+        throw recordFailure(effect, actionStarted, new IllegalStateException("工具执行失败。", e));
       }
     }
+  }
+
+  private RuntimeException recordFailure(
+      ToolEffect effect, boolean actionStarted, RuntimeException error) {
+    RuntimeException recorded =
+        effect == ToolEffect.WRITE
+                && actionStarted
+                && !(error instanceof UncertainToolEffectException)
+            ? new UncertainToolEffectException(error)
+            : error;
+    failure.set(recorded);
+    return recorded;
   }
 
   private String rejected(

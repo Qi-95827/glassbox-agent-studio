@@ -6,6 +6,7 @@ import io.agentscope.core.model.Model;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import org.springframework.stereotype.Component;
 
 /** 依据显式模型模式选择适配器；不会在启动时创建真实模型或读取密钥。 */
@@ -25,10 +26,45 @@ public final class AgentModelRegistry {
   }
 
   public Model create(AgentExecutionRequest request) {
-    var provider = providers.get(request.modelMode());
+    return createChecked(providerFor(request.modelMode()), request);
+  }
+
+  public SelectedModel select(AgentExecutionRequest request) {
+    var provider = providerFor(request.modelMode());
+    Model model = createChecked(provider, request);
+    return new SelectedModel(
+        model,
+        new ModelReference(
+            request.modelMode(), model.getModelName(), provider.configurationVersion()),
+        provider::isRateLimitRejection);
+  }
+
+  private AgentModelProvider providerFor(ModelMode mode) {
+    var provider = providers.get(mode);
     if (provider == null) throw new IllegalStateException("未配置所选模型模式的提供者。");
+    return provider;
+  }
+
+  private static Model createChecked(AgentModelProvider provider, AgentExecutionRequest request) {
     Model model = provider.create(request);
     if (model == null) throw new IllegalStateException("模型提供者未创建模型。");
     return model;
+  }
+
+  public record SelectedModel(
+      Model model, ModelReference reference, Predicate<Throwable> rateLimitRejection) {
+    public SelectedModel(Model model, ModelReference reference) {
+      this(model, reference, error -> false);
+    }
+  }
+
+  /** 已选模型的公开名称与服务端配置版本。 */
+  public record ModelReference(ModelMode mode, String name, int configurationVersion) {
+    public ModelReference {
+      if (mode == null
+          || name == null
+          || !name.matches("[A-Za-z0-9._:/-]{1,120}")
+          || configurationVersion < 1) throw new IllegalArgumentException("模型公开标识或配置版本无效。");
+    }
   }
 }

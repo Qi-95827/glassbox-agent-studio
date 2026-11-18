@@ -4,6 +4,7 @@ import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.RoleBudget;
 import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.domain.ToolKind;
+import dev.workbench.framework.workflow.plan.WorkflowNodeBudget;
 import java.util.List;
 import java.util.Map;
 
@@ -34,7 +35,62 @@ public record CreateTaskRequest(
         Map<AgentRole, RoleBudget> roleBudgets,
     @com.fasterxml.jackson.databind.annotation.JsonDeserialize(
             using = dev.workbench.domain.ToolBudgetMapDeserializer.class)
-        Map<ToolKind, Integer> toolBudgets) {
+        Map<ToolKind, Integer> toolBudgets,
+    String workflowTemplate,
+    Boolean reviewPlan,
+    Map<String, WorkflowNodeBudget> nodeBudgets) {
+  /** 兼容原有任务创建调用。 */
+  public CreateTaskRequest(
+      String goal,
+      String scenario,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxSeconds,
+      String modelMode,
+      String workspaceId,
+      String fileScope,
+      Boolean writeEnabled,
+      String bugId,
+      Boolean memoryEnabled,
+      Integer maxPerTool,
+      List<String> constraints,
+      List<String> acceptanceCriteria,
+      Long maxReportedTokens,
+      Integer maxIdenticalTools,
+      TaskEntryKind entryKind,
+      Integer maxAgentRounds,
+      Integer maxAgentTools,
+      List<String> fileScopes,
+      Map<AgentRole, RoleBudget> roleBudgets,
+      Map<ToolKind, Integer> toolBudgets) {
+    this(
+        goal,
+        scenario,
+        maxRounds,
+        maxTools,
+        maxSeconds,
+        modelMode,
+        workspaceId,
+        fileScope,
+        writeEnabled,
+        bugId,
+        memoryEnabled,
+        maxPerTool,
+        constraints,
+        acceptanceCriteria,
+        maxReportedTokens,
+        maxIdenticalTools,
+        entryKind,
+        maxAgentRounds,
+        maxAgentTools,
+        fileScopes,
+        roleBudgets,
+        toolBudgets,
+        null,
+        null,
+        null);
+  }
+
   /** 兼容尚未提供工具类型限额的请求。 */
   public CreateTaskRequest(
       String goal,

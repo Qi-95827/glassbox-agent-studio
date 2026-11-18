@@ -3,9 +3,12 @@ package dev.workbench.app;
 import dev.workbench.agent.AgentSessionService;
 import dev.workbench.framework.workflow.plan.PlanRepository;
 import dev.workbench.memory.MemoryService;
+import dev.workbench.observability.RunMetricsService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.task.RunRepository;
+import dev.workbench.task.WorkflowExecutionRepository;
+import dev.workbench.task.WorkflowRecoveryRepository;
 import java.util.List;
 import java.util.Map;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -18,20 +21,29 @@ public class WorkbenchController {
   private final RunRepository repo;
   private final RunService service;
   private final PlanRepository plans;
+  private final WorkflowExecutionRepository workflowRuns;
+  private final WorkflowRecoveryRepository workflowRecovery;
   private final MemoryService memories;
   private final AgentSessionService sessions;
+  private final RunMetricsService metrics;
 
   public WorkbenchController(
       RunRepository repo,
       RunService service,
       PlanRepository plans,
+      WorkflowExecutionRepository workflowRuns,
+      WorkflowRecoveryRepository workflowRecovery,
       MemoryService memories,
-      AgentSessionService sessions) {
+      AgentSessionService sessions,
+      RunMetricsService metrics) {
     this.repo = repo;
     this.service = service;
     this.plans = plans;
+    this.workflowRuns = workflowRuns;
+    this.workflowRecovery = workflowRecovery;
     this.memories = memories;
     this.sessions = sessions;
+    this.metrics = metrics;
   }
 
   @GetMapping("/tasks")
@@ -51,7 +63,17 @@ public class WorkbenchController {
     detail.put("run", run);
     detail.put("task", repo.task(run.get("TASK_ID").toString()));
     detail.put("agents", repo.agents(id));
+    detail.put("agentAssemblies", repo.agentAssemblies(id));
     detail.put("planNodes", plans.find(id));
+    detail.put("workflowMetrics", metrics.workflow(id));
+    var workflow = plans.workflowPlan(id);
+    if (workflow != null) {
+      detail.put("workflowPlan", workflow);
+      detail.put("workflowAttempts", workflowRuns.workflowAttempts(id));
+      detail.put("workflowChecks", workflowRuns.workflowChecks(id));
+      detail.put("workflowHandoffs", workflowRuns.workflowHandoffs(id));
+      detail.put("workflowCheckpoints", workflowRecovery.checkpoints(id, workflow));
+    }
     detail.put("tools", repo.tools(id));
     detail.put("models", repo.models(id));
     detail.put("handoffs", repo.handoffs(id));
@@ -61,6 +83,12 @@ public class WorkbenchController {
     detail.put("roleBudgets", repo.roleBudgets(run.get("TASK_ID").toString()));
     detail.put("toolBudgets", repo.toolBudgets(run.get("TASK_ID").toString()));
     return detail;
+  }
+
+  @PostMapping("/runs/{id}/plans/{planVersionId}/approve")
+  Object approvePlan(@PathVariable String id, @PathVariable java.util.UUID planVersionId) {
+    service.approvePlan(id, planVersionId);
+    return Map.of("accepted", true);
   }
 
   @PostMapping("/runs/{id}/cancel")
