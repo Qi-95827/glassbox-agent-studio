@@ -28,13 +28,39 @@ public class BugService {
     this.approvals = approvals;
   }
 
+  private static final Bug SIMULATED_BUG =
+      new Bug(
+          BUG_ID,
+          "Python 单元测试失败",
+          "模拟一个 Python 项目的测试失败问题；需要在工作区存在 tests 目录及 unittest 测试。",
+          "tests/test_*.py",
+          "synthetic-local",
+          1,
+          "add(2, 1) 返回 1 而不是 3；unittest 中 test_add 断言失败（AssertionError: 1 != 3）。",
+          "test_add",
+          "AssertionError: 1 != 3");
+
   public List<Bug> list() {
-    return List.of(
-        new Bug(
-            BUG_ID,
-            "Python 单元测试失败",
-            "模拟一个 Python 项目的测试失败问题；需要在工作区存在 tests 目录及 unittest 测试。",
-            "tests/test_*.py"));
+    return List.of(SIMULATED_BUG);
+  }
+
+  /** 唯一受支持的模拟 Bug；检查匹配和证据文案使用同一份定义。 */
+  public Bug simulatedBug() {
+    return SIMULATED_BUG;
+  }
+
+  private static boolean matchesTargetSymptom(String output) {
+    return output.contains("FAIL: " + SIMULATED_BUG.expectedFailingTest())
+        && output.contains(SIMULATED_BUG.expectedFailureText());
+  }
+
+  private static String bugContext() {
+    return "Bug 来源："
+        + SIMULATED_BUG.source()
+        + " v"
+        + SIMULATED_BUG.version()
+        + "；预期现象："
+        + SIMULATED_BUG.expectedSymptom();
   }
 
   /** 当前受支持的模拟 Bug；未知标识在计划创建和检查执行时拒绝。 */
@@ -143,12 +169,13 @@ public class BugService {
     try {
       fingerprint = workspaces.verificationFingerprint(workspaceId);
     } catch (RuntimeException e) {
+      // 未声明未跟踪文件或文件不可读时不能把结果绑定到代码版本；不得当作“缺少测试”生成补充请求。
       return save(
           runId,
           bugId,
           workspaceId,
           kind,
-          CheckStatus.NEEDS_INFO,
+          CheckStatus.STALE,
           "无法可靠绑定工作区版本；请检查未跟踪文件和 Git 状态。",
           0);
     }
@@ -228,13 +255,16 @@ public class BugService {
       String text = output.get(5, TimeUnit.SECONDS);
       int exit = process.exitValue();
       boolean discovered = text.matches("(?s).*TESTS_DISCOVERED=[1-9][0-9]*.*");
+      boolean targetMatched = kind == CheckKind.REPRODUCE && matchesTargetSymptom(text);
       CheckStatus status;
       if (!discovered) status = exit == 3 ? CheckStatus.NEEDS_INFO : CheckStatus.ERROR;
       else if (kind == CheckKind.REPRODUCE)
         status =
             exit == 0
                 ? CheckStatus.NOT_REPRODUCED
-                : exit == 1 ? CheckStatus.FAILURES_OBSERVED : CheckStatus.ERROR;
+                : exit == 1
+                    ? (targetMatched ? CheckStatus.FAILURES_OBSERVED : CheckStatus.TARGET_MISMATCH)
+                    : CheckStatus.ERROR;
       else
         status =
             exit == 0 ? CheckStatus.PASSED : exit == 1 ? CheckStatus.FAILED : CheckStatus.ERROR;
@@ -251,7 +281,11 @@ public class BugService {
           workspaceId,
           kind,
           status,
-          "固定命令：python unittest discover；容器无网络、工作区只读；退出码：" + exit + "\n" + text,
+          bugContext()
+              + "\n固定命令：python unittest discover；容器无网络、工作区只读；退出码："
+              + exit
+              + "\n"
+              + text,
           elapsed(start),
           fingerprint.equals(after) ? fingerprint : null);
     } catch (InterruptedException e) {
@@ -356,6 +390,7 @@ public class BugService {
   public enum CheckStatus {
     NEEDS_INFO,
     FAILURES_OBSERVED,
+    TARGET_MISMATCH,
     NOT_REPRODUCED,
     PASSED,
     FAILED,
@@ -365,7 +400,16 @@ public class BugService {
     STALE
   }
 
-  public record Bug(String id, String title, String description, String expectedTests) {}
+  public record Bug(
+      String id,
+      String title,
+      String description,
+      String expectedTests,
+      String source,
+      int version,
+      String expectedSymptom,
+      String expectedFailingTest,
+      String expectedFailureText) {}
 
   public record Check(
       String id,

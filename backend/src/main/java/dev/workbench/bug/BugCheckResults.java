@@ -23,12 +23,18 @@ final class BugCheckResults {
               summary(check, "未观察到测试失败，不能进入定位或修改。"),
               evidence(check),
               check.id());
+      case TARGET_MISMATCH ->
+          SystemCheckResult.failed(
+              summary(check, "测试存在失败，但未出现模拟 Bug 的目标现象；不能作为该 Bug 的复现证据。"),
+              evidence(check),
+              check.id(),
+              "REPRODUCTION_TARGET_MISMATCH");
       case NEEDS_INFO ->
-          new SystemCheckResult(
-              SystemCheckStatus.BLOCKED,
+          SystemCheckResult.blocked(
               summary(check, "缺少可执行测试或验证条件，请补充信息。"),
               evidence(check),
-              check.id());
+              check.id(),
+              "REPRODUCTION_MISSING_INFO");
       case ERROR ->
           new SystemCheckResult(
               SystemCheckStatus.BLOCKED,
@@ -77,11 +83,11 @@ final class BugCheckResults {
               evidence(check),
               check.id());
       case NEEDS_INFO ->
-          new SystemCheckResult(
-              SystemCheckStatus.BLOCKED,
+          SystemCheckResult.blocked(
               summary(check, "回归检查缺少可执行测试或验证条件。"),
               evidence(check),
-              check.id());
+              check.id(),
+              "REGRESSION_MISSING_INFO");
       case ERROR ->
           new SystemCheckResult(
               SystemCheckStatus.BLOCKED,
@@ -106,7 +112,7 @@ final class BugCheckResults {
               summary(check, "工作区在检查期间发生变化，结果不对应当前代码版本。"),
               evidence(check),
               check.id());
-      case NOT_REPRODUCED ->
+      case NOT_REPRODUCED, TARGET_MISMATCH ->
           new SystemCheckResult(
               SystemCheckStatus.BLOCKED,
               summary(check, "回归检查返回了不适用的状态，不能作为通过证据。"),

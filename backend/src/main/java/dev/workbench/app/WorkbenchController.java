@@ -7,6 +7,7 @@ import dev.workbench.observability.RunMetricsService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.task.RunRepository;
+import dev.workbench.task.TaskSupplementService;
 import dev.workbench.task.WorkflowExecutionRepository;
 import dev.workbench.task.WorkflowRecoveryRepository;
 import java.util.List;
@@ -23,6 +24,7 @@ public class WorkbenchController {
   private final PlanRepository plans;
   private final WorkflowExecutionRepository workflowRuns;
   private final WorkflowRecoveryRepository workflowRecovery;
+  private final TaskSupplementService supplements;
   private final MemoryService memories;
   private final AgentSessionService sessions;
   private final RunMetricsService metrics;
@@ -33,6 +35,7 @@ public class WorkbenchController {
       PlanRepository plans,
       WorkflowExecutionRepository workflowRuns,
       WorkflowRecoveryRepository workflowRecovery,
+      TaskSupplementService supplements,
       MemoryService memories,
       AgentSessionService sessions,
       RunMetricsService metrics) {
@@ -41,6 +44,7 @@ public class WorkbenchController {
     this.plans = plans;
     this.workflowRuns = workflowRuns;
     this.workflowRecovery = workflowRecovery;
+    this.supplements = supplements;
     this.memories = memories;
     this.sessions = sessions;
     this.metrics = metrics;
@@ -136,6 +140,23 @@ public class WorkbenchController {
   Object recover(@PathVariable String id, @PathVariable String checkpoint) {
     return Map.of("runId", service.recover(id, checkpoint));
   }
+
+  /** 任务 2：提交补充信息。校验失败返回 400 与原因，运行保持阻塞。 */
+  @PostMapping("/runs/{id}/supplements/{requestId}")
+  Object submitSupplement(
+      @PathVariable String id,
+      @PathVariable String requestId,
+      @RequestBody SupplementSubmission request) {
+    if (request.expectedTaskVersion() == null)
+      throw new IllegalArgumentException("请携带读取页面时的任务版本。");
+    var applied =
+        supplements.apply(
+            id, requestId, request.expectedTaskVersion(), request.path(), request.content());
+    return Map.of("accepted", true, "taskVersion", applied.newTaskVersion(), "runStatus", "PENDING");
+  }
+
+  /** 补充提交体：期望任务版本、测试文件路径与内容。 */
+  public record SupplementSubmission(Integer expectedTaskVersion, String path, String content) {}
 
   @GetMapping("/overview")
   Object overview() {

@@ -95,14 +95,18 @@ public class WorkflowRecoveryRepository {
     runs.event(runId, EventType.CHECKPOINT_SAVED, "已保存工作流节点边界。");
   }
 
-  /** 恢复子运行继承的累计消耗；来源缺失时返回 null，不从当前用量倒推。 */
+  /**
+   * 恢复子运行继承的累计消耗；来源缺失时返回 null，不从当前用量倒推。
+   *
+   * <p>历史列 {@code tools} 受纯文本约束恒为 0；只读工作区边界的实际工具次数保存在 {@code tool_calls}。
+   */
   public InheritedConsumption inherited(UUID checkpointId) {
     var rows =
         db.query(
-            "SELECT rounds,tools,elapsed_ms FROM workflow_checkpoints WHERE id=?",
+            "SELECT rounds,tool_calls,elapsed_ms FROM workflow_checkpoints WHERE id=?",
             (row, index) ->
                 new InheritedConsumption(
-                    row.getInt("rounds"), row.getInt("tools"), row.getLong("elapsed_ms")),
+                    row.getInt("rounds"), row.getInt("tool_calls"), row.getLong("elapsed_ms")),
             checkpointId.toString());
     return rows.isEmpty() ? null : rows.getFirst();
   }

@@ -54,6 +54,14 @@ public enum EventType {
   LIMITED,
   /** 运行中断，结果可能未知。 */
   INTERRUPTED,
+  /** 因缺少必要信息被阻塞，已保存待补充事项。 */
+  SUPPLEMENT_REQUESTED,
+  /** 用户提交的补充通过全部校验并已应用到任务。 */
+  SUPPLEMENT_APPLIED,
+  /** 用户提交的补充被拒绝，运行保持阻塞等待正确提交。 */
+  SUPPLEMENT_REJECTED,
+  /** 补充接受后运行从安全边界重新排队执行。 */
+  CONTINUED_AFTER_SUPPLEMENT,
   /** 从历史检查点创建了关联的新运行。 */
   RECOVERY_STARTED,
   /** 本次任务装配用户确认的项目背景，不记录正文。 */

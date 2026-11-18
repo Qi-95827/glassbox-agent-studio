@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -123,16 +124,80 @@ public class WorkspaceService {
   public String verificationFingerprint(String id) {
     Workspace workspace = get(id);
     Status status = status(id);
-    if (status.changes().lines().anyMatch(line -> line.startsWith("?? ")))
+    var declared = declaredFiles(id);
+    var untracked =
+        status.changes().lines()
+            .filter(line -> line.startsWith("?? "))
+            .map(line -> unquote(line.substring(3).strip()))
+            .toList();
+    if (untracked.stream().anyMatch(path -> !declared.containsKey(path)))
       throw new IllegalStateException("存在未跟踪文件，不能可靠绑定测试结果。");
-    return fingerprint(workspace, status, Path.of(workspace.workspacePath()));
+    // 已声明的补充文件按路径和实际内容参与指纹；内容变化会让旧证据失效。
+    var bound = new java.util.TreeMap<String, String>();
+    for (var path : declared.keySet()) {
+      Path file = resolveFile(workspace, path);
+      if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
+        throw new IllegalStateException("补充文件缺失或不是普通文件，不能绑定测试结果：" + path);
+      try {
+        if (Files.size(file) > 1_000_000)
+          throw new IllegalStateException("补充文件超过允许大小，不能绑定测试结果：" + path);
+      } catch (IOException e) {
+        throw new IllegalStateException("无法读取补充文件，不能绑定测试结果：" + path);
+      }
+      bound.put(path, hashFile(file));
+    }
+    return fingerprint(workspace, status, Path.of(workspace.workspacePath()), bound);
+  }
+
+  private static String unquote(String path) {
+    if (path.length() >= 2 && path.startsWith("\"") && path.endsWith("\""))
+      return path.substring(1, path.length() - 1);
+    return path;
+  }
+
+  private Map<String, String> declaredFiles(String workspaceId) {
+    var result = new java.util.LinkedHashMap<String, String>();
+    db.query(
+        "SELECT path,sha256 FROM workspace_declared_files WHERE workspace_id=?",
+        (org.springframework.jdbc.core.RowCallbackHandler)
+            row -> result.put(row.getString("path"), row.getString("sha256")),
+        workspaceId);
+    return result;
   }
 
   private String fingerprint(Workspace workspace, Status status, Path path) {
+    return fingerprint(workspace, status, path, Map.of());
+  }
+
+  private String fingerprint(
+      Workspace workspace, Status status, Path path, Map<String, String> declared) {
     String head = runGit(path, "rev-parse", "--verify", "HEAD").strip();
     String binaryDiff =
         runGit(path, "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--", ".");
-    return hash(head + "\n" + status.currentBase() + "\n" + status.changes() + "\n" + binaryDiff);
+    StringBuilder extra = new StringBuilder();
+    declared.forEach(
+        (file, sha) -> extra.append("\nDECLARED\n").append(file).append('\n').append(sha));
+    return hash(
+        head
+            + "\n"
+            + status.currentBase()
+            + "\n"
+            + status.changes()
+            + "\n"
+            + binaryDiff
+            + extra);
+  }
+
+  private String hashFile(Path file) {
+    try (var input = Files.newInputStream(file)) {
+      var digest = java.security.MessageDigest.getInstance("SHA-256");
+      byte[] buffer = new byte[8192];
+      int read;
+      while ((read = input.read(buffer)) != -1) digest.update(buffer, 0, read);
+      return java.util.HexFormat.of().formatHex(digest.digest());
+    } catch (IOException | java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("无法计算补充文件摘要。", e);
+    }
   }
 
   /** 本地提交已批准的全部已跟踪差异；调用方必须持有当前服务对象的锁并核验审批。 Git 不属于数据库事务，异常时提交结果需要人工核对。 */
@@ -223,6 +288,70 @@ public class WorkspaceService {
           /* 保留现场供用户检查。 */
         }
     }
+  }
+
+  /**
+   * 任务补充写入的测试文件：只允许新建 {@code tests/test_*.py}，不覆盖任何现有文件。
+   *
+   * <p>文件保持未跟踪状态，由用户在代码工作区核对；该入口只服务补充信息，不扩大 Agent 工具授权。
+   */
+  public String createSupplementTestFile(String id, String relative, String content) {
+    var workspace = get(id);
+    requireTestFilePath(relative);
+    Path target = resolveFile(workspace, relative);
+    byte[] bytes = content == null ? new byte[0] : content.getBytes(StandardCharsets.UTF_8);
+    try {
+      Files.createDirectories(target.getParent());
+      // 原子新建：并发提交同名文件时只有一个请求能创建成功，另一个明确拒绝，不覆盖已有内容。
+      Files.write(target, bytes, java.nio.file.StandardOpenOption.CREATE_NEW,
+          java.nio.file.StandardOpenOption.WRITE);
+    } catch (java.nio.file.FileAlreadyExistsException e) {
+      throw new IllegalArgumentException("目标文件已存在，不能覆盖现有文件。");
+    } catch (IOException e) {
+      throw new IllegalStateException("无法写入补充测试文件。");
+    }
+    String sha = hash(content);
+    try {
+      // 显式声明的补充文件才允许以未跟踪状态进入证据指纹；其他未跟踪文件仍被拒绝。
+      db.update(
+          "MERGE INTO workspace_declared_files(workspace_id,path,sha256,source,created_at)"
+              + " KEY(workspace_id,path) VALUES(?,?,?,?,?)",
+          workspace.id(),
+          relative,
+          sha,
+          "SUPPLEMENT",
+          java.time.Instant.now().toString());
+      return sha;
+    } catch (RuntimeException failure) {
+      // 声明入库失败时只回滚本次 CREATE_NEW 创建的文件；写入前已存在的文件不会被删除。
+      try {
+        Files.deleteIfExists(target);
+      } catch (IOException ignored) {
+        /* 保留现场供人工检查；调用方仍会收到失败原因。 */
+      }
+      throw failure;
+    }
+  }
+
+  /** 补充事务回滚时尽力删除刚写入的文件；失败不阻断回滚，保留现场供用户核对。 */
+  public void discardSupplementTestFile(String id, String relative) {
+    if (!isTestFilePath(relative)) return;
+    try {
+      Files.deleteIfExists(resolveFile(get(id), relative));
+      db.update(
+          "DELETE FROM workspace_declared_files WHERE workspace_id=? AND path=?", id, relative);
+    } catch (IOException | IllegalArgumentException ignored) {
+      /* 保留现场供用户检查。 */
+    }
+  }
+
+  private static void requireTestFilePath(String relative) {
+    if (!isTestFilePath(relative))
+      throw new IllegalArgumentException("测试文件路径必须是 tests/ 下的 test_*.py。");
+  }
+
+  private static boolean isTestFilePath(String relative) {
+    return relative != null && relative.matches("tests/test_[A-Za-z0-9_\\-]+\\.py");
   }
 
   private Path resolveFile(String id, String relative) {

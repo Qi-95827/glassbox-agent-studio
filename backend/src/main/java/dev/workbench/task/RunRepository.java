@@ -107,8 +107,14 @@ public class RunRepository {
             : ((Number) row.get("MAX_AGENT_TOOLS")).intValue());
   }
 
-  public TaskDefinition taskDefinition(String id) {
-    Map<String, Object> row = task(id);
+  /** 当前任务版本；补充等信息变更会递增，提交方用它做乐观并发校验。 */
+  public int taskVersion(String taskId) {
+    Integer version =
+        db.queryForObject("SELECT version FROM tasks WHERE id=?", Integer.class, taskId);
+    return version == null ? 1 : version;
+  }
+
+  public TaskDefinition taskDefinition(String id) {    Map<String, Object> row = task(id);
     String fileScope = (String) row.get("FILE_SCOPE");
     List<String> fileScopes = readTextList(row.get("FILE_SCOPES_JSON"));
     if (fileScopes.isEmpty() && fileScope != null) fileScopes = List.of(fileScope);
@@ -1392,13 +1398,7 @@ public class RunRepository {
 
   /** 检查点原因使用受控编码，便于稳定聚合且不暴露用户数据。 */
   public void checkpointSkipped(String runId, dev.workbench.domain.CheckpointSkipReason reason) {
-    db.update(
-        "INSERT INTO events(run_id,event_type,message,created_at,reason_code) VALUES(?,?,?,?,?)",
-        runId,
-        EventType.CHECKPOINT_SKIPPED.name(),
-        reason.message(),
-        now(),
-        reason.name());
+    insertEvent(runId, EventType.CHECKPOINT_SKIPPED, reason.message(), EventRef.empty(), reason.name());
   }
 
   public void event(String runId, EventType type, String message) {
@@ -1407,22 +1407,44 @@ public class RunRepository {
 
   /** 写入带结构化归属的事件；空关联与旧接口行为一致。 */
   public void event(String runId, EventType type, String message, EventRef ref) {
-    EventRef checked = ref == null ? EventRef.empty() : ref;
-    db.update(
-        "INSERT INTO"
-            + " events(run_id,event_type,message,created_at,plan_version_id,node_id,attempt_id,"
-            + "agent_id,check_id,model_call_id,tool_call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        runId,
-        type.name(),
-        message,
-        now(),
-        text(checked.planVersionId()),
-        text(checked.nodeId()),
-        text(checked.attemptId()),
-        text(checked.agentId()),
-        text(checked.checkId()),
-        text(checked.modelCallId()),
-        text(checked.toolCallId()));
+    insertEvent(runId, type, message, ref == null ? EventRef.empty() : ref, null);
+  }
+
+  /**
+   * 事件写入与每运行序号分配在同一事务：先锁运行行，再取该运行当前最大序号。
+   *
+   * <p>同一运行的事件写入因此按提交顺序编号——持锁事务提交前，其他线程无法插入更晚序号。 全局自增
+   * ID 在跨运行并发时可能让晚提交事件落在旧游标之前；读取方一律使用 {@code run_seq} 游标。
+   */
+  private void insertEvent(
+      String runId, EventType type, String message, EventRef checked, String reasonCode) {
+    tx.executeWithoutResult(
+        status -> {
+          db.queryForObject("SELECT id FROM runs WHERE id=? FOR UPDATE", String.class, runId);
+          Long next =
+              db.queryForObject(
+                  "SELECT COALESCE(MAX(run_seq),0)+1 FROM events WHERE run_id=?",
+                  Long.class,
+                  runId);
+          db.update(
+              "INSERT INTO"
+                  + " events(run_seq,run_id,event_type,message,created_at,reason_code,plan_version_id,"
+                  + "node_id,attempt_id,agent_id,check_id,model_call_id,tool_call_id)"
+                  + " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              next,
+              runId,
+              type.name(),
+              message,
+              now(),
+              reasonCode,
+              text(checked.planVersionId()),
+              text(checked.nodeId()),
+              text(checked.attemptId()),
+              text(checked.agentId()),
+              text(checked.checkId()),
+              text(checked.modelCallId()),
+              text(checked.toolCallId()));
+        });
   }
 
   /**

@@ -27,6 +27,7 @@ import dev.workbench.framework.workflow.view.ExecutionViewService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.task.RunRepository;
+import dev.workbench.task.TaskSupplementService;
 import dev.workbench.task.WorkflowExecutionRepository;
 import dev.workbench.workspace.WorkspaceService;
 import io.agentscope.core.message.Msg;
@@ -70,6 +71,7 @@ class BugDynamicWorkflowIntegrationTest {
   @Autowired BugService bugs;
   @Autowired PlanRepository plans;
   @Autowired ExecutionViewService executionViews;
+  @Autowired TaskSupplementService supplements;
   @Autowired WorkflowExecutionRepository workflowRuns;
   @Autowired JdbcTemplate db;
   @Autowired dev.workbench.report.HtmlReportService reports;
@@ -132,6 +134,8 @@ class BugDynamicWorkflowIntegrationTest {
     var reproduction =
         bugChecks.stream().filter(c -> "REPRODUCE".equals(c.get("KIND"))).findFirst().orElseThrow();
     assertEquals("FAILURES_OBSERVED", reproduction.get("STATUS"));
+    assertTrue(reproduction.get("OUTPUT").toString().contains("synthetic-local v1"));
+    assertTrue(reproduction.get("OUTPUT").toString().contains("预期现象"));
     assertNotEquals(
         reproduction.get("WORKSPACE_FINGERPRINT"), regression.get("WORKSPACE_FINGERPRINT"));
     assertTrue(
@@ -199,6 +203,390 @@ class BugDynamicWorkflowIntegrationTest {
             "SELECT COUNT(*) FROM bug_feedback WHERE workspace_id=?",
             Integer.class,
             fixture.workspace().id()));
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "RUN_DOCKER_TESTS", matches = "true")
+  void missingReproductionInfoBlocksUntilUserSupplementContinuesFromBoundary() throws Exception {
+    var fixture = workspaceWithoutTests();
+    stubFileWriter();
+    String id = createBugTask(fixture.workspace().id(), true, null);
+
+    var blocked = await(id);
+    assertEquals("BLOCKED", blocked.get("STATUS"), String.valueOf(blocked.get("REASON")));
+    assertEquals("CHECK_FAILED", blocked.get("STOP_CAUSE"));
+    // 补充前零下游写入：没有任何 Agent、模型或工具调用。
+    assertTrue(repo.agents(id).isEmpty());
+    assertTrue(repo.models(id).isEmpty());
+    assertTrue(repo.tools(id).isEmpty());
+    var request = supplements.openRequest(id);
+    assertNotNull(request, "阻塞后没有保存待补充事项。");
+    assertEquals("REPRODUCTION_MISSING_INFO", request.reasonCode());
+    assertEquals(1, request.taskVersion());
+    var nodes = plans.find(id);
+    assertEquals(PlanNodeStatus.FAILED, nodes.getFirst().status());
+    assertTrue(
+        nodes.stream().skip(1).allMatch(node -> node.status() == PlanNodeStatus.SKIPPED),
+        String.valueOf(nodes));
+    var pendingView = executionViews.view(id);
+    assertEquals(1, pendingView.taskVersion());
+    assertNotNull(pendingView.supplement());
+    assertEquals("OPEN", pendingView.supplement().status());
+    assertTrue(
+        pendingView.availableActions().stream()
+            .anyMatch(
+                action -> "SUBMIT_SUPPLEMENT".equals(action.actionCode()) && action.enabled()));
+
+    // 过期版本与非法路径不会调度，运行保持阻塞并只新增拒绝事件。
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> supplements.apply(id, request.id(), 99, "tests/test_calc.py", SUPPLEMENT_TEST_FILE));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> supplements.apply(id, request.id(), 1, "calculator.py", SUPPLEMENT_TEST_FILE));
+    assertEquals("BLOCKED", repo.run(id).get("STATUS"));
+    assertEquals(
+        2,
+        repo.events(id).stream()
+            .filter(event -> "SUPPLEMENT_REJECTED".equals(event.get("EVENT_TYPE")))
+            .count());
+
+    var applied = supplements.apply(id, request.id(), 1, "tests/test_calc.py", SUPPLEMENT_TEST_FILE);
+    assertEquals(2, applied.newTaskVersion());
+
+    var finished = await(id);
+    assertEquals("BLOCKED", finished.get("STATUS"), String.valueOf(finished.get("REASON")));
+    assertTrue(finished.get("REASON").toString().contains("回归检查通过"));
+    String taskId = repo.runSnapshot(id).taskId().toString();
+    assertEquals(2, repo.taskVersion(taskId));
+    var appliedRequest = supplements.latestRequest(id);
+    assertEquals("APPLIED", appliedRequest.status());
+    assertEquals("tests/test_calc.py", appliedRequest.answerPath());
+
+    var reproductionChecks =
+        workflowRuns.workflowChecks(id).stream()
+            .filter(check -> "bug-reproduction".equals(check.check().id()))
+            .toList();
+    assertEquals(2, reproductionChecks.size());
+    assertEquals(SystemCheckStatus.BLOCKED, reproductionChecks.get(0).status());
+    assertEquals(SystemCheckStatus.PASSED, reproductionChecks.get(1).status());
+    assertEquals(2, reproductionChecks.get(1).attemptNo());
+
+    assertFalse(repo.agents(id).isEmpty());
+    assertTrue(repo.models(id).size() >= 3);
+    assertTrue(
+        repo.tools(id).stream()
+            .anyMatch(
+                tool ->
+                    dev.workbench.domain.ToolKind.WORKSPACE_WRITE
+                        .recordName()
+                        .equals(tool.get("TOOL_NAME"))));
+    assertTrue(
+        Files.readString(
+                Path.of(fixture.workspace().workspacePath()).resolve("tests").resolve("test_calc.py"))
+            .contains("unittest"));
+    var types =
+        repo.events(id).stream().map(event -> event.get("EVENT_TYPE").toString()).toList();
+    assertTrue(types.contains("SUPPLEMENT_REQUESTED"));
+    assertTrue(types.contains("SUPPLEMENT_APPLIED"));
+    assertTrue(types.contains("CONTINUED_AFTER_SUPPLEMENT"));
+    // 已应用的请求不可重复提交，任务版本递增后也不允许旧表单再次调度。
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> supplements.apply(id, request.id(), 2, "tests/test_other.py", SUPPLEMENT_TEST_FILE));
+    var finalView = executionViews.view(id);
+    assertEquals(2, finalView.taskVersion());
+    assertEquals("APPLIED", finalView.supplement().status());
+    assertTrue(
+        finalView.nodes().stream()
+            .allMatch(
+                node -> "COMPLETED".equals(node.status()) || "REUSED".equals(node.status())));
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "RUN_DOCKER_TESTS", matches = "true")
+  void unrelatedTestFailureBlocksBeforeAnyFix() throws Exception {
+    var fixture = workspaceWithUnrelatedFailingTest();
+    String id = createBugTask(fixture.workspace().id(), true, null);
+
+    var run = await(id);
+    assertEquals("BLOCKED", run.get("STATUS"), String.valueOf(run.get("REASON")));
+    assertEquals("CHECK_FAILED", run.get("STOP_CAUSE"));
+    var checks = workflowRuns.workflowChecks(id);
+    assertEquals(1, checks.size());
+    assertEquals(SystemCheckStatus.FAILED, checks.getFirst().status());
+    assertTrue(
+        checks.getFirst().summary().contains("未出现模拟 Bug 的目标现象"),
+        checks.getFirst().summary());
+    assertTrue(checks.getFirst().evidence().contains("FAIL: test_other"));
+    assertTrue(checks.getFirst().evidence().contains("test_add"));
+    assertTrue(checks.getFirst().evidence().contains("synthetic-local v1"));
+    var bugChecks = bugs.checksForRun(id);
+    assertEquals(1, bugChecks.size());
+    assertEquals("TARGET_MISMATCH", bugChecks.getFirst().get("STATUS"));
+    // 未匹配目标现象时下游完全未启动，写入调用为零。
+    assertTrue(repo.agents(id).isEmpty());
+    assertTrue(repo.models(id).isEmpty());
+    assertTrue(repo.tools(id).isEmpty());
+    var nodes = plans.find(id);
+    assertEquals(PlanNodeStatus.FAILED, nodes.getFirst().status());
+    assertTrue(nodes.stream().skip(1).allMatch(node -> node.status() == PlanNodeStatus.SKIPPED));
+    var view = executionViews.view(id);
+    assertTrue(
+        view.blocking().stream().anyMatch(item -> "CHECK_FAILED".equals(item.code())));
+    assertTrue(
+        view.nodes().stream()
+            .filter(node -> "fix".equals(node.key()))
+            .allMatch(node -> "SKIPPED".equals(node.status())));
+  }
+
+  @Test
+  void supplementRejectionsKeepRunBlockedAndNeverDispatch() throws Exception {
+    var fixture = failingPythonWorkspace();
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REPRODUCE,
+        BugService.CheckStatus.NEEDS_INFO,
+        "缺少 tests 目录，无法执行验证。");
+    String id = createBugTask(fixture.workspace().id(), true, null);
+    var run = await(id);
+    assertEquals("BLOCKED", run.get("STATUS"), String.valueOf(run.get("REASON")));
+    var request = supplements.openRequest(id);
+    assertNotNull(request, "缺信息阻塞应保存待补充事项。");
+    assertEquals("REPRODUCTION_MISSING_INFO", request.reasonCode());
+    String taskId = repo.runSnapshot(id).taskId().toString();
+    String content = "import unittest\n";
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            supplements.apply(
+                id, java.util.UUID.randomUUID().toString(), 1, "tests/test_a.py", content));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> supplements.apply(id, request.id(), 99, "tests/test_a.py", content));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> supplements.apply(id, request.id(), 1, "evil.py", content));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> supplements.apply(id, request.id(), 1, "tests/test_a.py", " "));
+    db.update(
+        "UPDATE tasks SET file_scopes_json='[\"calculator.py\",\"notes.txt\"]' WHERE id=?", taskId);
+    assertThrows(
+        IllegalStateException.class,
+        () -> supplements.apply(id, request.id(), 1, "tests/test_a.py", content));
+    db.update(
+        "UPDATE tasks SET file_scopes_json='[\"calculator.py\"]' WHERE id=?", taskId);
+
+    assertEquals("BLOCKED", repo.run(id).get("STATUS"));
+    assertEquals(request.id(), supplements.openRequest(id).id());
+    assertEquals(1, repo.taskVersion(taskId));
+    assertTrue(
+        repo.events(id).stream()
+            .noneMatch(event -> "CONTINUED_AFTER_SUPPLEMENT".equals(event.get("EVENT_TYPE"))));
+    assertEquals(
+        5,
+        repo.events(id).stream()
+            .filter(event -> "SUPPLEMENT_REJECTED".equals(event.get("EVENT_TYPE")))
+            .count());
+    assertFalse(
+        Files.exists(
+            Path.of(fixture.workspace().workspacePath()).resolve("tests").resolve("test_a.py")));
+    var view = executionViews.view(id);
+    assertEquals("OPEN", view.supplement().status());
+    assertTrue(
+        view.availableActions().stream()
+            .anyMatch(action -> "SUBMIT_SUPPLEMENT".equals(action.actionCode())));
+  }
+
+  @Test
+  void sameWorkspaceConcurrentSupplementCreationHasOneWinner() throws Exception {
+    var fixture = failingPythonWorkspace();
+    stubFileWriter();
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REPRODUCE,
+        BugService.CheckStatus.NEEDS_INFO,
+        "缺少 tests 目录，无法执行验证。");
+    String firstRun = createBugTask(fixture.workspace().id(), true, null);
+    String secondRun = createBugTask(fixture.workspace().id(), true, null);
+    assertEquals("BLOCKED", await(firstRun).get("STATUS"));
+    assertEquals("BLOCKED", await(secondRun).get("STATUS"));
+    var firstRequest = supplements.openRequest(firstRun);
+    var secondRequest = supplements.openRequest(secondRun);
+    assertNotNull(firstRequest);
+    assertNotNull(secondRequest);
+    String contentA = "import unittest\n# A\n";
+    String contentB = "import unittest\n# B\n";
+    var start = new java.util.concurrent.CountDownLatch(1);
+    var outcomes = new java.util.concurrent.ConcurrentLinkedQueue<Object>();
+    Thread first =
+        new Thread(
+            () -> {
+              try {
+                start.await();
+                supplements.apply(firstRun, firstRequest.id(), 1, "tests/test_race.py", contentA);
+                outcomes.add("A");
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              } catch (RuntimeException e) {
+                outcomes.add(e);
+              }
+            });
+    Thread second =
+        new Thread(
+            () -> {
+              try {
+                start.await();
+                supplements.apply(secondRun, secondRequest.id(), 1, "tests/test_race.py", contentB);
+                outcomes.add("B");
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              } catch (RuntimeException e) {
+                outcomes.add(e);
+              }
+            });
+    first.start();
+    second.start();
+    start.countDown();
+    first.join(10000);
+    second.join(10000);
+    assertFalse(first.isAlive());
+    assertFalse(second.isAlive());
+    assertEquals(2, outcomes.size());
+    long successes = outcomes.stream().filter(outcome -> outcome instanceof String).count();
+    assertEquals(1, successes, "同一工作区同名并发提交只能有一个成功。");
+
+    boolean firstWon = outcomes.contains("A");
+    String winnerContent = firstWon ? contentA : contentB;
+    Path raceFile =
+        Path.of(fixture.workspace().workspacePath()).resolve("tests").resolve("test_race.py");
+    assertEquals(winnerContent, Files.readString(raceFile));
+    String declared =
+        db.queryForObject(
+            "SELECT sha256 FROM workspace_declared_files WHERE workspace_id=? AND path=?",
+            String.class,
+            fixture.workspace().id(),
+            "tests/test_race.py");
+    assertEquals(sha256(winnerContent), declared);
+
+    String winnerRun = firstWon ? firstRun : secondRun;
+    String loserRun = firstWon ? secondRun : firstRun;
+    assertEquals(1, repo.taskVersion(repo.runSnapshot(loserRun).taskId().toString()));
+    assertEquals(2, repo.taskVersion(repo.runSnapshot(winnerRun).taskId().toString()));
+    assertEquals("BLOCKED", repo.run(loserRun).get("STATUS"));
+    assertTrue(
+        repo.events(loserRun).stream()
+            .anyMatch(event -> "SUPPLEMENT_REJECTED".equals(event.get("EVENT_TYPE"))));
+    assertTrue(
+        repo.events(loserRun).stream()
+            .noneMatch(event -> "CONTINUED_AFTER_SUPPLEMENT".equals(event.get("EVENT_TYPE"))));
+    long continued =
+        java.util.stream.Stream.concat(
+                repo.events(firstRun).stream(), repo.events(secondRun).stream())
+            .filter(event -> "CONTINUED_AFTER_SUPPLEMENT".equals(event.get("EVENT_TYPE")))
+            .count();
+    assertEquals(1, continued);
+    await(winnerRun);
+  }
+
+  @Test
+  void declarationFailureKeepsRunBlockedAndAllowsSamePathRetry() throws Exception {
+    var fixture = failingPythonWorkspace();
+    stubFileWriter();
+    var reproduceCalls = new AtomicInteger();
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              String runId = invocation.getArgument(0);
+              var status =
+                  reproduceCalls.getAndIncrement() == 0
+                      ? BugService.CheckStatus.NEEDS_INFO
+                      : BugService.CheckStatus.FAILURES_OBSERVED;
+              return fakeCheck(
+                  fixture.workspace().id(),
+                  runId,
+                  BugService.CheckKind.REPRODUCE,
+                  status,
+                  status == BugService.CheckStatus.NEEDS_INFO
+                      ? "缺少 tests 目录，无法执行验证。"
+                      : "观察到断言失败");
+            })
+        .when(bugService)
+        .runForTask(
+            anyString(),
+            eq("MOCK-PY-001"),
+            eq(fixture.workspace().id()),
+            eq(BugService.CheckKind.REPRODUCE),
+            any(Runnable.class));
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REGRESSION,
+        BugService.CheckStatus.PASSED,
+        "回归通过");
+    String id = createBugTask(fixture.workspace().id(), true, null);
+    assertEquals("BLOCKED", await(id).get("STATUS"));
+    var request = supplements.openRequest(id);
+    assertNotNull(request);
+    String taskId = repo.runSnapshot(id).taskId().toString();
+    String content = "import unittest\n# retry\n";
+    Path retryFile =
+        Path.of(fixture.workspace().workspacePath()).resolve("tests").resolve("test_retry.py");
+
+    db.execute("ALTER TABLE workspace_declared_files RENAME TO workspace_declared_files_off");
+    try {
+      assertThrows(
+          RuntimeException.class,
+          () -> supplements.apply(id, request.id(), 1, "tests/test_retry.py", content));
+      assertEquals("BLOCKED", repo.run(id).get("STATUS"));
+      assertEquals(1, repo.taskVersion(taskId));
+      assertEquals("OPEN", supplements.openRequest(id).status());
+      assertFalse(Files.exists(retryFile));
+      assertTrue(
+          repo.events(id).stream()
+              .noneMatch(event -> "CONTINUED_AFTER_SUPPLEMENT".equals(event.get("EVENT_TYPE"))));
+    } finally {
+      db.execute("ALTER TABLE workspace_declared_files_off RENAME TO workspace_declared_files");
+    }
+
+    var applied = supplements.apply(id, request.id(), 1, "tests/test_retry.py", content);
+    assertEquals(2, applied.newTaskVersion());
+    assertTrue(Files.exists(retryFile));
+    assertEquals("APPLIED", supplements.latestRequest(id).status());
+    awaitWithDiagnostics(id);
+    assertEquals("BLOCKED", repo.run(id).get("STATUS"));
+  }
+
+  private void awaitWithDiagnostics(String runId) throws Exception {
+    for (int i = 0; i < 150; i++) {
+      var run = repo.run(runId);
+      if (!Set.of("PENDING", "RUNNING", "PAUSED").contains(run.get("STATUS"))) return;
+      Thread.sleep(100);
+    }
+    var events =
+        repo.events(runId).stream()
+            .map(event -> event.get("EVENT_TYPE") + ":" + event.get("MESSAGE"))
+            .toList();
+    var stacks =
+        Thread.getAllStackTraces().entrySet().stream()
+            .filter(entry -> entry.getValue().length > 0)
+            .map(
+                entry ->
+                    entry.getKey().getName()
+                        + " -> "
+                        + entry.getValue()[0]
+                        + " / "
+                        + entry.getValue()[Math.min(3, entry.getValue().length - 1)])
+            .filter(line -> line.contains("workbench") || line.contains("pool"))
+            .toList();
+    fail("运行未结束：" + repo.run(runId) + "\n事件：" + events + "\n线程：" + stacks);
+  }
+
+  private static String sha256(String text) throws Exception {
+    return java.util.HexFormat.of()
+        .formatHex(
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8)));
   }
 
   @Test
@@ -602,8 +990,46 @@ class BugDynamicWorkflowIntegrationTest {
 
   private record Fixture(WorkspaceService.Workspace workspace) {}
 
-  private Fixture failingPythonWorkspace() throws Exception {
+  /** 任务 2 完整路径用例的补充测试文件：与常规夹具相同的失败测试。 */
+  private static final String SUPPLEMENT_TEST_FILE =
+      "import unittest\n"
+          + "from calculator import add\n"
+          + "class TestCalc(unittest.TestCase):\n"
+          + "    def test_add(self):\n"
+          + "        self.assertEqual(add(2,1),3)\n";
+
+  /** 没有 tests 目录的仓库：复现检查会因缺少可执行测试阻塞。 */
+  private Fixture workspaceWithoutTests() throws Exception {
     Path repo = Files.createDirectory(temp.resolve("repo-" + java.util.UUID.randomUUID()));
+    git(repo, "init", "-b", "main");
+    git(repo, "config", "user.email", "test@example.invalid");
+    git(repo, "config", "user.name", "Test");
+    Files.writeString(repo.resolve("calculator.py"), "def add(a,b):\n    return a-b\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "fixture");
+    return new Fixture(workspaces.create(repo.toString(), "main"));
+  }
+
+  /** 目标函数本身正确，只有无关测试失败：复现检查应拒绝作为目标现象。 */
+  private Fixture workspaceWithUnrelatedFailingTest() throws Exception {
+    Path repo = Files.createDirectory(temp.resolve("repo-unrelated-" + java.util.UUID.randomUUID()));
+    git(repo, "init", "-b", "main");
+    git(repo, "config", "user.email", "test@example.invalid");
+    git(repo, "config", "user.name", "Test");
+    Files.writeString(repo.resolve("calculator.py"), "def add(a,b):\n    return a+b\n");
+    Files.createDirectory(repo.resolve("tests"));
+    Files.writeString(
+        repo.resolve("tests/test_other.py"),
+        "import unittest\n"
+            + "class TestOther(unittest.TestCase):\n"
+            + "    def test_other(self):\n"
+            + "        self.assertEqual(2 + 2, 5)\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "fixture");
+    return new Fixture(workspaces.create(repo.toString(), "main"));
+  }
+
+  private Fixture failingPythonWorkspace() throws Exception {    Path repo = Files.createDirectory(temp.resolve("repo-" + java.util.UUID.randomUUID()));
     git(repo, "init", "-b", "main");
     git(repo, "config", "user.email", "test@example.invalid");
     git(repo, "config", "user.name", "Test");

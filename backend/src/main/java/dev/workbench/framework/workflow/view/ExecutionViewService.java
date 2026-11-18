@@ -15,6 +15,7 @@ import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.task.RunRepository;
+import dev.workbench.task.TaskSupplementService;
 import dev.workbench.task.WorkflowExecutionRepository;
 import dev.workbench.task.WorkflowRecoveryRepository;
 import java.time.Instant;
@@ -44,6 +45,7 @@ public class ExecutionViewService {
   private final PlanRepository plans;
   private final WorkflowExecutionRepository workflows;
   private final WorkflowRecoveryRepository recovery;
+  private final TaskSupplementService supplements;
   private final JdbcTemplate db;
 
   public ExecutionViewService(
@@ -51,11 +53,13 @@ public class ExecutionViewService {
       PlanRepository plans,
       WorkflowExecutionRepository workflows,
       WorkflowRecoveryRepository recovery,
+      TaskSupplementService supplements,
       JdbcTemplate db) {
     this.runs = runs;
     this.plans = plans;
     this.workflows = workflows;
     this.recovery = recovery;
+    this.supplements = supplements;
     this.db = db;
   }
 
@@ -74,7 +78,21 @@ public class ExecutionViewService {
     for (var node : nodes) nodeViews.add(nodeView(node, nodes, byNodeAttempts, byNodeChecks));
     var blocking = blocking(snapshot.status(), plan, nodes, byNodeChecks);
     var focus = new FocusView(focus(nodes, byNodeAttempts, byNodeChecks, models, tools));
-    var actions = actions(snapshot.status(), runId, plan, nodes, recoveryCheckpoints(runId, plan));
+    var actions =
+        new ArrayList<>(actions(snapshot.status(), runId, plan, nodes, recoveryCheckpoints(runId, plan)));
+    int taskVersion = runs.taskVersion(snapshot.taskId().toString());
+    var supplementRequest = supplements.latestRequest(runId);
+    if (supplementRequest != null && "OPEN".equals(supplementRequest.status()))
+      actions.add(
+          new ActionView(
+              "SUBMIT_SUPPLEMENT",
+              "提交补充信息",
+              true,
+              null,
+              runId,
+              plan == null ? null : plan.id().toString(),
+              supplementRequest.id(),
+              "任务 v" + taskVersion));
     var counts = counts(nodes, checks, models, tools);
     return new ExecutionView(
         SCHEMA_VERSION,
@@ -91,15 +109,17 @@ public class ExecutionViewService {
         snapshot.elapsedMs(),
         snapshot.rounds(),
         snapshot.tools(),
+        taskVersion,
         planView(plan),
         List.copyOf(nodeViews),
         edges(nodes),
         focus,
         blocking,
-        actions,
+        List.copyOf(actions),
         recoveryView(runId, run, plan, nodes, models.size(), tools.size()),
+        supplementView(supplementRequest, nodes),
         counts,
-        lastEventId(runId));
+        lastEventSeq(runId));
   }
 
   public NodeDetail detail(String runId, String nodeIdText) {
@@ -530,6 +550,24 @@ public class ExecutionViewService {
         parentRunId, sourceCheckpoint, reused, inherited, modelCalls, toolCalls);
   }
 
+  private SupplementView supplementView(
+      TaskSupplementService.SupplementRequest request, List<PlanNode> nodes) {
+    if (request == null) return null;
+    return new SupplementView(
+        request.id(),
+        request.status(),
+        request.kind(),
+        request.reasonCode(),
+        request.question(),
+        request.nodeId(),
+        label(nodes, java.util.UUID.fromString(request.nodeId())),
+        request.answerPath(),
+        request.answerSha256(),
+        request.taskVersion(),
+        request.createdAt(),
+        request.decidedAt());
+  }
+
   private CountsView counts(
       List<PlanNode> nodes,
       List<WorkflowCheck> checks,
@@ -714,7 +752,8 @@ public class ExecutionViewService {
   private List<NodeEventView> nodeEvents(String runId, UUID nodeId) {
     return db.query(
         "SELECT id,event_type,message,created_at,attempt_id,check_id,model_call_id,tool_call_id,"
-            + "reason_code FROM events WHERE run_id=? AND node_id=? ORDER BY id",
+            + "reason_code FROM events WHERE run_id=? AND node_id=? AND run_seq IS NOT NULL"
+            + " ORDER BY run_seq",
         (row, index) ->
             new NodeEventView(
                 row.getLong("id"),
@@ -730,9 +769,11 @@ public class ExecutionViewService {
         nodeId.toString());
   }
 
-  private long lastEventId(String runId) {
+  /** 该运行最新已提交事件的序号；诊断游标进度使用，不作为读取入口。 */
+  private long lastEventSeq(String runId) {
     Long value =
-        db.queryForObject("SELECT COALESCE(MAX(id),0) FROM events WHERE run_id=?", Long.class, runId);
+        db.queryForObject(
+            "SELECT COALESCE(MAX(run_seq),0) FROM events WHERE run_id=?", Long.class, runId);
     return value == null ? 0 : value;
   }
 
@@ -820,6 +861,7 @@ public class ExecutionViewService {
       long elapsedMs,
       int rounds,
       int tools,
+      int taskVersion,
       PlanView plan,
       List<NodeView> nodes,
       List<EdgeView> edges,
@@ -827,8 +869,9 @@ public class ExecutionViewService {
       List<BlockingView> blocking,
       List<ActionView> availableActions,
       RecoveryView recovery,
+      SupplementView supplement,
       CountsView counts,
-      long lastEventId) {}
+      long lastEventSeq) {}
 
   public record PlanView(
       String id,
@@ -916,6 +959,21 @@ public class ExecutionViewService {
       String nodeId, String key, String label, String sourceAgentId) {}
 
   public record InheritedView(Integer rounds, Integer tools, Long elapsedMs) {}
+
+  /** 待补充或已应用的补充请求；不存在时为空。 */
+  public record SupplementView(
+      String id,
+      String status,
+      String kind,
+      String reasonCode,
+      String question,
+      String nodeId,
+      String nodeLabel,
+      String answerPath,
+      String answerSha256,
+      int taskVersion,
+      String createdAt,
+      String decidedAt) {}
 
   public record CountsView(
       int total,

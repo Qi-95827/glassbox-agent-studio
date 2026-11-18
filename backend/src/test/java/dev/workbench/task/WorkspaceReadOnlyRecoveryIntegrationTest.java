@@ -13,6 +13,7 @@ import dev.workbench.framework.tool.ResourceVersion;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
 import dev.workbench.framework.workflow.plan.PlanRepository;
 import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
+import dev.workbench.framework.workflow.view.ExecutionViewService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.workspace.WorkspaceService;
@@ -42,6 +43,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
   @Autowired PlanRepository plans;
   @Autowired WorkflowExecutionRepository workflowRuns;
   @Autowired WorkflowRecoveryRepository recovery;
+  @Autowired ExecutionViewService executionViews;
   @Autowired JdbcTemplate db;
   @Autowired io.agentscope.core.state.AgentStateStore agentStates;
   @TempDir Path temp;
@@ -161,9 +163,17 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
 
     var checkpoint = availableCheckpoint(id);
     assertEquals(2, checkpoint.completedNodes());
+    // 恢复视图的继承消耗必须来自检查点实际记录：1 次模型、1 次工具调用（tools 列恒为 0）。
+    var inherited = recovery.inherited(checkpoint.id());
+    assertEquals(1, inherited.rounds());
+    assertEquals(1, inherited.tools());
+    assertEquals(25, inherited.elapsedMs());
     String recovered = service.recover(id, checkpoint.id().toString());
     var run = await(recovered);
     assertEquals("COMPLETED", run.get("STATUS"), String.valueOf(run.get("REASON")));
+    var recoveredView = executionViews.view(recovered);
+    assertEquals(1, recoveredView.recovery().inherited().rounds());
+    assertEquals(1, recoveredView.recovery().inherited().tools());
     var child = plans.find(recovered);
     assertEquals(PlanNodeStatus.REUSED, child.getFirst().status());
     assertEquals(PlanNodeStatus.COMPLETED, child.get(1).status());

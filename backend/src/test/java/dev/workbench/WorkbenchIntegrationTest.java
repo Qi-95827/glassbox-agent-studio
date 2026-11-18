@@ -71,6 +71,7 @@ import org.springframework.boot.test.autoconfigure.actuate.observability.AutoCon
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import reactor.core.publisher.Flux;
@@ -88,6 +89,7 @@ class WorkbenchIntegrationTest {
   @Autowired RunRepository repo;
   @Autowired WorkflowExecutionRepository workflowRuns;
   @Autowired JdbcTemplate db;
+  @Autowired TransactionTemplate transactions;
   @Autowired HtmlReportService reports;
   @Autowired ApprovalService approvals;
   @Autowired WorkspaceCommitService commits;
@@ -2067,6 +2069,103 @@ class WorkbenchIntegrationTest {
         .andExpect(status().isBadRequest());
     mvc.perform(get("/api/runs/" + java.util.UUID.randomUUID() + "/events"))
         .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void eventSequenceKeepsCommitOrderWhenATransactionCommitsLate() throws Exception {
+    String id = createDynamicWorkflow(true, 3);
+    var firstAllocated = new java.util.concurrent.CountDownLatch(1);
+    var releaseFirst = new java.util.concurrent.CountDownLatch(1);
+    var firstSeq = new java.util.concurrent.atomic.AtomicLong();
+    var secondSeq = new java.util.concurrent.atomic.AtomicLong();
+    var secondAllocatedAt = new java.util.concurrent.atomic.AtomicLong();
+    Thread first =
+        new Thread(
+            () ->
+                transactions.executeWithoutResult(
+                    status -> {
+                      repo.event(id, EventType.PAUSE_REQUESTED, "先分配、晚提交的事件");
+                      firstSeq.set(
+                          db.queryForObject(
+                              "SELECT run_seq FROM events WHERE run_id=? AND message=?",
+                              Long.class,
+                              id,
+                              "先分配、晚提交的事件"));
+                      firstAllocated.countDown();
+                      try {
+                        if (!releaseFirst.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                          throw new IllegalStateException("测试未能释放第一个事务。");
+                      } catch (InterruptedException e) {
+                        throw new IllegalStateException(e);
+                      }
+                    }));
+    first.start();
+    assertTrue(firstAllocated.await(5, java.util.concurrent.TimeUnit.SECONDS), "第一个事务未分配序号。");
+    Thread second =
+        new Thread(
+            () ->
+                transactions.executeWithoutResult(
+                    status -> {
+                      // 第一个事务持有运行行锁未提交；本事务必须等待，而不是抢先插入更低序号。
+                      repo.event(id, EventType.CANCEL_REQUESTED, "等待锁后提交的事件");
+                      secondSeq.set(
+                          db.queryForObject(
+                              "SELECT run_seq FROM events WHERE run_id=? AND message=?",
+                              Long.class,
+                              id,
+                              "等待锁后提交的事件"));
+                      secondAllocatedAt.set(System.nanoTime());
+                    }));
+    second.start();
+    Thread.sleep(300);
+    long firstCommittedAt = System.nanoTime();
+    releaseFirst.countDown();
+    first.join(5000);
+    second.join(5000);
+    assertFalse(first.isAlive(), "第一个事务未结束。");
+    assertFalse(second.isAlive(), "第二个事务未结束。");
+    assertTrue(firstSeq.get() > 0);
+    assertTrue(secondSeq.get() > firstSeq.get(), "提交序号未按提交顺序分配。");
+    assertTrue(secondAllocatedAt.get() > firstCommittedAt, "第二个事务未等待第一个事务提交。");
+    var page = eventQuery.page(id, 0, 200);
+    var messages = page.events().stream().map(event -> event.message()).toList();
+    assertTrue(
+        messages.indexOf("先分配、晚提交的事件") < messages.indexOf("等待锁后提交的事件"),
+        String.join("|", messages));
+    var tail = eventQuery.page(id, firstSeq.get(), 200);
+    assertTrue(
+        tail.events().stream().anyMatch(event -> event.message().equals("等待锁后提交的事件")));
+    assertTrue(
+        tail.events().stream()
+            .noneMatch(event -> event.message().equals("先分配、晚提交的事件")));
+  }
+
+  @Test
+  void reconnectBacklogBeyondOnePageDrainsWithoutDuplicates() throws Exception {
+    String id = createDynamicWorkflow(true, 3);
+    for (int i = 0; i < 250; i++) repo.event(id, EventType.MODEL_STARTED, "积压事件 " + i);
+    long cursor = 0;
+    var ids = new java.util.ArrayList<Long>();
+    var seqs = new java.util.ArrayList<Long>();
+    int pages = 0;
+    while (true) {
+      var page = eventQuery.page(id, cursor, 100);
+      if (page.events().isEmpty()) break;
+      pages++;
+      page.events()
+          .forEach(
+              event -> {
+                ids.add(event.id());
+                seqs.add(event.runSeq());
+              });
+      cursor = page.nextCursor();
+    }
+    assertEquals(repo.events(id).size(), ids.size());
+    assertEquals(ids.size(), new java.util.HashSet<>(ids).size());
+    for (int i = 1; i < seqs.size(); i++)
+      assertTrue(seqs.get(i) > seqs.get(i - 1), "事件序号未严格递增。");
+    assertTrue(pages >= 3, "积压未按多页读取。");
+    assertEquals(200, eventQuery.page(id, 0, 200).events().size());
   }
 
   @Test

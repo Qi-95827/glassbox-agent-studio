@@ -24,7 +24,7 @@ const skillNames = { ANALYZE_EVIDENCE:'问题分析', AUTHORIZED_EDIT:'受限代
 const toolNames = { SIMULATED_INSPECTION:'模拟检查工具', WORKSPACE_READ:'读取授权文件', WORKSPACE_SEARCH:'搜索授权文件', WORKSPACE_WRITE:'修改授权文件' };
 const evaluationSuites = { LOCAL_AGENT_V2:'兼容流程种子集', DYNAMIC_WORKFLOW_V1:'动态工作流种子集', DYNAMIC_CHECK_V1:'动态检查与阻塞种子集' };
 const comparisonNames = { UNCHANGED_PASS:'均通过', UNCHANGED_FAIL:'均失败', IMPROVED:'失败变为通过', REGRESSED:'通过变为失败', INCONCLUSIVE:'无法判断' };
-const eventNames = { TASK_CREATED:'创建任务', PLAN_APPROVED:'确认计划', RUN_STARTED:'开始运行', DELEGATED:'分配子任务', AGENT_STARTED:'启动 Agent', NODE_RETRY_SCHEDULED:'安排节点重试', MODEL_STARTED:'模型调用', MODEL_FINISHED:'模型返回', TOOL_STARTED:'调用工具', TOOL_FINISHED:'工具返回', TOOL_REJECTED:'工具输入被拒绝', HANDOFF:'结果交接', HANDOFF_ACCEPTED:'接收实例启动', CHECK_STARTED:'开始系统检查', CHECK_FINISHED:'系统检查结果', CHECKPOINT_SAVED:'保存检查点', CHECKPOINT_SKIPPED:'未生成分析后检查点', RUN_COMPLETED:'运行完成', CANCEL_REQUESTED:'请求取消', PAUSE_REQUESTED:'请求暂停', PAUSED:'已暂停', RESUMED:'继续执行', CANCELLED:'运行取消', FAILED:'执行失败', LIMITED:'达到限制', INTERRUPTED:'运行中断', RECOVERY_STARTED:'恢复运行', MEMORY_LOADED:'装配项目背景', TEST_STARTED:'开始测试', TEST_FINISHED:'测试结果', BLOCKED:'等待处理' };
+const eventNames = { TASK_CREATED:'创建任务', PLAN_APPROVED:'确认计划', RUN_STARTED:'开始运行', DELEGATED:'分配子任务', AGENT_STARTED:'启动 Agent', NODE_RETRY_SCHEDULED:'安排节点重试', MODEL_STARTED:'模型调用', MODEL_FINISHED:'模型返回', TOOL_STARTED:'调用工具', TOOL_FINISHED:'工具返回', TOOL_REJECTED:'工具输入被拒绝', HANDOFF:'结果交接', HANDOFF_ACCEPTED:'接收实例启动', CHECK_STARTED:'开始系统检查', CHECK_FINISHED:'系统检查结果', CHECKPOINT_SAVED:'保存检查点', CHECKPOINT_SKIPPED:'未生成分析后检查点', RUN_COMPLETED:'运行完成', CANCEL_REQUESTED:'请求取消', PAUSE_REQUESTED:'请求暂停', PAUSED:'已暂停', RESUMED:'继续执行', CANCELLED:'运行取消', FAILED:'执行失败', LIMITED:'达到限制', INTERRUPTED:'运行中断', SUPPLEMENT_REQUESTED:'等待补充信息', SUPPLEMENT_APPLIED:'补充已应用', SUPPLEMENT_REJECTED:'补充被拒绝', CONTINUED_AFTER_SUPPLEMENT:'补充后继续', RECOVERY_STARTED:'恢复运行', MEMORY_LOADED:'装配项目背景', TEST_STARTED:'开始测试', TEST_FINISHED:'测试结果', BLOCKED:'等待处理' };
 const dateTime = s => s ? new Date(s).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
 const clock = s => s ? new Date(s).toLocaleTimeString('zh-CN',{ hour12:false }) : '—';
 async function api(url, options = {}) { const r = await fetch('/api'+url, { headers:{'Content-Type':'application/json'}, ...options }); const body = await r.json(); if (!r.ok) throw new Error(body.message || '请求失败'); return body; }
@@ -82,12 +82,22 @@ function Workspace() {
         if(!active)return;
         if(page){
           const known=new Set(events.map(event=>event.ID));
-          page.events.forEach(event=>{
-            if(known.has(event.id))return;
-            known.add(event.id);
-            events.push({ID:event.id,EVENT_TYPE:event.type,MESSAGE:event.message,CREATED_AT:event.occurredAt,NODE_ID:event.nodeId,ATTEMPT_ID:event.attemptId,MODEL_CALL_ID:event.modelCallId,TOOL_CALL_ID:event.toolCallId,REASON_CODE:event.reasonCode});
-          });
-          cursor=page.nextCursor;
+          const absorb=next=>{
+            next.events.forEach(event=>{
+              if(known.has(event.id))return;
+              known.add(event.id);
+              events.push({ID:event.id,RUN_SEQ:event.runSeq,EVENT_TYPE:event.type,MESSAGE:event.message,CREATED_AT:event.occurredAt,NODE_ID:event.nodeId,ATTEMPT_ID:event.attemptId,MODEL_CALL_ID:event.modelCallId,TOOL_CALL_ID:event.toolCallId,REASON_CODE:event.reasonCode});
+            });
+            return next.nextCursor;
+          };
+          cursor=absorb(page);
+          // 断线积压超过一页时，在同一轮内读尽事件，之后才应用新快照。
+          let eventsPage=page;
+          for(let round=0;eventsPage.events.length===200&&round<25;round++){
+            eventsPage=await api(`/runs/${current}/events?after=${cursor}&limit=200`);
+            if(!active)return;
+            cursor=absorb(eventsPage);
+          }
         }
         setTasks(ts);setOverview(ov);setMetrics(stats);setSkillBindings(bindings);setMemoryLoad(loadedMemory);setToolGrants(grants);setAgentSessions(sessions);setRunChecks(checks);setConnected(true);setLastSyncedAt(new Date().toISOString());
         if(run)setDetail({...run,events});
@@ -132,6 +142,7 @@ function Workspace() {
   const resume=async()=>{try{await api('/runs/'+current+'/resume',{method:'POST'});message.info('已请求继续')}catch(e){message.error(e.message)}};
   const cancel=async()=>{try{await api(`/runs/${current}/cancel`,{method:'POST'});message.info('已请求取消')}catch(e){message.error(e.message)}};
   const recover=async id=>{try{const x=await api(`/runs/${current}/recover/${id}`,{method:'POST'});setCurrent(x.runId);setDetail(null);setExecutionView(null);message.success('已创建恢复运行')}catch(e){message.error(e.message)}};
+  const submitSupplement=async(requestId,expectedTaskVersion,path,content)=>{try{await api(`/runs/${current}/supplements/${requestId}`,{method:'POST',body:JSON.stringify({expectedTaskVersion,path,content})});message.success('补充已接受；运行将从安全边界继续')}catch(e){message.error(e.message)}};
   const openWorkspaces=async()=>{try{setWorkspaceList(await api('/workspaces'));setWorkspaceOpen(true)}catch(e){message.error(e.message)}};
   const createWorkspace=async()=>{try{const w=await api('/workspaces',{method:'POST',body:JSON.stringify({repositoryPath:repoPath,baseBranch})});setWorkspaceList(await api('/workspaces'));setSelectedWorkspace(w);setWorkspaceStatus(await api(`/workspaces/${w.id}/status`));message.success('独立工作区已创建')}catch(e){message.error(e.message)}};
   const selectWorkspace=async id=>{try{setSelectedWorkspace(workspaceList.find(w=>w.id===id));setWorkspaceStatus(await api(`/workspaces/${id}/status`));setApprovals(await api(`/workspaces/${id}/approvals`));setFileContent(null)}catch(e){message.error(e.message)}};
@@ -168,7 +179,7 @@ function Workspace() {
       {detail.runs.length>1&&<div className="run-history">运行历史：{detail.runs.map(r=><Button type="link" key={r.ID} onClick={()=>{setCurrent(r.ID);setDetail(null);setExecutionView(null)}}>{short(r.ID)} · {states[r.STATUS]||r.STATUS}</Button>)}</div>}
       {task.WORKSPACE_ID&&<details className="agent-card handoff"><summary>授权文件：{taskFiles?`${taskFiles.length} 个`:'列表不可读'}</summary>{taskFiles?.map(path=><p key={path}>{path}</p>)}<p>任务只能访问所列现有文件；具体写权限以任务授权为准。</p></details>}
       {Object.keys(detail.roleBudgets||{}).length>0&&<div className="result-box"><strong>按角色的单实例限额</strong>{Object.entries(detail.roleBudgets).map(([role,budget])=><p key={role}>{planRoles[role]||role}：模型 {budget.maxModelCalls==null?'未设置':`${budget.maxModelCalls} 次`}，工具 {budget.maxToolCalls==null?'未设置':`${budget.maxToolCalls} 次`}</p>)}<p>仍受统一单 Agent 和运行总上限约束。</p></div>}{Object.keys(detail.toolBudgets||{}).length>0&&<div className="result-box"><strong>按工具类型的调用限额</strong>{Object.entries(detail.toolBudgets).map(([kind,limit])=><p key={kind}>{toolNames[kind]||kind}：{limit} 次</p>)}<p>包含恢复祖先的已启动调用；仍受其他预算及权限约束。</p></div>}
-      <ExecutionFlowPanel view={executionView} detail={detail} Status={Status} stopCauseLabels={stopCauses} eventNames={eventNames} api={api} connected={connected} lastSyncedAt={lastSyncedAt} approving={approvingPlan} onApprove={approvePlan} onRecover={recover} onPause={pause} onResume={resume} onCancel={cancel} onSwitchRun={id=>{setCurrent(id);setDetail(null);setExecutionView(null);setLastSyncedAt(null)}}/>
+      <ExecutionFlowPanel view={executionView} detail={detail} Status={Status} stopCauseLabels={stopCauses} eventNames={eventNames} api={api} connected={connected} lastSyncedAt={lastSyncedAt} approving={approvingPlan} onApprove={approvePlan} onRecover={recover} onPause={pause} onResume={resume} onCancel={cancel} onSwitchRun={id=>{setCurrent(id);setDetail(null);setExecutionView(null);setLastSyncedAt(null)}} onSubmitSupplement={submitSupplement}/>
       <div className="section-row"><h3>参与的 Agent</h3><span>{detail.agents.length} 个实例</span></div>{detail.agents.length?detail.agents.map(a=>{const grants=toolGrants.find(g=>g.agentId===a.ID), session=agentSessions.find(s=>s.agentId===a.ID);return <div className="agent-card" key={a.ID}><div className="agent-avatar"><ApartmentOutlined /></div><div className="agent-text"><strong>{a.ROLE_NAME}</strong><small>实例 #{short(a.ID)} · 角色版本 {a.ROLE_VERSION ?? '未记录'} · {task.MODEL_MODE==='deepseek'?'DeepSeek Flash':'模拟模型'}</small><small>已解析定义：{a.DEFINITION_ID && a.DEFINITION_VERSION != null ? `${a.DEFINITION_ID} v${a.DEFINITION_VERSION}` : '未记录'}；不代表工具或模型已经执行</small><small>已装配技能：{skillBindings.filter(s=>s.agentId===a.ID).map(s=>`${skillNames[s.skillId]||s.skillId} v${s.version}`).join('、')||'无记录'}</small><small>框架会话：{session?.status==='SAVED'?`已保存${session.version==null?'':` · 版本 ${session.version}`}`:session?.status==='NOT_SAVED'?'尚无记录':'状态未知'}；不代表可以恢复</small><small>装配时注册的工具：{grants?(grants.toolVersions.map(t=>`${toolNames[t.tool]||t.tool} ${t.version==null?'版本未知':`v${t.version}`}`).join('、')||'无'):'未记录'}；实际调用以工具记录为准</small><AssemblyDetails recorded={detail.agentAssemblies?.find(snapshot=>snapshot.agentId===a.ID)} toolNames={toolNames}/></div><Status value={a.STATUS}/></div>}):<p className="hint">此运行没有 Agent 实例记录。</p>}
       <div className="section-row"><h3>项目背景引用</h3><span>{memoryLoad?.recorded?`声明 ${memoryLoad.declaredCount} 条，现存 ${memoryLoad.references.length} 条`:'未记录'}</span></div>{memoryLoad?.recorded?<div className="agent-card"><div className="agent-text"><small>仅表示组装输入时选中，不代表模型已接收或遵循；检查仅覆盖数量和顺序。</small>{memoryLoad.integrity==='INCONSISTENT'&&<small>引用数量或顺序不一致，请核对记录；不能推断原始装配内容。</small>}{memoryLoad.references.length?memoryLoad.references.map(m=><small key={m.memoryId}>#{short(m.memoryId)} · {({PROJECT_CONVENTION:'项目约定',PROJECT_BACKGROUND:'项目背景',PRECAUTION:'注意事项'})[m.category]||m.category} · v{m.version}</small>):memoryLoad.integrity==='CONSISTENT'&&<small>装配记录显示没有选中项目背景。</small>}</div></div>:<p className="hint">当前无装配记录；历史数据缺失不代表没有使用。</p>}
       <div className="section-row"><h3>Agent 运行统计</h3><span>基于实际调用记录</span></div>{metrics.length?metrics.map(m=><details className="agent-card handoff" key={m.agentId}><summary>{m.roleName} · {m.durationMs==null?'墙钟区间未知':`墙钟区间 ${m.durationMs} 毫秒`} · 模型 {m.modelCalls} 次 · 工具 {m.toolCalls} 次</summary><p>Agent 墙钟区间包含等待和暂停；中断或时间不可靠时显示未知。</p><p>工具：{m.toolNames.join('、')||'无'}；已知工具耗时 {m.toolDurationKnownMs} 毫秒，未知 {m.toolDurationUnknownCount} 次</p>{m.toolBreakdown?.map(t=><p key={t.name}>{t.name}：{t.calls} 次；{Object.entries(t.statusCounts).map(([s,n])=>`${states[s]||s} ${n}`).join('、')}{t.unknownStatusCount?`、未知状态 ${t.unknownStatusCount}`:''}；已知耗时 {t.knownDurationMs??'无记录'} 毫秒，未知 {t.unknownDurationCount} 次</p>)}<p>已知输入 Token：{m.knownInputTokens??'无记录'}，未知 {m.unknownInputCount} 次；已知输出 Token：{m.knownOutputTokens??'无记录'}，未知 {m.unknownOutputCount} 次</p><p>已知模型耗时 {m.modelDurationKnownMs} 毫秒，未知 {m.modelDurationUnknownCount} 次。部分调用用量未知时，已知合计不是完整总量；启动前被拒绝的工具不计入调用次数。</p></details>):<p className="hint">暂无 Agent 调用统计。</p>}

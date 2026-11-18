@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Empty, Spin, Tag, Tooltip } from 'antd';
+import { Alert, Button, Empty, Input, Spin, Tag, Tooltip } from 'antd';
 import { ApartmentOutlined, CheckCircleFilled, ClockCircleOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import WorkflowPlanPanel from './WorkflowPlanPanel.jsx';
 import NodeExecutionDetail from './NodeExecutionDetail.jsx';
@@ -86,19 +86,24 @@ function nodeClass(node, focusIds, blockedIds) {
 
 export default function ExecutionFlowPanel({
   view, detail, Status, stopCauseLabels, eventNames, api, connected, lastSyncedAt,
-  approving, onApprove, onRecover, onPause, onResume, onCancel, onSwitchRun
+  approving, onApprove, onRecover, onPause, onResume, onCancel, onSwitchRun, onSubmitSupplement
 }) {
   const [tab, setTab] = useState('flow');
   const [selectedId, setSelectedId] = useState(null);
   const [nodeDetail, setNodeDetail] = useState(null);
   const [nodeLoading, setNodeLoading] = useState(false);
   const [nodeError, setNodeError] = useState(null);
+  const [supplementPath, setSupplementPath] = useState('tests/test_calc.py');
+  const [supplementContent, setSupplementContent] = useState('');
+  const [supplementSending, setSupplementSending] = useState(false);
 
   const runId = view?.runId;
   useEffect(() => {
     setSelectedId(null);
     setNodeDetail(null);
     setNodeError(null);
+    setSupplementContent('');
+    setSupplementSending(false);
   }, [runId]);
 
   useEffect(() => {
@@ -211,9 +216,29 @@ export default function ExecutionFlowPanel({
           </>} />)}
       </div>}
 
+      {view.supplement && <div className="flow-supplement">
+        <div className="flow-supplement-heading">
+          <strong>{view.supplement.status === 'APPLIED' ? '补充已应用' : '等待补充信息'}</strong>
+          <span>任务 v{view.taskVersion} · 关联节点：{view.supplement.nodeLabel || '未记录'}</span>
+        </div>
+        <p>{view.supplement.question}</p>
+        {view.supplement.status === 'APPLIED'
+          ? <p className="hint">已补充 {view.supplement.answerPath || '未记录路径'}（提交时任务 v{view.supplement.taskVersion} → v{view.taskVersion}）；运行从安全边界继续，首次失败的检查记录保留。</p>
+          : <div className="flow-supplement-form">
+              <Input aria-label="测试文件路径" value={supplementPath} onChange={e => setSupplementPath(e.target.value)} maxLength={200} placeholder="tests/test_calc.py" />
+              <Input.TextArea aria-label="测试文件内容" value={supplementContent} onChange={e => setSupplementContent(e.target.value)} maxLength={20000} showCount rows={6} placeholder="unittest 测试文件内容，例如 import unittest …" />
+              <Button type="primary" loading={supplementSending} onClick={() => {
+                setSupplementSending(true);
+                Promise.resolve(onSubmitSupplement?.(view.supplement.id, view.taskVersion, supplementPath, supplementContent))
+                  .finally(() => setSupplementSending(false));
+              }}>提交补充并继续</Button>
+              <span className="hint">提交按任务 v{view.taskVersion} 校验；路径必须是新的 tests/test_*.py 文件。失败时保持阻塞并显示原因。</span>
+            </div>}
+      </div>}
+
       <div className="flow-actions">
-        {actions.length === 0 && <span className="hint">当前没有可用操作。</span>}
-        {actions.map(action => <Tooltip key={action.actionCode + (action.checkpointId || '')} title={action.disabledReason || ''}>
+        {actions.filter(action => action.actionCode !== 'SUBMIT_SUPPLEMENT').length === 0 && <span className="hint">当前没有可用操作。</span>}
+        {actions.filter(action => action.actionCode !== 'SUBMIT_SUPPLEMENT').map(action => <Tooltip key={action.actionCode + (action.checkpointId || '')} title={action.disabledReason || ''}>
           <Button size="small" disabled={!action.enabled}
             type={action.actionCode === 'APPROVE_PLAN' ? 'primary' : 'default'}
             loading={action.actionCode === 'APPROVE_PLAN' && approving}

@@ -214,6 +214,11 @@ public class RunService {
     dispatchInitial(runId);
   }
 
+  /** 补充接受后从安全边界重新排队；沿用与首次派发相同的单线程队列与拒绝语义。 */
+  public void dispatchContinuation(String runId) {
+    dispatchInitial(runId);
+  }
+
   private void dispatchInitial(String runId) {
     try {
       executor.submit(() -> execute(runId, CheckpointStage.BEFORE_TOOL, null, false));

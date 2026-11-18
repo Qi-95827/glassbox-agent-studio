@@ -312,6 +312,8 @@ public class WorkflowExecutionRepository {
                     elapsed,
                     StopCause.CHECK_FAILED);
                 runs.event(runId, EventType.BLOCKED, "系统检查未通过：" + result.summary(), checkRef);
+                if (TaskSupplementService.REPRODUCTION_MISSING_INFO.equals(result.reasonCode()))
+                  openSupplementRequest(runId, checked, result.reasonCode());
                 return true;
               }
               plans.finishCheckNode(runId, saved.nodeId(), PlanNodeStatus.COMPLETED, time);
@@ -330,6 +332,38 @@ public class WorkflowExecutionRepository {
   }
 
   private record CheckSettlement(UUID nodeId, String status, String label) {}
+
+  /**
+   * 复现缺少可执行测试时保存待补充事项，供流程图展示问题并接收用户提交。
+   *
+   * <p>同一运行已有未处理请求时不重复创建；提问使用稳定文案，检测细节仍以检查记录为权威。
+   */
+  private void openSupplementRequest(String runId, PlanNode node, String reasonCode) {
+    Integer existing =
+        db.queryForObject(
+            "SELECT COUNT(*) FROM run_supplements WHERE run_id=? AND status='OPEN'",
+            Integer.class,
+            runId);
+    if (existing != null && existing > 0) return;
+    String taskId = runs.runSnapshot(runId).taskId().toString();
+    db.update(
+        "INSERT INTO"
+            + " run_supplements(id,run_id,node_id,reason_code,question,kind,status,task_version,"
+            + "created_at) VALUES(?,?,?,?,?,'TEST_FILE','OPEN',?,?)",
+        RunRepository.id(),
+        runId,
+        node.id().toString(),
+        reasonCode,
+        "缺少可执行测试或验证条件。请补充一个 tests/ 下的 test_*.py 文件内容；"
+            + "提交通过校验后将从安全边界继续并重新执行复现检查。",
+        runs.taskVersion(taskId),
+        RunRepository.now());
+    runs.event(
+        runId,
+        EventType.SUPPLEMENT_REQUESTED,
+        "复现检查缺少可执行测试，已保存待补充事项；补充前不会启动任何下游节点。",
+        EventRef.empty().withPlan(node.planVersionId()).withNode(node.id()));
+  }
 
   /** 仅接受已结算的限流拒绝；带有工具调用历史的尝试原样结束。 */
   public boolean requeueAfterRateLimit(String runId, UUID version, String agentId) {

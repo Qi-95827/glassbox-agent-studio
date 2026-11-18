@@ -241,9 +241,17 @@ class WorkflowScheduler {
 
   private void stop(
       String runId, UUID agentId, RunControl control, StopCause cause, String reason) {
-    InvocationStatus status = InvocationStatus.fromRunStatus(cause.status());
-    control.finishModel(status, null, null, reason);
-    control.finishTool(status, null, reason);
+    // 检查阻塞等运行状态没有对应的调用终态；此时只结算运行与节点，不伪造调用状态。
+    InvocationStatus status =
+        switch (cause.status()) {
+          case COMPLETED, FAILED, CANCELLED, LIMITED, INTERRUPTED ->
+              InvocationStatus.fromRunStatus(cause.status());
+          default -> null;
+        };
+    if (status != null) {
+      control.finishModel(status, null, null, reason);
+      control.finishTool(status, null, reason);
+    }
     workflowRuns.finishWorkflowStoppedRun(
         runId, agentId, cause, reason, control.rounds(), control.tools(), control.elapsed());
   }
