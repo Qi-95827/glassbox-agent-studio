@@ -59,10 +59,17 @@ public record ControlledModel(
           if (stopped != null) return Flux.error(stopped);
           try {
             runtime.beforeModel(ModelKind.forMode(mode));
+            StringBuilder inputText = new StringBuilder();
+            for (Msg message : messages) {
+              if (message.getTextContent() != null) inputText.append(message.getTextContent()).append('\n');
+            }
+            inputText.append(tools);
+            runtime.verifyModelInput(inputText.toString());
+            GenerateOptions constrained = constrainedOptions(options, runtime.maxOutputTokens());
             runtime.event(EventType.MODEL_STARTED, "AgentScope 开始模型调用：" + delegate.getModelName());
             AtomicReference<ChatResponse> latest = new AtomicReference<>();
             AtomicReference<ChatUsage> latestUsage = new AtomicReference<>();
-            return Flux.defer(() -> delegate.stream(messages, tools, options))
+            return Flux.defer(() -> delegate.stream(messages, tools, constrained))
                 .doOnNext(
                     response -> {
                       latest.set(response);
@@ -95,5 +102,21 @@ public record ControlledModel(
             return Flux.error(e);
           }
         });
+  }
+
+  /**
+   * 按价格版本的输出上界收紧请求；已有更小上限时保留更小值。
+   *
+   * <p>同时设置 maxTokens 和 maxCompletionTokens，覆盖不同供应方的字段约定。该约束仍以供应方实际遵守情况为界，超支由结算账本记录。
+   */
+  private static GenerateOptions constrainedOptions(GenerateOptions options, Integer maxOutput) {
+    if (maxOutput == null || maxOutput < 1) return options;
+    Integer existingMax = options == null ? null : options.getMaxTokens();
+    Integer existingCompletion = options == null ? null : options.getMaxCompletionTokens();
+    int cap = maxOutput;
+    if (existingMax != null) cap = Math.min(cap, existingMax);
+    if (existingCompletion != null) cap = Math.min(cap, existingCompletion);
+    var limit = GenerateOptions.builder().maxTokens(cap).maxCompletionTokens(cap).build();
+    return GenerateOptions.mergeOptions(limit, options);
   }
 }

@@ -575,6 +575,114 @@ public class WorkspaceService {
     return target;
   }
 
+  /**
+   * 目录授权展开：只列出 Git 跟踪或未忽略的普通文本文件，应用排除规则并限制数量。
+   *
+   * <p>目录本身必须是工作区内真实目录；符号链接、{@code .git} 和排除项都不会进入结果。该结果是服务端冻结的授权快照，模型不能自行扩展。
+   */
+  public List<String> authorizedFiles(
+      String workspaceId, List<String> directories, List<String> exclusions) {
+    Workspace workspace = get(workspaceId);
+    Path root = Path.of(workspace.workspacePath()).toAbsolutePath().normalize();
+    List<String> normalizedDirectories = normalizeDirectories(root, directories);
+    List<String> normalizedExclusions = normalizeExclusions(exclusions);
+    if (normalizedDirectories.isEmpty())
+      throw new IllegalArgumentException("目录授权至少需要一个工作区内目录。");
+    String output =
+        runGit(
+            Path.of(workspace.workspacePath()),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--");
+    var result = new java.util.LinkedHashSet<String>();
+    for (String path : output.split(String.valueOf((char) 0))) {
+      if (path.isEmpty() || !insideDirectories(path, normalizedDirectories)) continue;
+      if (excluded(path, normalizedExclusions)) continue;
+      if (!isFileCandidate(workspace, path)) continue;
+      result.add(path);
+      if (result.size() >= 200) break;
+    }
+    if (result.isEmpty()) throw new IllegalArgumentException("授权目录内没有可用文本文件。");
+    return List.copyOf(result);
+  }
+
+  /** 目录授权在运行前重新核对：目录仍存在、有效文件仍可读且没有落入排除项。 */
+  public void requireDirectoryStillAuthorized(
+      String workspaceId, List<String> directories, List<String> exclusions, List<String> files) {
+    Workspace workspace = get(workspaceId);
+    Path root = Path.of(workspace.workspacePath()).toAbsolutePath().normalize();
+    List<String> normalizedDirectories = normalizeDirectories(root, directories);
+    List<String> normalizedExclusions = normalizeExclusions(exclusions);
+    for (String path : files) {
+      if (!insideDirectories(path, normalizedDirectories) || excluded(path, normalizedExclusions))
+        throw new IllegalStateException("授权范围已撤销或排除规则已变化：" + path);
+      if (!isFileCandidate(workspace, path))
+        throw new IllegalStateException("授权文件已不可读或发生变化：" + path);
+    }
+  }
+
+  private static List<String> normalizeDirectories(Path root, List<String> directories) {
+    if (directories == null || directories.isEmpty()) return List.of();
+    var result = new java.util.ArrayList<String>();
+    for (String raw : directories) {
+      String normalized = AuthorizedFileSet.normalize(raw);
+      Path target = root.resolve(normalized).normalize();
+      if (!target.startsWith(root) || !Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS))
+        throw new IllegalArgumentException("授权目录不存在或不是普通目录：" + raw);
+      Path current = root;
+      for (Path part : root.relativize(target)) {
+        current = current.resolve(part);
+        if (Files.isSymbolicLink(current))
+          throw new IllegalArgumentException("授权目录不能包含符号链接：" + raw);
+      }
+      result.add(normalized);
+    }
+    return List.copyOf(result);
+  }
+
+  private static List<String> normalizeExclusions(List<String> exclusions) {
+    if (exclusions == null || exclusions.isEmpty()) return List.of();
+    var result = new java.util.ArrayList<String>();
+    for (String raw : exclusions) {
+      String normalized = AuthorizedFileSet.normalize(raw);
+      result.add(normalized);
+    }
+    return List.copyOf(result);
+  }
+
+  private static boolean insideDirectories(String path, List<String> directories) {
+    for (String directory : directories)
+      if (path.equals(directory) || path.startsWith(directory + "/")) return true;
+    return false;
+  }
+
+  private static boolean excluded(String path, List<String> exclusions) {
+    for (String exclusion : exclusions)
+      if (path.equals(exclusion) || path.startsWith(exclusion + "/")) return true;
+    return false;
+  }
+
+  /** 只对指定授权路径生成差异，避免把工作区其他修改带入成果。 */
+  public String diffForPaths(String id, List<String> paths) {
+    if (paths == null || paths.isEmpty()) throw new IllegalArgumentException("请指定要比较的授权文件。");
+    Workspace workspace = get(id);
+    var normalized = new java.util.ArrayList<String>();
+    for (String path : paths) normalized.add(AuthorizedFileSet.normalize(path));
+    var command = new java.util.ArrayList<String>();
+    // Git 默认把 []*? 当成 pathspec 通配；授权路径必须按字面匹配，避免命中旁边的未授权文件。
+    command.add("--literal-pathspecs");
+    command.add("diff");
+    command.add("--no-ext-diff");
+    command.add("--no-textconv");
+    command.add("HEAD");
+    command.add("--");
+    command.addAll(normalized);
+    return runGit(Path.of(workspace.workspacePath()), command.toArray(String[]::new));
+  }
+
   /** 只检查候选路径，不读取内容，也不代替任务创建与工具调用时的重复校验。 */
   boolean isFileCandidate(Workspace workspace, String relative) {
     try {

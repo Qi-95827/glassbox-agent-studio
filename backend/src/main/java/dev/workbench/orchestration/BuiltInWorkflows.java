@@ -67,6 +67,32 @@ class BuiltInWorkflows {
                 List.of("requirements", "constraints"))));
   }
 
+  /** 任务 8：需求入口的纯文本产物流程。 */
+  @Bean
+  WorkflowTemplate requirementAnalysis() {
+    return new WorkflowTemplate(
+        "requirement-analysis",
+        1,
+        List.of(
+            new WorkflowTemplate.Step("scope", "目标、范围与约束", "analysis", ANALYSIS, List.of()),
+            new WorkflowTemplate.Step("risks", "缺失信息与风险", "analysis", ANALYSIS, List.of()),
+            new WorkflowTemplate.Step(
+                "document", "形成需求说明", "synthesis", SYNTHESIS, List.of("scope", "risks"))));
+  }
+
+  /** 任务 8：设计入口的纯文本产物流程。 */
+  @Bean
+  WorkflowTemplate designProposal() {
+    return new WorkflowTemplate(
+        "design-proposal",
+        1,
+        List.of(
+            new WorkflowTemplate.Step("boundaries", "模块边界与依赖", "analysis", ANALYSIS, List.of()),
+            new WorkflowTemplate.Step("failures", "失败路径与数据变化", "analysis", ANALYSIS, List.of()),
+            new WorkflowTemplate.Step(
+                "document", "形成概要设计", "synthesis", SYNTHESIS, List.of("boundaries", "failures"))));
+  }
+
   @Bean
   AgentDefinitionProvider workspaceAnalysis() {
     return () ->
@@ -110,6 +136,75 @@ class BuiltInWorkflows {
             new WorkflowTemplate.Step(
                 "summarize",
                 "汇总发现与证据",
+                "synthesis",
+                WORKSPACE_SUMMARY,
+                List.of("inspect", "evidence-check"))));
+  }
+
+  /** 任务 8：需求入口在已授权工作区内的只读分析。 */
+  @Bean
+  WorkflowTemplate requirementWorkspace() {
+    return new WorkflowTemplate(
+        "requirement-workspace",
+        1,
+        WorkflowTemplate.Scope.WORKSPACE_READ_ONLY,
+        List.of(
+            new WorkflowTemplate.Step("inspect", "核对授权材料", "analysis", WORKSPACE_ANALYSIS, List.of()),
+            WorkflowTemplate.Step.systemCheck(
+                "evidence-check",
+                "核对授权读取证据",
+                "verification",
+                AuthorizedReadEvidenceCheck.REF,
+                List.of("inspect")),
+            new WorkflowTemplate.Step(
+                "document",
+                "形成需求说明",
+                "synthesis",
+                WORKSPACE_SUMMARY,
+                List.of("inspect", "evidence-check"))));
+  }
+
+  /** 任务 8：设计入口在已授权工作区内的只读核对。 */
+  @Bean
+  WorkflowTemplate designWorkspace() {
+    return new WorkflowTemplate(
+        "design-workspace",
+        1,
+        WorkflowTemplate.Scope.WORKSPACE_READ_ONLY,
+        List.of(
+            new WorkflowTemplate.Step("inspect", "核对现有设计与代码边界", "analysis", WORKSPACE_ANALYSIS, List.of()),
+            WorkflowTemplate.Step.systemCheck(
+                "evidence-check",
+                "核对授权读取证据",
+                "verification",
+                AuthorizedReadEvidenceCheck.REF,
+                List.of("inspect")),
+            new WorkflowTemplate.Step(
+                "document",
+                "形成概要设计",
+                "synthesis",
+                WORKSPACE_SUMMARY,
+                List.of("inspect", "evidence-check"))));
+  }
+
+  /** 任务 8：测试入口只读核对计划与实际证据。 */
+  @Bean
+  WorkflowTemplate testEvidence() {
+    return new WorkflowTemplate(
+        "test-evidence",
+        1,
+        WorkflowTemplate.Scope.WORKSPACE_READ_ONLY,
+        List.of(
+            new WorkflowTemplate.Step("inspect", "核对测试与授权文件", "analysis", WORKSPACE_ANALYSIS, List.of()),
+            WorkflowTemplate.Step.systemCheck(
+                "evidence-check",
+                "核对授权读取证据",
+                "verification",
+                AuthorizedReadEvidenceCheck.REF,
+                List.of("inspect")),
+            new WorkflowTemplate.Step(
+                "document",
+                "形成测试计划与证据说明",
                 "synthesis",
                 WORKSPACE_SUMMARY,
                 List.of("inspect", "evidence-check"))));

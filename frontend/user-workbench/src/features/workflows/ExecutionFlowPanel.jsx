@@ -3,6 +3,9 @@ import { Alert, Button, Empty, Input, Tooltip } from 'antd';
 import { Box, Paper, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import WorkflowPlanPanel from './WorkflowPlanPanel.jsx';
+import PlanAdjustmentEditor from './PlanAdjustmentEditor.jsx';
+import RunExtensionsPanel from './RunExtensionsPanel.jsx';
+import CostPricePanel from './CostPricePanel.jsx';
 import RunTraceGraph from './RunTraceGraph.jsx';
 import RunTraceInspector, { TraceSection } from './RunTraceInspector.jsx';
 
@@ -246,6 +249,11 @@ export default function ExecutionFlowPanel({
         </Typography>
       </TraceSection>}
     </>}
+    <PlanAdjustmentEditor detail={detail} api={api} />
+    <TraceSection title="运行扩展与费用配置">
+      <RunExtensionsPanel detail={detail} api={api} />
+      <CostPricePanel api={api} />
+    </TraceSection>
     </Box>
   </ThemeProvider>;
 }

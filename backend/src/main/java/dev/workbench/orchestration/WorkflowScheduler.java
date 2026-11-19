@@ -21,8 +21,10 @@ import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.task.RunRecordService;
+import dev.workbench.task.SourceArtifactService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.task.WorkflowRecoveryService;
+import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -41,6 +43,9 @@ class WorkflowScheduler {
   private final ObjectMapper json;
   private final Map<String, WorkflowTemplate> templates;
   private final SystemCheckRegistry checks;
+  private final dev.workbench.task.CostService costs;
+  private final SourceArtifactService sourceArtifacts;
+  private final WorkspaceAuthorizationService workspaceAuthorization;
 
   WorkflowScheduler(
       RunRecordService repository,
@@ -50,7 +55,10 @@ class WorkflowScheduler {
       AgentExecutor agent,
       ObjectMapper json,
       List<WorkflowTemplate> templates,
-      SystemCheckRegistry checks) {
+      SystemCheckRegistry checks,
+      dev.workbench.task.CostService costs,
+      SourceArtifactService sourceArtifacts,
+      WorkspaceAuthorizationService workspaceAuthorization) {
     this.repository = repository;
     this.plans = plans;
     this.workflowRuns = workflowRuns;
@@ -61,6 +69,9 @@ class WorkflowScheduler {
         templates.stream()
             .collect(Collectors.toUnmodifiableMap(WorkflowTemplate::id, Function.identity()));
     this.checks = checks;
+    this.costs = costs;
+    this.sourceArtifacts = sourceArtifacts;
+    this.workspaceAuthorization = workspaceAuthorization;
   }
 
   WorkflowTemplate template(String id) {
@@ -87,6 +98,8 @@ class WorkflowScheduler {
     UUID activeAgent = null;
     try {
       plan.requireTaskAuthorization(task);
+      workspaceAuthorization.requireCurrent(task.id().toString());
+      sourceArtifacts.requireCurrent(task.id().toString());
       repository.event(runId, EventType.RUN_STARTED, "已保存的工作流开始执行。");
       control.atBoundary(
           stateLock,
@@ -219,6 +232,7 @@ class WorkflowScheduler {
             task.constraints(),
             task.acceptanceCriteria(),
             files,
+            sourceArtifacts.constraints(task.id().toString()),
             attempt.dependencies());
     String id = attempt.agentId();
     var request =
@@ -233,7 +247,7 @@ class WorkflowScheduler {
             task.modelMode(),
             CheckpointStage.BEFORE_TOOL,
             null,
-            new ControlledAgentRuntime(runId, id, control, repository, nodePolicy),
+            new ControlledAgentRuntime(runId, id, control, repository, nodePolicy, costs, workspaceAuthorization),
             node.definitionRef(),
             node.definitionSha256());
     return limited(agent.execute(request), 1900);
@@ -291,5 +305,6 @@ class WorkflowScheduler {
       List<String> constraints,
       List<String> acceptanceCriteria,
       List<String> authorizedFiles,
+      List<String> sourceArtifacts,
       List<WorkflowExecutionService.WorkflowInput> dependencies) {}
 }

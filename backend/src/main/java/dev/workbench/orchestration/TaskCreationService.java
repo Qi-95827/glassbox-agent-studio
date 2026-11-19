@@ -2,10 +2,13 @@ package dev.workbench.orchestration;
 
 import dev.workbench.bug.BugIntakeService;
 import dev.workbench.domain.EntryPolicyService;
+import dev.workbench.domain.EntryRouteService;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
+import dev.workbench.task.CostService;
 import dev.workbench.task.RunLimits;
 import dev.workbench.task.RunRecordService;
+import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,16 +24,25 @@ public class TaskCreationService {
   private final RunRecordService runs;
   private final BugIntakeService intakes;
   private final EntryPolicyService entryPolicies;
+  private final EntryRouteService entryRoutes;
+  private final CostService costs;
+  private final WorkspaceAuthorizationService workspaceAuthorization;
   private final TaskCreationHooks hooks;
 
   public TaskCreationService(
       RunRecordService runs,
       BugIntakeService intakes,
       EntryPolicyService entryPolicies,
+      EntryRouteService entryRoutes,
+      CostService costs,
+      WorkspaceAuthorizationService workspaceAuthorization,
       TaskCreationHooks hooks) {
     this.runs = runs;
     this.intakes = intakes;
     this.entryPolicies = entryPolicies;
+    this.entryRoutes = entryRoutes;
+    this.costs = costs;
+    this.workspaceAuthorization = workspaceAuthorization;
     this.hooks = hooks;
   }
 
@@ -43,11 +55,30 @@ public class TaskCreationService {
       WorkflowTemplate workflow,
       boolean reviewRequired,
       EntryPolicyService.Validation entryValidation) {
+    persist(task, runId, limits, message, workflow, reviewRequired, entryValidation, null, null, null);
+  }
+
+  @Transactional
+  public void persist(
+      TaskDefinition task,
+      UUID runId,
+      RunLimits limits,
+      String message,
+      WorkflowTemplate workflow,
+      boolean reviewRequired,
+      EntryPolicyService.Validation entryValidation,
+      EntryRouteService.Decision route,
+      WorkspaceAuthorizationService.Prepared workspaceScope,
+      Long maxCostMicros) {
     runs.createTaskAndFirstRun(task, runId, limits, message, workflow, reviewRequired);
     if (task.bugId() != null) intakes.record(task, runId.toString());
     if (entryValidation != null) {
       hooks.runBeforeEntryPolicySave();
       entryPolicies.save(task.id().toString(), entryValidation);
     }
+    if (route != null) entryRoutes.save(task.id().toString(), route);
+    if (workspaceScope != null)
+      workspaceAuthorization.save(task.id().toString(), task.workspaceId(), workspaceScope);
+    if (maxCostMicros != null) costs.bindLimit(runId.toString(), task.modelMode(), maxCostMicros);
   }
 }

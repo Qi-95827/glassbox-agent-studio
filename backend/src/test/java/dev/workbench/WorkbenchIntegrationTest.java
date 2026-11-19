@@ -2401,10 +2401,12 @@ class WorkbenchIntegrationTest {
     assertEquals(dev.workbench.domain.TaskEntryKind.REQUIREMENT, task.entryKind());
     assertFalse(task.writeEnabled());
     assertNull(task.workspaceId());
-    assertTrue(
+    boolean carriesEntryGuidance =
         repo.handoffs(runId).stream()
-            .map(h -> (Handoff) h.get("PAYLOAD"))
-            .anyMatch(h -> h.constraints().stream().anyMatch(c -> c.contains("任务入口：需求"))));
+                .map(h -> (Handoff) h.get("PAYLOAD"))
+                .anyMatch(h -> h.constraints().stream().anyMatch(c -> c.contains("任务入口：需求")))
+            || plans.find(runId).stream().anyMatch(node -> node.label().contains("需求说明"));
+    assertTrue(carriesEntryGuidance, "需求入口应通过交接或规则计划携带入口约定");
     assertTrue(reports.render(runId).contains("用户选择的入口：需求"));
     assertTrue(
         repo.agentToolGrants(runId).stream()

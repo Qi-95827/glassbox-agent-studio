@@ -12,6 +12,8 @@ public enum StopCause {
   MODEL_RATE_LIMIT(RunStatus.FAILED),
   TOKEN_USAGE_UNKNOWN(RunStatus.LIMITED),
   TOKEN_LIMIT(RunStatus.LIMITED),
+  /** 可计价上界预留或实际结算超过硬费用预算。 */
+  COST_LIMIT(RunStatus.LIMITED),
   TOOL_CALL_LIMIT(RunStatus.LIMITED),
   AGENT_TOOL_LIMIT(RunStatus.LIMITED),
   ROLE_TOOL_LIMIT(RunStatus.LIMITED),

@@ -19,6 +19,7 @@ import dev.workbench.task.RunLimits;
 import dev.workbench.task.RunRecordService;
 import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.RunHandoverService;
+import dev.workbench.workspace.WorkspaceAuthorizationService;
 import dev.workbench.workspace.WorkspaceService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -43,6 +44,9 @@ public class RunService {
   private final EntryPolicyService entryPolicies;
   private final AgentContextAssembler contexts;
   private final WorkflowScheduler workflows;
+  private final dev.workbench.task.CostService costs;
+  private final EntryRouteService entryRoutes;
+  private final WorkspaceAuthorizationService workspaceAuthorization;
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
   private final Set<String> paused = ConcurrentHashMap.newKeySet();
@@ -52,6 +56,39 @@ public class RunService {
   /** 测试注入点：在派发前同步观察数据库提交结果。 */
   volatile Runnable beforeDispatch = () -> {};
 
+  @org.springframework.beans.factory.annotation.Autowired
+  public RunService(
+      RunRecordService repository,
+      TaskCreationService taskCreations,
+      AgentExecutor agent,
+      ObjectMapper json,
+      WorkspaceService workspaces,
+      BugService bugs,
+      BugIntakeService intakes,
+      RunHandoverService handovers,
+      EntryPolicyService entryPolicies,
+      AgentContextAssembler contexts,
+      WorkflowScheduler workflows,
+      dev.workbench.task.CostService costs,
+      EntryRouteService entryRoutes,
+      WorkspaceAuthorizationService workspaceAuthorization) {
+    this.repository = repository;
+    this.taskCreations = taskCreations;
+    this.agent = agent;
+    this.json = json;
+    this.workspaces = workspaces;
+    this.bugs = bugs;
+    this.intakes = intakes;
+    this.handovers = handovers;
+    this.entryPolicies = entryPolicies;
+    this.contexts = contexts;
+    this.workflows = workflows;
+    this.costs = costs;
+    this.entryRoutes = entryRoutes;
+    this.workspaceAuthorization = workspaceAuthorization;
+  }
+
+  /** 兼容只构造队列控制边界的单元测试；入口路由、目录授权和费用在完整上下文中由 Spring 注入。 */
   public RunService(
       RunRecordService repository,
       TaskCreationService taskCreations,
@@ -64,17 +101,21 @@ public class RunService {
       EntryPolicyService entryPolicies,
       AgentContextAssembler contexts,
       WorkflowScheduler workflows) {
-    this.repository = repository;
-    this.taskCreations = taskCreations;
-    this.agent = agent;
-    this.json = json;
-    this.workspaces = workspaces;
-    this.bugs = bugs;
-    this.intakes = intakes;
-    this.handovers = handovers;
-    this.entryPolicies = entryPolicies;
-    this.contexts = contexts;
-    this.workflows = workflows;
+    this(
+        repository,
+        taskCreations,
+        agent,
+        json,
+        workspaces,
+        bugs,
+        intakes,
+        handovers,
+        entryPolicies,
+        contexts,
+        workflows,
+        null,
+        null,
+        null);
   }
 
   /** 重启后不能假设此前未结束的调用已经成功。 */
@@ -109,18 +150,36 @@ public class RunService {
     if (hasFileList && fileScope != null)
       throw new IllegalArgumentException("请使用文件列表或单文件字段，不能同时指定。");
     List<String> fileScopes = List.of();
+    WorkspaceAuthorizationService.Prepared workspaceScope = null;
     boolean writeEnabled = Boolean.TRUE.equals(request.writeEnabled());
     boolean memoryEnabled = Boolean.TRUE.equals(request.memoryEnabled());
     String bugId = request.bugId() == null || request.bugId().isBlank() ? null : request.bugId();
     if (bugId != null
         && (workspaceId == null || bugs.list().stream().noneMatch(b -> b.id().equals(bugId))))
       throw new IllegalArgumentException("模拟 Bug 必须关联有效工作区。");
+    List<String> directoryScopes =
+        request.directoryScopes() == null ? List.of() : request.directoryScopes();
+    List<String> excludedPaths =
+        request.excludedPaths() == null ? List.of() : request.excludedPaths();
+    Long maxCostMicros = request.maxCostMicros();
+    if (!directoryScopes.isEmpty() && workspaceId == null)
+      throw new IllegalArgumentException("目录授权必须选择工作区。");
+    if (!excludedPaths.isEmpty() && directoryScopes.isEmpty())
+      throw new IllegalArgumentException("排除规则必须配合目录授权使用。");
     if (workspaceId != null) {
       var requested =
           hasFileList
               ? request.fileScopes()
               : fileScope == null ? List.<String>of() : List.of(fileScope);
-      fileScopes = new AuthorizedFileSet(requested).paths();
+      if (workspaceAuthorization != null) {
+        workspaceScope =
+            workspaceAuthorization.prepare(workspaceId, requested, directoryScopes, excludedPaths);
+        fileScopes = workspaceScope.effectiveFiles();
+      } else {
+        fileScopes = new AuthorizedFileSet(requested).paths();
+      }
+      if (fileScopes.isEmpty())
+        throw new IllegalArgumentException("请选择至少一个授权文件或目录。");
       try {
         if (json.writeValueAsString(fileScopes).length() > 20_000)
           throw new IllegalArgumentException("授权文件路径总长度超过允许范围。");
@@ -181,6 +240,20 @@ public class RunService {
         };
     List<String> effectiveAcceptance =
         entryValidation == null ? acceptance : entryValidation.acceptance();
+    EntryRouteService.Decision routeDecision =
+        entryRoutes == null
+            ? null
+            : entryRoutes.route(
+                entryKind,
+                workspaceId,
+                writeEnabled,
+                fileScopes,
+                directoryScopes,
+                request.workflowTemplate());
+    String selectedTemplate =
+        request.workflowTemplate() != null
+            ? request.workflowTemplate()
+            : routeDecision == null ? null : routeDecision.templateId();
     String taskId = RunRecordService.id();
     String runId = RunRecordService.id();
     var task =
@@ -205,7 +278,7 @@ public class RunService {
             rounds, tools, perTool, tokenLimit, identicalLimit, seconds, agentRounds, agentTools);
     boolean reviewPlan = Boolean.TRUE.equals(request.reviewPlan());
     WorkflowTemplate template =
-        request.workflowTemplate() == null ? null : workflows.template(request.workflowTemplate());
+        selectedTemplate == null ? null : workflows.template(selectedTemplate);
     if (reviewPlan && template == null) throw new IllegalArgumentException("只有动态模板支持执行前确认。");
     if (template == null && request.nodeBudgets() != null && !request.nodeBudgets().isEmpty())
       throw new IllegalArgumentException("只有动态模板支持节点预算。");
@@ -227,7 +300,10 @@ public class RunService {
           createdMessage,
           null,
           false,
-          entryValidation);
+          entryValidation,
+          routeDecision,
+          workspaceScope,
+          maxCostMicros);
     } else {
       taskCreations.persist(
           task,
@@ -236,7 +312,10 @@ public class RunService {
           reviewPlan ? "工作流计划已保存，等待用户确认。" : "工作流计划已保存，等待执行。",
           template,
           reviewPlan,
-          entryValidation);
+          entryValidation,
+          routeDecision,
+          workspaceScope,
+          maxCostMicros);
     }
     // 事务已提交；待确认计划仍等待用户批准，不触发派发。
     if (!reviewPlan) dispatchAfterCommit(runId);
@@ -371,6 +450,7 @@ public class RunService {
 
     String nextId = RunRecordService.id();
     repository.createRecoveryRun(java.util.UUID.fromString(nextId), original, checkpoint);
+    if (costs != null) costs.inheritLimit(oldId, nextId);
     dispatchRecovery(nextId, checkpoint.stage(), checkpoint.toolResult());
     return nextId;
   }
@@ -910,7 +990,7 @@ public class RunService {
   }
 
   private AgentRuntime runtimeFor(String runId, String agentId, RunControl control) {
-    return new ControlledAgentRuntime(runId, agentId, control, repository);
+    return new ControlledAgentRuntime(runId, agentId, control, repository, null, costs, workspaceAuthorization);
   }
 
   private Handoff buildDelegation(RunSnapshot run, TaskDefinition task, String agentId) {

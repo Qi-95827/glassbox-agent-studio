@@ -7,7 +7,9 @@ import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.control.RunControl;
+import dev.workbench.task.CostService;
 import dev.workbench.task.RunRecordService;
+import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -18,11 +20,14 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final RunControl control;
   private final RunRecordService repository;
   private final RunControl.NodePolicy nodePolicy;
+  private final CostService costs;
+  private final WorkspaceAuthorizationService authorization;
   private AgentAssemblySnapshot.Components assembly;
+  private CostService.Reservation costReservation = CostService.Reservation.NONE;
 
   ControlledAgentRuntime(
       String runId, String agentId, RunControl control, RunRecordService repository) {
-    this(runId, agentId, control, repository, null);
+    this(runId, agentId, control, repository, null, null, null);
   }
 
   ControlledAgentRuntime(
@@ -31,24 +36,98 @@ final class ControlledAgentRuntime implements AgentRuntime {
       RunControl control,
       RunRecordService repository,
       RunControl.NodePolicy nodePolicy) {
+    this(runId, agentId, control, repository, nodePolicy, null, null);
+  }
+
+  ControlledAgentRuntime(
+      String runId,
+      String agentId,
+      RunControl control,
+      RunRecordService repository,
+      RunControl.NodePolicy nodePolicy,
+      CostService costs) {
+    this(runId, agentId, control, repository, nodePolicy, costs, null);
+  }
+
+  ControlledAgentRuntime(
+      String runId,
+      String agentId,
+      RunControl control,
+      RunRecordService repository,
+      RunControl.NodePolicy nodePolicy,
+      CostService costs,
+      WorkspaceAuthorizationService authorization) {
     this.runId = Objects.requireNonNull(runId);
     this.agentId = Objects.requireNonNull(agentId);
     this.control = Objects.requireNonNull(control);
     this.repository = Objects.requireNonNull(repository);
     this.nodePolicy = nodePolicy;
+    this.costs = costs;
+    this.authorization = authorization;
   }
 
   @Override
   public void beforeModel(ModelKind model) {
     if (assembly == null || ModelKind.forMode(assembly.model().mode()) != model)
       throw new IllegalStateException("模型来源与本次 Agent 装配记录不一致。");
-    control.beginModel(agentId, model, nodePolicy);
+    if (costs != null) costReservation = costs.reserve(runId, model);
+    try {
+      control.beginModel(agentId, model, nodePolicy);
+    } catch (RuntimeException rejected) {
+      if (costs != null) {
+        costs.cancel(costReservation);
+        costReservation = CostService.Reservation.NONE;
+      }
+      throw rejected;
+    }
   }
 
   @Override
   public void modelResult(Integer input, Integer output) {
     control.finishModel(InvocationStatus.COMPLETED, input, output, null);
+    CostService.Settlement settlement = CostService.Settlement.NONE;
+    if (costs != null) {
+      settlement = costs.settle(costReservation, input, output);
+      costReservation = CostService.Reservation.NONE;
+    }
+    if (settlement.overBudgetMicros() > 0)
+      throw new dev.workbench.framework.control.StopExecution(
+          dev.workbench.domain.StopCause.COST_LIMIT,
+          "实际费用已超过硬预算：结算 "
+              + settlement.settledMicros()
+              + "，上限 "
+              + settlement.maxCostMicros()
+              + " 微单位；超支 "
+              + settlement.overBudgetMicros()
+              + " 已记账。");
+    if (settlement.unknown())
+      throw new dev.workbench.framework.control.StopExecution(
+          dev.workbench.domain.StopCause.TOKEN_USAGE_UNKNOWN,
+          "供应方未报告实际 Token 用量；费用硬预算保留原预留并停止后续调用。");
     control.checkTokenBudget();
+  }
+
+  @Override
+  public Integer maxOutputTokens() {
+    return costReservation.outputTokenUpperBound();
+  }
+
+  @Override
+  public void verifyModelInput(String input) {
+    Integer bound = costReservation.inputTokenUpperBound();
+    if (bound == null) return;
+    int bytes = input == null ? 0 : input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    if (bytes > bound) {
+      if (costs != null) costs.cancel(costReservation);
+      costReservation = CostService.Reservation.NONE;
+      throw new dev.workbench.framework.control.StopExecution(
+          dev.workbench.domain.StopCause.COST_LIMIT,
+          "模型输入可能超过价格版本的 Token 上界："
+              + bytes
+              + " 字节 > "
+              + bound
+              + "；本次调用未派发。");
+    }
   }
 
   @Override
@@ -66,6 +145,9 @@ final class ControlledAgentRuntime implements AgentRuntime {
   public UUID beforeTool(ToolKind tool, int version, String fingerprint) {
     if (assembly == null || !Objects.equals(assembly.tools().get(tool), version))
       throw new IllegalStateException("工具版本与本次 Agent 装配记录不一致。");
+    if (authorization != null)
+      authorization.requireCurrent(
+          repository.runSnapshot(runId).taskId().toString());
     return control.beginTool(agentId, tool, version, fingerprint, nodePolicy);
   }
 

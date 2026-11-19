@@ -233,14 +233,7 @@ public class HtmlReportService {
   }
 
   public static String redact(String html) {
-    String value = html == null ? "" : html;
-    value = value.replaceAll("[A-Za-z]:[\\\\/][^<>\\r\\n\\\"]+", "[已脱敏路径]");
-    value = value.replaceAll("/(?:Users|home|root)/[^<>\\r\\n\\\"]+", "[已脱敏路径]");
-    value = value.replaceAll("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "[已脱敏邮箱]");
-    value = value.replaceAll("sk-[A-Za-z0-9_-]{8,}", "[已脱敏密钥]");
-    value = value.replaceAll("ghp_[A-Za-z0-9]{8,}", "[已脱敏密钥]");
-    value = value.replaceAll("Bearer\\s+[A-Za-z0-9._-]{8,}", "Bearer [已脱敏]");
-    return value;
+    return SensitiveTextRedactor.redact(html);
   }
 
   /** 分诊和交付结论来自持久化记录；报告生成时只读组合，不重新执行测试。 */

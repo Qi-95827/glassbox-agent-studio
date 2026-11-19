@@ -46,6 +46,9 @@ public class WorkflowRecoveryService {
   private final TransactionTemplate tx;
   private final ObjectMapper json;
   private final WorkspaceService workspaces;
+  private final RunSnapshotService snapshots;
+  private final RecoveryLeaseService leases;
+  private final CostService costs;
 
   public WorkflowRecoveryService(
       RunRecordService runs,
@@ -55,7 +58,10 @@ public class WorkflowRecoveryService {
       RunRepository runStore,
       TransactionTemplate tx,
       ObjectMapper json,
-      WorkspaceService workspaces) {
+      WorkspaceService workspaces,
+      RunSnapshotService snapshots,
+      RecoveryLeaseService leases,
+      CostService costs) {
     this.runs = runs;
     this.plans = plans;
     this.evidenceStore = evidenceStore;
@@ -64,6 +70,9 @@ public class WorkflowRecoveryService {
     this.tx = tx;
     this.json = json;
     this.workspaces = workspaces;
+    this.snapshots = snapshots;
+    this.leases = leases;
+    this.costs = costs;
   }
 
   /** 调用方持有运行行锁，保存边界时与相应节点结算共用事务。*/
@@ -95,6 +104,8 @@ public class WorkflowRecoveryService {
             elapsed,
             boundary.sha256(),
             Instant.now().toString()));
+    // 同一事务保存周期快照，记录事件位置、累计预算和工作区指纹。
+    snapshots.capture(runId, plan, nodes, elapsed);
     runs.event(runId, EventType.CHECKPOINT_SAVED, "已保存工作流节点边界。");
   }
 
@@ -147,27 +158,36 @@ public class WorkflowRecoveryService {
   }
 
   public void recover(String runId, UUID checkpointId, UUID nextRunId) {
-    tx.executeWithoutResult(
-        ignored -> {
-          if (!runStore.lockForUpdate(runId)) throw new IllegalArgumentException("运行不存在。");
-          var run = runs.runSnapshot(runId);
-          if (run.status() != RunStatus.INTERRUPTED || runs.hasRecovery(runId))
-            throw new IllegalStateException("该运行当前无法申请恢复。");
-          var plan = plans.workflowPlan(runId);
-          var stored = verifyStoredBoundary(run, plan, checkpointId);
-          runs.createWorkflowRecoveryRun(
-              nextRunId,
-              run,
-              stored.boundary().template(),
-              plan.reviewRequired(),
-              stored.rounds(),
-              stored.tools(),
-              stored.elapsedMs());
-          var reused = new LinkedHashMap<String, UUID>();
-          stored.boundary().sources().forEach((key, source) -> reused.put(key, source.agentId()));
-          plans.attachRecovery(nextRunId.toString(), checkpointId, reused, RunRecordService.now());
-          runs.event(nextRunId.toString(), EventType.RECOVERY_STARTED, "已从动态工作流检查点恢复，保留原运行及累计消耗。");
-        });
+    var plan = plans.workflowPlan(runId);
+    if (plan == null) throw new IllegalStateException("该运行没有动态计划。");
+    snapshots.verifyLatest(runId, plan);
+    var lease =
+        leases.acquire(runId, "local-recovery", java.time.Duration.ofSeconds(60));
+    try {
+      tx.executeWithoutResult(          ignored -> {
+            if (!runStore.lockForUpdate(runId)) throw new IllegalArgumentException("运行不存在。");
+            var run = runs.runSnapshot(runId);
+            if (run.status() != RunStatus.INTERRUPTED || runs.hasRecovery(runId))
+              throw new IllegalStateException("该运行当前无法申请恢复。");
+            var stored = verifyStoredBoundary(run, plan, checkpointId);
+            runs.createWorkflowRecoveryRun(
+                nextRunId,
+                run,
+                stored.boundary().template(),
+                plan.reviewRequired(),
+                stored.rounds(),
+                stored.tools(),
+                stored.elapsedMs());
+            costs.inheritLimit(runId, nextRunId.toString());
+            var reused = new LinkedHashMap<String, UUID>();
+            stored.boundary().sources().forEach((key, source) -> reused.put(key, source.agentId()));
+            plans.attachRecovery(nextRunId.toString(), checkpointId, reused, RunRecordService.now());
+            runs.event(nextRunId.toString(), EventType.RECOVERY_STARTED, "已从动态工作流检查点恢复，保留原运行及累计消耗。");
+          });
+    } finally {
+      // 恢复尝试无论成功或失败都释放租约；重复恢复由父运行已有子运行和状态条件阻止。
+      leases.release(runId, lease.token());
+    }
   }
 
   /** 子运行恢复的逻辑节点必须持续对应同一父计划的原始实例。*/

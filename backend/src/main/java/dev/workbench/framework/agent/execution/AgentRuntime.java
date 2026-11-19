@@ -12,6 +12,14 @@ public interface AgentRuntime {
 
   void modelResult(Integer inputTokens, Integer outputTokens);
 
+  /** 价格版本允许的单次输出上限；没有硬费用预算时为空。 */
+  default Integer maxOutputTokens() {
+    return null;
+  }
+
+  /** 派发前核对输入规模是否超过价格版本的可计价上界。 */
+  default void verifyModelInput(String input) {}
+
   /** 在第一次模型调用之前提交已创建实例的实际装配。 */
   void assemblyResolved(AgentAssemblySnapshot.Components components);
 

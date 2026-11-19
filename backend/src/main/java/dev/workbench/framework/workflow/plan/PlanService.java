@@ -181,6 +181,13 @@ graphStore.flush();
     return graphStore.findPlan(runId);
   }
 
+  /** 服务端重新计算调整后的图摘要，并继续执行写作节点的独立审查约束。 */
+  public String adjustedGraphFingerprint(WorkflowPlan plan, List<PlanNode> nodes) {
+    if (plan.scope().allowsWrite()) requireIndependentReview(nodes);
+    return graphFingerprint(
+        nodes, plan.scope(), plan.authorizationSha256(), plan.maxAttempts());
+  }
+
   /** 固定计划的摘要不含状态与时间，用于发现图或装配引用发生意外变化。*/
   public List<PlanNode> checkedWorkflowNodes(String runId, WorkflowPlan plan) {
     var nodes = find(runId);

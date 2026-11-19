@@ -2,10 +2,17 @@ package dev.workbench.task;
 
 import dev.workbench.audit.AuditService;
 import dev.workbench.domain.EntryPolicyService;
+import dev.workbench.domain.EntryRouteService;
+import dev.workbench.external.ExternalActionService;
 import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.RunMetricsService;
+import dev.workbench.task.CostService;
+import dev.workbench.task.PlanProposalService;
+import dev.workbench.task.RunSnapshotService;
+import dev.workbench.task.SourceArtifactService;
 import dev.workbench.workspace.RunHandoverService;
+import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +31,14 @@ public class WorkbenchTaskService {
   private final RunHandoverService handovers;
   private final AuditService audit;
   private final EntryPolicyService entryPolicies;
+  private final EntryRouteService entryRoutes;
+  private final SourceArtifactService sourceArtifacts;
+  private final WorkspaceAuthorizationService workspaceAuthorization;
+  private final PlanProposalService planProposals;
+  private final RunSnapshotService snapshots;
+  private final dev.workbench.task.RecoveryLeaseService leases;
+  private final CostService costs;
+  private final ExternalActionService externalActions;
 
   public WorkbenchTaskService(
       RunRecordService repo,
@@ -34,7 +49,15 @@ public class WorkbenchTaskService {
       RunMetricsService metrics,
       RunHandoverService handovers,
       AuditService audit,
-      EntryPolicyService entryPolicies) {
+      EntryPolicyService entryPolicies,
+      EntryRouteService entryRoutes,
+      SourceArtifactService sourceArtifacts,
+      WorkspaceAuthorizationService workspaceAuthorization,
+      PlanProposalService planProposals,
+      RunSnapshotService snapshots,
+      dev.workbench.task.RecoveryLeaseService leases,
+      CostService costs,
+      ExternalActionService externalActions) {
     this.repo = repo;
     this.plans = plans;
     this.workflowRuns = workflowRuns;
@@ -44,6 +67,14 @@ public class WorkbenchTaskService {
     this.handovers = handovers;
     this.audit = audit;
     this.entryPolicies = entryPolicies;
+    this.entryRoutes = entryRoutes;
+    this.sourceArtifacts = sourceArtifacts;
+    this.workspaceAuthorization = workspaceAuthorization;
+    this.planProposals = planProposals;
+    this.snapshots = snapshots;
+    this.leases = leases;
+    this.costs = costs;
+    this.externalActions = externalActions;
   }
 
   public List<Map<String, Object>> tasks() {
@@ -68,6 +99,14 @@ public class WorkbenchTaskService {
     detail.put("run", run);
     detail.put("task", repo.task(taskId));
     detail.put("entryPolicy", entryPolicies.find(taskId));
+    detail.put("entryRoute", entryRoutes.find(taskId));
+    detail.put("sourceArtifacts", sourceArtifacts.find(taskId));
+    detail.put("workspaceScope", workspaceAuthorization.find(taskId));
+    detail.put("planProposals", plans.workflowPlan(id) == null ? List.of() : planProposals.list(id));
+    detail.put("snapshots", snapshots.find(id));
+    detail.put("recoveryLease", leases.find(id));
+    detail.put("costEstimate", costs.estimate(id));
+    detail.put("externalActions", externalActions.findByRun(id));
     detail.put("agents", repo.agents(id));
     detail.put("agentAssemblies", repo.agentAssemblies(id));
     detail.put("planNodes", plans.find(id));

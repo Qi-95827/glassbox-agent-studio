@@ -35,7 +35,7 @@ class RunServiceQueueTest {
             mock(WorkflowScheduler.class));
     service.shutdown();
     String runId = service.create(new CreateTaskRequest("任务", "normal", 4, 2, 30));
-    verify(creations).persist(any(), any(), any(), anyString(), any(), anyBoolean(), any());
+    verify(creations).persist(any(), any(), any(), anyString(), any(), anyBoolean(), any(), any(), any(), any());
     verify(repository)
         .finishStoppedRun(
             argThat(

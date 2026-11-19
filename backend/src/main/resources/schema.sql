@@ -227,3 +227,196 @@ CREATE TABLE IF NOT EXISTS task_entry_policies (task_id VARCHAR(36) PRIMARY KEY,
 -- AgentScope 会话状态沿用框架原表名、复合键、JSON 文本和版本列；旧库已有数据不迁移、不清空。
 CREATE TABLE IF NOT EXISTS agentscope_sessions (session_id VARCHAR(255) NOT NULL, state_key VARCHAR(255) NOT NULL, item_index INT NOT NULL DEFAULT 0, state_data CLOB NOT NULL, version BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (session_id, state_key, item_index));
 CREATE INDEX IF NOT EXISTS agentscope_sessions_session_idx ON agentscope_sessions (session_id);
+-- 任务 8：目录授权、排除规则、规则路由、计划调整和既有成果接入。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS max_cost_micros BIGINT;
+CREATE TABLE IF NOT EXISTS task_entry_routes (
+  task_id VARCHAR(36) PRIMARY KEY,
+  rule_code VARCHAR(80) NOT NULL,
+  requested_kind VARCHAR(30),
+  routed_kind VARCHAR(30) NOT NULL,
+  template_id VARCHAR(64),
+  template_version INT,
+  explanation_json CLOB NOT NULL,
+  decision_sha256 VARCHAR(64) NOT NULL,
+  created_at VARCHAR(40) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_workspace_scopes (
+  task_id VARCHAR(36) PRIMARY KEY,
+  workspace_id VARCHAR(36) NOT NULL,
+  directory_scopes_json CLOB NOT NULL,
+  excluded_paths_json CLOB NOT NULL,
+  explicit_files_json CLOB NOT NULL,
+  effective_files_json CLOB NOT NULL,
+  scope_sha256 VARCHAR(64) NOT NULL,
+  created_at VARCHAR(40) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_source_artifacts (
+  id VARCHAR(36) PRIMARY KEY,
+  task_id VARCHAR(36) NOT NULL,
+  kind VARCHAR(30) NOT NULL,
+  source_task_id VARCHAR(36) NOT NULL,
+  source_run_id VARCHAR(36) NOT NULL,
+  source_task_version INT NOT NULL,
+  artifact_sha256 VARCHAR(64) NOT NULL,
+  summary VARCHAR(500) NOT NULL,
+  content CLOB,
+  file_versions_json CLOB,
+  created_at VARCHAR(40) NOT NULL,
+  UNIQUE(task_id, kind, source_run_id)
+);
+ALTER TABLE task_source_artifacts ADD COLUMN IF NOT EXISTS content CLOB;
+ALTER TABLE task_source_artifacts ADD COLUMN IF NOT EXISTS file_versions_json CLOB;
+CREATE TABLE IF NOT EXISTS plan_adjustments (
+  id VARCHAR(36) PRIMARY KEY,
+  run_id VARCHAR(36) NOT NULL,
+  plan_version_id VARCHAR(36) NOT NULL,
+  version INT NOT NULL,
+  base_sha256 VARCHAR(64) NOT NULL,
+  proposal_json CLOB NOT NULL,
+  proposal_sha256 VARCHAR(64) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  applied_at VARCHAR(40),
+  UNIQUE(run_id, version)
+);
+-- 可管理评测数据集：草稿样本可编辑，发布版本不可变；批次绑定样本版本、配置和预算。
+CREATE TABLE IF NOT EXISTS evaluation_dataset_samples (
+  id VARCHAR(36) PRIMARY KEY,
+  dataset_key VARCHAR(40) NOT NULL,
+  code VARCHAR(40) NOT NULL,
+  title VARCHAR(120) NOT NULL,
+  goal VARCHAR(500) NOT NULL,
+  scenario VARCHAR(20) NOT NULL,
+  expected_status VARCHAR(30) NOT NULL,
+  max_rounds INT NOT NULL,
+  max_tools INT NOT NULL,
+  source_kind VARCHAR(30) NOT NULL,
+  source_ref VARCHAR(120),
+  redacted BOOLEAN NOT NULL,
+  version INT NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  UNIQUE(dataset_key, code)
+);
+CREATE TABLE IF NOT EXISTS evaluation_dataset_versions (
+  id VARCHAR(36) PRIMARY KEY,
+  dataset_key VARCHAR(40) NOT NULL,
+  version INT NOT NULL,
+  definition_json CLOB NOT NULL,
+  definition_sha256 VARCHAR(64) NOT NULL,
+  sample_count INT NOT NULL,
+  published_by VARCHAR(80) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  UNIQUE(dataset_key, version)
+);
+CREATE TABLE IF NOT EXISTS managed_evaluation_batches (
+  id VARCHAR(36) PRIMARY KEY,
+  dataset_key VARCHAR(40) NOT NULL,
+  dataset_version_id VARCHAR(36) NOT NULL,
+  definition_sha256 VARCHAR(64) NOT NULL,
+  config_json CLOB NOT NULL,
+  config_sha256 VARCHAR(64) NOT NULL,
+  status VARCHAR(30) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  finished_at VARCHAR(40)
+);
+CREATE TABLE IF NOT EXISTS managed_evaluation_cases (
+  id VARCHAR(36) PRIMARY KEY,
+  batch_id VARCHAR(36) NOT NULL,
+  sample_code VARCHAR(40) NOT NULL,
+  title VARCHAR(120) NOT NULL,
+  expected_status VARCHAR(30) NOT NULL,
+  run_id VARCHAR(36),
+  status VARCHAR(30) NOT NULL,
+  explanation VARCHAR(1000),
+  updated_at VARCHAR(40) NOT NULL,
+  UNIQUE(batch_id, sample_code)
+);
+-- 外部动作对账：保存动作标识、审批、目标版本和实际证据；未知结果保留人工核对。
+CREATE TABLE IF NOT EXISTS external_actions (
+  id VARCHAR(36) PRIMARY KEY,
+  run_id VARCHAR(36),
+  action_key VARCHAR(120) NOT NULL,
+  kind VARCHAR(40) NOT NULL,
+  status VARCHAR(30) NOT NULL,
+  approval_ref VARCHAR(80),
+  target VARCHAR(300) NOT NULL,
+  target_version VARCHAR(100),
+  payload_sha256 VARCHAR(64) NOT NULL,
+  result_evidence VARCHAR(2000),
+  attempts INT NOT NULL,
+  last_checked_at VARCHAR(40),
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  UNIQUE(action_key)
+);
+-- 周期快照与恢复租约：事件位置、计划版本、工作区指纹和累计预算必须可核验。
+CREATE TABLE IF NOT EXISTS run_snapshots (
+  id VARCHAR(36) PRIMARY KEY,
+  run_id VARCHAR(36) NOT NULL,
+  plan_version_id VARCHAR(36) NOT NULL,
+  event_seq BIGINT NOT NULL,
+  completed_nodes INT NOT NULL,
+  rounds INT NOT NULL,
+  tools INT NOT NULL,
+  elapsed_ms BIGINT NOT NULL,
+  workspace_fingerprint VARCHAR(64),
+  budget_sha256 VARCHAR(64) NOT NULL,
+  boundary_sha256 VARCHAR(64) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  UNIQUE(run_id, event_seq)
+);
+CREATE TABLE IF NOT EXISTS recovery_leases (
+  run_id VARCHAR(36) PRIMARY KEY,
+  lease_owner VARCHAR(120) NOT NULL,
+  lease_token VARCHAR(36) NOT NULL,
+  acquired_at VARCHAR(40) NOT NULL,
+  expires_at VARCHAR(40) NOT NULL,
+  status VARCHAR(20) NOT NULL
+);
+-- 费用估价与硬预算：价格版本、派发前预留、完成结算和未知用量。
+CREATE TABLE IF NOT EXISTS provider_price_versions (
+  id VARCHAR(36) PRIMARY KEY,
+  provider VARCHAR(60) NOT NULL,
+  model VARCHAR(80) NOT NULL,
+  version INT NOT NULL,
+  currency VARCHAR(10) NOT NULL,
+  input_micros_per_million BIGINT NOT NULL,
+  output_micros_per_million BIGINT NOT NULL,
+  input_token_upper_bound INT NOT NULL,
+  output_token_upper_bound INT NOT NULL,
+  active BOOLEAN NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  UNIQUE(provider, model, version)
+);
+CREATE TABLE IF NOT EXISTS run_cost_limits (
+  run_id VARCHAR(36) PRIMARY KEY,
+  max_cost_micros BIGINT NOT NULL,
+  price_version_id VARCHAR(36) NOT NULL,
+  reserved_micros BIGINT NOT NULL,
+  settled_micros BIGINT NOT NULL,
+  unknown_calls INT NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cost_reservations (
+  id VARCHAR(36) PRIMARY KEY,
+  run_id VARCHAR(36) NOT NULL,
+  reserved_micros BIGINT NOT NULL,
+  settled_micros BIGINT,
+  status VARCHAR(20) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL
+);
+ALTER TABLE cost_reservations ADD COLUMN IF NOT EXISTS over_budget_micros BIGINT DEFAULT 0 NOT NULL;
+ALTER TABLE run_cost_limits ADD COLUMN IF NOT EXISTS overage_micros BIGINT DEFAULT 0 NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_cost_reservations_run ON cost_reservations(run_id);
+CREATE INDEX IF NOT EXISTS idx_external_actions_run ON external_actions(run_id);
+CREATE TABLE IF NOT EXISTS external_action_checks (
+  id VARCHAR(36) PRIMARY KEY,
+  action_id VARCHAR(36) NOT NULL,
+  outcome VARCHAR(30) NOT NULL,
+  evidence VARCHAR(2000),
+  checked_at VARCHAR(40) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_external_action_checks_action ON external_action_checks(action_id);

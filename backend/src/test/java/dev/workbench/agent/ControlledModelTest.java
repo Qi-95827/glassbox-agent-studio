@@ -11,10 +11,12 @@ import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.model.ControlledModel;
 import io.agentscope.core.model.ChatResponse;
 import io.agentscope.core.model.ChatUsage;
+import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Flux;
 
 /** 验证分片不会提前结束模型调用，也不会丢失最终报告的用量。 */
@@ -98,6 +100,31 @@ class ControlledModelTest {
         RuntimeException.class,
         () -> controlled.stream(List.of(), List.of(), null).collectList().block());
     verify(runtime, never()).event(eq(EventType.MODEL_FINISHED), anyString());
+    assertNotNull(failure.get());
+  }
+
+  @Test
+  void hardBudgetConstrainsOutputAndVerifiesInputBeforeDispatch() {
+    when(runtime.maxOutputTokens()).thenReturn(128);
+    when(delegate.stream(anyList(), anyList(), any(GenerateOptions.class)))
+        .thenReturn(Flux.just(ChatResponse.builder().build()));
+    controlled.stream(List.of(), List.of(), null).collectList().block();
+    ArgumentCaptor<GenerateOptions> options = ArgumentCaptor.forClass(GenerateOptions.class);
+    verify(delegate).stream(anyList(), anyList(), options.capture());
+    assertEquals(128, options.getValue().getMaxTokens());
+    assertEquals(128, options.getValue().getMaxCompletionTokens());
+    verify(runtime).verifyModelInput(anyString());
+  }
+
+  @Test
+  void rejectedInputNeverDispatchesModelCall() {
+    doThrow(new IllegalStateException("input exceeds priced upper bound"))
+        .when(runtime)
+        .verifyModelInput(anyString());
+    assertThrows(
+        RuntimeException.class,
+        () -> controlled.stream(List.of(), List.of(), null).collectList().block());
+    verify(delegate, never()).stream(anyList(), anyList(), any());
     assertNotNull(failure.get());
   }
 

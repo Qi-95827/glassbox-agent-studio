@@ -64,6 +64,43 @@ public class PlanGraphRepository {
     sessions.find(WorkflowPlanEntity.class, planId).setGraphSha256(sha256);
   }
 
+  /** 应用待确认计划调整：只改节点预算和依赖边，节点身份、定义与权限保持原值。 */
+  @Transactional
+  public void applyAdjustment(
+      String planId,
+      String runId,
+      java.util.List<String> nodeKeys,
+      java.util.Map<String, Integer> modelBudgets,
+      java.util.Map<String, Integer> toolBudgets,
+      java.util.Map<String, java.util.List<String>> dependencies,
+      java.util.Map<String, String> nodeIdsByKey) {
+    for (String key : nodeKeys) {
+      sessions
+          .createQuery(
+              """
+              update PlanNodeEntity n set n.maxNodeModelCalls = :model, n.maxNodeToolCalls = :tools
+              where n.planVersionId = :planId and n.nodeKey = :key
+              """)
+          .setParameter("planId", planId)
+          .setParameter("key", key)
+          .setParameter("model", modelBudgets.get(key))
+          .setParameter("tools", toolBudgets.get(key))
+          .executeUpdate();
+    }
+    sessions
+        .createQuery("delete from PlanNodeDependencyEntity d where d.id.runId = :runId")
+        .setParameter("runId", runId)
+        .executeUpdate();
+    for (var entry : dependencies.entrySet()) {
+      String nodeId = nodeIdsByKey.get(entry.getKey());
+      for (String prerequisiteKey : entry.getValue()) {
+        String prerequisiteId = nodeIdsByKey.get(prerequisiteKey);
+        sessions.persist(new PlanNodeDependencyEntity(runId, nodeId, prerequisiteId));
+      }
+    }
+    sessions.flush();
+  }
+
   @Transactional(readOnly = true)
   public WorkflowPlan findPlan(String runId) {
     var plan = findPlanEntity(runId);
