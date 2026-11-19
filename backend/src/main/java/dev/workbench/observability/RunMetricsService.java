@@ -3,9 +3,9 @@ package dev.workbench.observability;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanRepository;
-import dev.workbench.task.RunRepository;
-import dev.workbench.task.WorkflowExecutionRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.task.RunRecordService;
+import dev.workbench.task.WorkflowExecutionService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -16,12 +16,12 @@ import org.springframework.stereotype.Service;
 /** 按真实 Agent 实例关联调用；统计是数据库快照，不推算未知用量。 */
 @Service
 public class RunMetricsService {
-  private final RunRepository records;
-  private final PlanRepository plans;
-  private final WorkflowExecutionRepository workflows;
+  private final RunRecordService records;
+  private final PlanService plans;
+  private final WorkflowExecutionService workflows;
 
   public RunMetricsService(
-      RunRepository records, PlanRepository plans, WorkflowExecutionRepository workflows) {
+      RunRecordService records, PlanService plans, WorkflowExecutionService workflows) {
     this.records = records;
     this.plans = plans;
     this.workflows = workflows;

@@ -1,31 +1,53 @@
 package dev.workbench.bug;
 
-import dev.workbench.task.RunRepository;
+import dev.workbench.persistence.entity.BugCheckCaseEntity;
+import dev.workbench.persistence.entity.BugCheckEntity;
+import dev.workbench.persistence.entity.BugFeedbackEntity;
+import dev.workbench.persistence.repository.BugCheckCaseRepository;
+import dev.workbench.persistence.repository.BugCheckRepository;
+import dev.workbench.persistence.repository.BugFeedbackRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import org.springframework.jdbc.core.JdbcTemplate;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.LinkedCaseInsensitiveMap;
 
 /** 模拟 Bug 和受限验证；测试结果不能代替用户对真实代码的审查。 */
 @Service
 public class BugService {
   private static final String BUG_ID = "MOCK-PY-001";
   private static final String IMAGE = "python:3.12-alpine";
+  private static final String RUNNING = "RUNNING";
   private final WorkspaceService workspaces;
-  private final JdbcTemplate db;
+  private final BugCheckRepository bugChecks;
+  private final BugCheckCaseRepository bugCases;
+  private final BugFeedbackRepository feedbackRows;
   private final ApprovalService approvals;
+  private final TransactionTemplate tx;
 
-  public BugService(WorkspaceService workspaces, JdbcTemplate db, ApprovalService approvals) {
+  public BugService(
+      WorkspaceService workspaces,
+      BugCheckRepository bugChecks,
+      BugCheckCaseRepository bugCases,
+      BugFeedbackRepository feedbackRows,
+      ApprovalService approvals,
+      TransactionTemplate tx) {
     this.workspaces = workspaces;
-    this.db = db;
+    this.bugChecks = bugChecks;
+    this.bugCases = bugCases;
+    this.feedbackRows = feedbackRows;
     this.approvals = approvals;
+    this.tx = tx;
   }
 
   private static final Bug SIMULATED_BUG =
@@ -38,6 +60,7 @@ public class BugService {
           1,
           "add(2, 1) 返回 1 而不是 3；unittest 中 test_add 断言失败（AssertionError: 1 != 3）。",
           "test_add",
+          "test_calc.TestCalc.test_add",
           "AssertionError: 1 != 3");
 
   public List<Bug> list() {
@@ -49,9 +72,40 @@ public class BugService {
     return SIMULATED_BUG;
   }
 
-  private static boolean matchesTargetSymptom(String output) {
-    return output.contains("FAIL: " + SIMULATED_BUG.expectedFailingTest())
-        && output.contains(SIMULATED_BUG.expectedFailureText());
+  private static boolean matchesTargetSymptom(UnittestResults.Report report) {
+    UnittestResults.Case target = report.find(SIMULATED_BUG.expectedTestId());
+    return target != null
+        && target.outcome() == UnittestResults.Outcome.FAILED
+        && hasExactAssertion(target.message(), SIMULATED_BUG.expectedFailureText());
+  }
+
+  /** 断言按完整行比较；`1 != 3` 不能命中 `1 != 30`。 */
+  private static boolean hasExactAssertion(String message, String expected) {
+    String wanted = expected.strip();
+    return message.lines().map(String::strip).anyMatch(wanted::equals);
+  }
+
+  /** 复现只接受目标用例自身输出的预期断言；其他用例的相同断言不能替代。 */
+  static CheckStatus reproductionStatus(int exit, UnittestResults.Report report) {
+    if (exit != 0 && exit != 1) return CheckStatus.ERROR;
+    UnittestResults.Case target = report.find(SIMULATED_BUG.expectedTestId());
+    if (exit == 0)
+      return target != null && target.outcome() == UnittestResults.Outcome.SKIPPED
+          ? CheckStatus.TARGET_SKIPPED
+          : CheckStatus.NOT_REPRODUCED;
+    if (target == null) return CheckStatus.TARGET_NOT_EXECUTED;
+    if (target.outcome() == UnittestResults.Outcome.SKIPPED) return CheckStatus.TARGET_SKIPPED;
+    return matchesTargetSymptom(report) ? CheckStatus.FAILURES_OBSERVED : CheckStatus.TARGET_MISMATCH;
+  }
+
+  /** 回归要求目标用例实际执行并通过；被跳过、缺失或其他失败都不能报告已修复。 */
+  static CheckStatus regressionStatus(int exit, UnittestResults.Report report) {
+    if (exit != 0 && exit != 1) return CheckStatus.ERROR;
+    UnittestResults.Case target = report.find(SIMULATED_BUG.expectedTestId());
+    if (target == null) return CheckStatus.TARGET_NOT_EXECUTED;
+    if (target.outcome() == UnittestResults.Outcome.SKIPPED) return CheckStatus.TARGET_SKIPPED;
+    if (target.outcome() != UnittestResults.Outcome.PASSED) return CheckStatus.FAILED;
+    return exit == 0 ? CheckStatus.PASSED : CheckStatus.FAILED;
   }
 
   private static String bugContext() {
@@ -59,8 +113,27 @@ public class BugService {
         + SIMULATED_BUG.source()
         + " v"
         + SIMULATED_BUG.version()
+        + "；目标用例："
+        + SIMULATED_BUG.expectedTestId()
         + "；预期现象："
         + SIMULATED_BUG.expectedSymptom();
+  }
+
+  /** 逐用例证据随检查记录输出，便于用户核对断言来自哪个用例。 */
+  private static String caseSummary(List<UnittestResults.Case> cases) {
+    if (cases.isEmpty()) return "逐用例结果：未解析到测试用例。";
+    StringBuilder summary = new StringBuilder("逐用例结果：");
+    for (UnittestResults.Case test : cases) {
+      summary
+          .append("\n- ")
+          .append(test.testId())
+          .append(" [")
+          .append(test.outcome())
+          .append("]");
+      if (!test.message().isBlank())
+        summary.append(" ").append(test.message().replace('\n', ' '));
+    }
+    return summary.toString();
   }
 
   /** 当前受支持的模拟 Bug；未知标识在计划创建和检查执行时拒绝。 */
@@ -69,24 +142,59 @@ public class BugService {
   }
 
   public List<Map<String, Object>> checks(String workspaceId) {
-    return db.queryForList(
-        "SELECT id,bug_id,workspace_id,run_id,kind,status,CAST(output AS VARCHAR) AS"
-            + " output,duration_ms,created_at,workspace_fingerprint FROM bug_checks WHERE"
-            + " workspace_id=? ORDER BY created_at DESC",
-        workspaceId);
+    return withCases(bugChecks.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId));
   }
 
   /** 只返回明确记录属于该运行的检测，历史和手动检测不猜测归属。 */
   public List<Map<String, Object>> checksForRun(String runId) {
-    Integer exists =
-        db.queryForObject("SELECT COUNT(*) FROM runs WHERE id=?", Integer.class, runId);
-    if (exists == null || exists != 1)
+    if (bugChecks.countRuns(runId) != 1)
       throw new org.springframework.dao.EmptyResultDataAccessException(1);
-    return db.queryForList(
-        "SELECT id,bug_id,workspace_id,run_id,kind,status,CAST(output AS VARCHAR) AS"
-            + " output,duration_ms,created_at,workspace_fingerprint FROM bug_checks WHERE run_id=?"
-            + " ORDER BY created_at,id",
-        runId);
+    return withCases(bugChecks.findByRunIdOrderByCreatedAtAscIdAsc(runId));
+  }
+
+  /** 逐用例证据一次读取后按检查分组，避免每个检测重复查询。 */
+  private List<Map<String, Object>> withCases(List<BugCheckEntity> checks) {
+    if (checks.isEmpty()) return List.of();
+    List<String> ids = checks.stream().map(BugCheckEntity::getId).toList();
+    Map<String, List<BugCheckCaseEntity>> casesByCheck =
+        bugCases.findCasesForChecks(ids).stream()
+            .collect(
+                Collectors.groupingBy(
+                    row -> row.getId().getCheckId(), Collectors.toList()));
+    return checks.stream()
+        .map(
+            check ->
+                checkMap(check, casesByCheck.getOrDefault(check.getId(), List.of())))
+        .toList();
+  }
+
+  private static Map<String, Object> checkMap(
+      BugCheckEntity check, List<BugCheckCaseEntity> cases) {
+    Map<String, Object> row = new LinkedCaseInsensitiveMap<>();
+    row.put("ID", check.getId());
+    row.put("BUG_ID", check.getBugId());
+    row.put("WORKSPACE_ID", check.getWorkspaceId());
+    row.put("RUN_ID", check.getRunId());
+    row.put("KIND", check.getKind());
+    row.put("STATUS", check.getStatus());
+    row.put("OUTPUT", check.getOutput());
+    row.put("DURATION_MS", check.getDurationMs());
+    row.put("CREATED_AT", check.getCreatedAt());
+    row.put("WORKSPACE_FINGERPRINT", check.getWorkspaceFingerprint());
+    row.put(
+        "CASES",
+        cases.stream()
+            .map(
+                test -> {
+                  Map<String, Object> value = new LinkedCaseInsensitiveMap<>();
+                  value.put("SEQUENCE_NO", test.getId().getSequenceNo());
+                  value.put("TEST_ID", test.getTestId());
+                  value.put("RESULT", test.getResult());
+                  value.put("MESSAGE", test.getMessage());
+                  return value;
+                })
+            .toList());
+    return row;
   }
 
   /** 模拟平台反馈由用户显式提交；关闭前检查当前代码版本的回归和审查。 */
@@ -112,21 +220,29 @@ public class BugService {
                   a -> "APPROVED".equals(a.get("STATUS")) && current.equals(a.get("FINGERPRINT")));
       if (!passed || !approved) throw new IllegalStateException("需要当前代码版本的通过回归及有效人工审查，才能记录用户确认关闭。");
     }
-    String id = RunRepository.id();
-    db.update(
-        "INSERT INTO bug_feedback VALUES(?,?,?,?,?,?)",
-        id,
-        bugId,
-        workspaceId,
-        status.name(),
-        note,
-        RunRepository.now());
-    return db.queryForMap("SELECT * FROM bug_feedback WHERE id=?", id);
+    String id = RunRecordService.id();
+    BugFeedbackEntity saved =
+        feedbackRows.saveAndFlush(
+            new BugFeedbackEntity(
+                id, bugId, workspaceId, status.name(), note, RunRecordService.now()));
+    return feedbackMap(saved);
   }
 
   public List<Map<String, Object>> feedbackHistory(String workspaceId) {
-    return db.queryForList(
-        "SELECT * FROM bug_feedback WHERE workspace_id=? ORDER BY created_at DESC", workspaceId);
+    return feedbackRows.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId).stream()
+        .map(BugService::feedbackMap)
+        .toList();
+  }
+
+  private static Map<String, Object> feedbackMap(BugFeedbackEntity row) {
+    Map<String, Object> value = new LinkedCaseInsensitiveMap<>();
+    value.put("ID", row.getId());
+    value.put("BUG_ID", row.getBugId());
+    value.put("WORKSPACE_ID", row.getWorkspaceId());
+    value.put("STATUS", row.getStatus());
+    value.put("NOTE", row.getNote());
+    value.put("CREATED_AT", row.getCreatedAt());
+    return value;
   }
 
   /** 固定测试入口；无发现的测试不能当作通过。 */
@@ -142,15 +258,8 @@ public class BugService {
   /** 任务验证必须核对运行与 Bug、工作区的归属。 */
   public Check runForTask(
       String runId, String bugId, String workspaceId, CheckKind kind, Runnable check) {
-    Integer matches =
-        db.queryForObject(
-            "SELECT COUNT(*) FROM runs r JOIN tasks t ON r.task_id=t.id WHERE r.id=? AND"
-                + " r.status='RUNNING' AND t.bug_id=? AND t.workspace_id=?",
-            Integer.class,
-            runId,
-            bugId,
-            workspaceId);
-    if (matches == null || matches != 1) throw new IllegalArgumentException("测试记录与运行、Bug 或工作区不匹配。");
+    if (bugChecks.countRunningRunForTask(runId, RUNNING, bugId, workspaceId) != 1)
+      throw new IllegalArgumentException("测试记录与运行、Bug 或工作区不匹配。");
     return runInternal(runId, bugId, workspaceId, kind, check);
   }
 
@@ -181,12 +290,12 @@ public class BugService {
     }
     String source = root.toString();
     if (source.contains(",")) throw new IllegalArgumentException("工作区路径含逗号，不能安全传入容器挂载参数。");
-    String name = "agent-check-" + RunRepository.id().substring(0, 12);
+    String name = "agent-check-" + RunRecordService.id().substring(0, 12);
     // 容器内固定执行 unittest：无网络、只读挂载、低权限、资源上限，不接受模型提供的 shell 命令。
     String script =
         "import unittest,sys; s=unittest.defaultTestLoader.discover('tests',pattern='test_*.py');"
             + " n=s.countTestCases(); print('TESTS_DISCOVERED='+str(n),flush=True);"
-            + " r=unittest.TextTestRunner(verbosity=2).run(s); sys.exit(3 if n==0 else (0 if"
+            + " r=unittest.TextTestRunner(stream=sys.stdout,verbosity=2).run(s); sys.exit(3 if n==0 else (0 if"
             + " r.wasSuccessful() else 1))";
     List<String> command =
         List.of(
@@ -255,19 +364,11 @@ public class BugService {
       String text = output.get(5, TimeUnit.SECONDS);
       int exit = process.exitValue();
       boolean discovered = text.matches("(?s).*TESTS_DISCOVERED=[1-9][0-9]*.*");
-      boolean targetMatched = kind == CheckKind.REPRODUCE && matchesTargetSymptom(text);
+      UnittestResults.Report report = UnittestResults.parse(text);
       CheckStatus status;
       if (!discovered) status = exit == 3 ? CheckStatus.NEEDS_INFO : CheckStatus.ERROR;
-      else if (kind == CheckKind.REPRODUCE)
-        status =
-            exit == 0
-                ? CheckStatus.NOT_REPRODUCED
-                : exit == 1
-                    ? (targetMatched ? CheckStatus.FAILURES_OBSERVED : CheckStatus.TARGET_MISMATCH)
-                    : CheckStatus.ERROR;
-      else
-        status =
-            exit == 0 ? CheckStatus.PASSED : exit == 1 ? CheckStatus.FAILED : CheckStatus.ERROR;
+      else if (kind == CheckKind.REPRODUCE) status = reproductionStatus(exit, report);
+      else status = regressionStatus(exit, report);
       String after;
       try {
         after = workspaces.verificationFingerprint(workspaceId);
@@ -285,9 +386,12 @@ public class BugService {
               + "\n固定命令：python unittest discover；容器无网络、工作区只读；退出码："
               + exit
               + "\n"
+              + caseSummary(report.cases())
+              + "\n"
               + text,
           elapsed(start),
-          fingerprint.equals(after) ? fingerprint : null);
+          fingerprint.equals(after) ? fingerprint : null,
+          report.cases());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       stopContainer(name);
@@ -344,7 +448,7 @@ public class BugService {
       CheckStatus status,
       String output,
       long duration) {
-    return save(runId, bugId, workspaceId, kind, status, output, duration, null);
+    return save(runId, bugId, workspaceId, kind, status, output, duration, null, List.of());
   }
 
   private Check save(
@@ -356,23 +460,46 @@ public class BugService {
       String output,
       long duration,
       String fingerprint) {
-    String id = RunRepository.id(), time = RunRepository.now();
-    db.update(
-        "INSERT INTO"
-            + " bug_checks(id,bug_id,workspace_id,kind,status,output,duration_ms,created_at,workspace_fingerprint,run_id)"
-            + " VALUES(?,?,?,?,?,?,?,?,?,?)",
-        id,
-        bugId,
-        workspaceId,
-        kind.name(),
-        status.name(),
-        output,
-        duration,
-        time,
-        fingerprint,
-        runId);
+    return save(runId, bugId, workspaceId, kind, status, output, duration, fingerprint, List.of());
+  }
+
+  private Check save(
+      String runId,
+      String bugId,
+      String workspaceId,
+      CheckKind kind,
+      CheckStatus status,
+      String output,
+      long duration,
+      String fingerprint,
+      List<UnittestResults.Case> cases) {
+    String id = RunRecordService.id(), time = RunRecordService.now();
+    BugCheckEntity checkRow =
+        new BugCheckEntity(
+            id,
+            bugId,
+            workspaceId,
+            runId,
+            kind.name(),
+            status.name(),
+            output,
+            duration,
+            time,
+            fingerprint);
+    List<BugCheckCaseEntity> caseRows = new ArrayList<>(cases.size());
+    for (int i = 0; i < cases.size(); i++) {
+      UnittestResults.Case test = cases.get(i);
+      caseRows.add(
+          new BugCheckCaseEntity(id, i, test.testId(), test.outcome().name(), test.message()));
+    }
+    // 检测与逐用例证据一起提交；任一写入失败不留下不完整结果。
+    tx.executeWithoutResult(
+        ignored -> {
+          bugChecks.saveAndFlush(checkRow);
+          if (!caseRows.isEmpty()) bugCases.saveAllAndFlush(caseRows);
+        });
     return new Check(
-        id, bugId, workspaceId, kind, status, output, duration, time, fingerprint, runId);
+        id, bugId, workspaceId, kind, status, output, duration, time, fingerprint, runId, cases);
   }
 
   public enum CheckKind {
@@ -391,6 +518,8 @@ public class BugService {
     NEEDS_INFO,
     FAILURES_OBSERVED,
     TARGET_MISMATCH,
+    TARGET_NOT_EXECUTED,
+    TARGET_SKIPPED,
     NOT_REPRODUCED,
     PASSED,
     FAILED,
@@ -409,6 +538,7 @@ public class BugService {
       int version,
       String expectedSymptom,
       String expectedFailingTest,
+      String expectedTestId,
       String expectedFailureText) {}
 
   public record Check(
@@ -421,5 +551,31 @@ public class BugService {
       long durationMs,
       String createdAt,
       String workspaceFingerprint,
-      String runId) {}
+      String runId,
+      List<UnittestResults.Case> cases) {
+    public Check(
+        String id,
+        String bugId,
+        String workspaceId,
+        CheckKind kind,
+        CheckStatus status,
+        String output,
+        long durationMs,
+        String createdAt,
+        String workspaceFingerprint,
+        String runId) {
+      this(
+          id,
+          bugId,
+          workspaceId,
+          kind,
+          status,
+          output,
+          durationMs,
+          createdAt,
+          workspaceFingerprint,
+          runId,
+          List.of());
+    }
+  }
 }

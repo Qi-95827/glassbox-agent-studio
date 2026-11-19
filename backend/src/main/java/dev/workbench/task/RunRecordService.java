@@ -6,12 +6,27 @@ import dev.workbench.domain.*;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.skill.SkillAssignment;
-import dev.workbench.framework.skill.SkillId;
 import dev.workbench.framework.skill.SkillRef;
 import dev.workbench.framework.tool.AgentToolGrant;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.orchestration.Handoff;
+import dev.workbench.persistence.repository.AgentConfigurationRepository;
+import dev.workbench.persistence.repository.HandoffRepository;
+import dev.workbench.persistence.repository.InvocationRepository;
+import dev.workbench.persistence.repository.RunCheckpointRepository;
+import dev.workbench.persistence.entity.EventEntity;
+import dev.workbench.persistence.entity.RunEntity;
+import dev.workbench.persistence.entity.TaskEntity;
+import dev.workbench.persistence.entity.TaskRoleBudgetEntity;
+import dev.workbench.persistence.entity.TaskToolBudgetEntity;
+import dev.workbench.persistence.repository.EventRepository;
+import dev.workbench.persistence.repository.RunData;
+import dev.workbench.persistence.repository.RunRepository;
+import dev.workbench.persistence.repository.TaskData;
+import dev.workbench.persistence.repository.TaskRepository;
+import dev.workbench.persistence.repository.TaskRoleBudgetRepository;
+import dev.workbench.persistence.repository.TaskToolBudgetRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -21,30 +36,56 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Repository;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.LinkedCaseInsensitiveMap;
 
-/** 持久化边界：将领域枚举转换为稳定编码，保留已有查询接口格式。 */
-@Repository
-public class RunRepository {
-  private final JdbcTemplate db;
+/** 持久化边界：将领域枚举转换为稳定编码，保留已有查询接口格式。*/
+@Service
+public class RunRecordService {
+  private static final int BUDGET_POLICY_VERSION = 1;
+  private final AgentConfigurationRepository agentConfiguration;
+  private final HandoffRepository handoffRows;
+  private final RunCheckpointRepository checkpointRows;
   private final TransactionTemplate tx;
   private final ObjectMapper json;
-  private final PlanRepository plans;
+  private final PlanService plans;
   private final HandoffValidator handoffValidator;
+  private final RunRepository runRows;
+  private final EventRepository eventRows;
+  private final InvocationRepository invocationRows;
+  private final TaskRepository taskRows;
+  private final TaskRoleBudgetRepository roleBudgetRows;
+  private final TaskToolBudgetRepository toolBudgetRows;
 
-  public RunRepository(
-      JdbcTemplate db,
+  public RunRecordService(
+      AgentConfigurationRepository agentConfiguration,
+      HandoffRepository handoffRows,
+      RunCheckpointRepository checkpointRows,
       TransactionTemplate tx,
       ObjectMapper json,
-      PlanRepository plans,
-      HandoffValidator handoffValidator) {
-    this.db = db;
+      PlanService plans,
+      HandoffValidator handoffValidator,
+      RunRepository runRows,
+      EventRepository eventRows,
+      InvocationRepository invocationRows,
+      TaskRepository taskRows,
+      TaskRoleBudgetRepository roleBudgetRows,
+      TaskToolBudgetRepository toolBudgetRows) {
+    this.agentConfiguration = agentConfiguration;
+    this.handoffRows = handoffRows;
+    this.checkpointRows = checkpointRows;
     this.tx = tx;
     this.json = json;
     this.plans = plans;
     this.handoffValidator = handoffValidator;
+    this.runRows = runRows;
+    this.eventRows = eventRows;
+    this.invocationRows = invocationRows;
+    this.taskRows = taskRows;
+    this.roleBudgetRows = roleBudgetRows;
+    this.toolBudgetRows = toolBudgetRows;
   }
 
   public static String id() {
@@ -56,143 +97,133 @@ public class RunRepository {
   }
 
   public List<Map<String, Object>> tasks() {
-    return db.queryForList(
-        """
-        SELECT t.*,r.status,r.id AS run_id,
-          (r.status='PENDING' AND p.review_required IS TRUE AND p.approved_at IS NULL)
-          AS plan_review_pending
-        FROM tasks t
-        LEFT JOIN runs r ON r.id=(SELECT latest.id FROM runs latest WHERE latest.task_id=t.id
-          ORDER BY latest.created_at DESC,latest.id DESC LIMIT 1)
-        LEFT JOIN workflow_plans p ON p.run_id=r.id
-        ORDER BY t.created_at DESC
-        """);
+    return taskRows.findAllWithLatestRun(RunStatus.PENDING.name()).stream()
+        .map(
+            task -> {
+              var row = taskMap(task.task());
+              row.put("STATUS", task.status());
+              row.put("RUN_ID", task.runId());
+              row.put("PLAN_REVIEW_PENDING", task.planReviewPending());
+              return row;
+            })
+        .toList();
   }
 
   public Map<String, Object> task(String id) {
-    return db.queryForMap("SELECT * FROM tasks WHERE id=?", id);
+    return taskMap(findTask(id));
+  }
+
+  private TaskData findTask(String id) {
+    return taskRows.findTaskById(id).orElseThrow(() -> new EmptyResultDataAccessException(1));
+  }
+
+  private static Map<String, Object> taskMap(TaskData task) {
+    Map<String, Object> row = new LinkedCaseInsensitiveMap<>();
+    row.put("ID", task.id());
+    row.put("GOAL", task.goal());
+    row.put("SCENARIO", task.scenario());
+    row.put("CREATED_AT", task.createdAt());
+    row.put("ARCHIVED_AT", task.archivedAt());
+    row.put("MODEL_MODE", task.modelMode());
+    row.put("WORKSPACE_ID", task.workspaceId());
+    row.put("FILE_SCOPE", task.fileScope());
+    row.put("WRITE_ENABLED", task.writeEnabled());
+    row.put("BUG_ID", task.bugId());
+    row.put("MEMORY_ENABLED", task.memoryEnabled());
+    row.put("CONSTRAINTS_JSON", task.constraintsJson());
+    row.put("ACCEPTANCE_JSON", task.acceptanceJson());
+    row.put("ENTRY_KIND", task.entryKind());
+    row.put("FILE_SCOPES_JSON", task.fileScopesJson());
+    row.put("VERSION", task.version());
+    return row;
+  }
+
+  /** 归档只改变任务列表可见性，不删除运行、证据或 Git 产物。*/
+  public void setTaskArchived(String taskId, boolean archived) {
+    if (taskRows.setArchivedAt(taskId, archived ? now() : null) != 1)
+      throw new IllegalArgumentException("任务不存在。");
   }
 
   public Map<String, Object> run(String id) {
-    return db.queryForMap("SELECT * FROM runs WHERE id=?", id);
+    return findRun(id).apiFields();
   }
 
-  /** 将数据库记录转换为只读领域对象，避免执行层依赖列名和强制类型转换。 */
   public RunSnapshot runSnapshot(String id) {
-    Map<String, Object> row = run(id);
-    Object parent = row.get("PARENT_ID");
-    return new RunSnapshot(
-        UUID.fromString(row.get("ID").toString()),
-        UUID.fromString(row.get("TASK_ID").toString()),
-        parent == null ? null : UUID.fromString(parent.toString()),
-        RunStatus.valueOf(row.get("STATUS").toString()),
-        ((Number) row.get("ROUNDS")).intValue(),
-        ((Number) row.get("TOOLS")).intValue(),
-        ((Number) row.get("MAX_ROUNDS")).intValue(),
-        ((Number) row.get("MAX_TOOLS")).intValue(),
-        ((Number) row.get("MAX_PER_TOOL")).intValue(),
-        row.get("MAX_REPORTED_TOKENS") == null
-            ? null
-            : ((Number) row.get("MAX_REPORTED_TOKENS")).longValue(),
-        row.get("MAX_IDENTICAL_TOOLS") == null
-            ? null
-            : ((Number) row.get("MAX_IDENTICAL_TOOLS")).intValue(),
-        ((Number) row.get("MAX_SECONDS")).intValue(),
-        ((Number) row.get("ELAPSED_MS")).longValue(),
-        row.get("MAX_AGENT_ROUNDS") == null
-            ? null
-            : ((Number) row.get("MAX_AGENT_ROUNDS")).intValue(),
-        row.get("MAX_AGENT_TOOLS") == null
-            ? null
-            : ((Number) row.get("MAX_AGENT_TOOLS")).intValue());
+    return findRun(id).snapshot();
   }
 
-  /** 当前任务版本；补充等信息变更会递增，提交方用它做乐观并发校验。 */
+  private RunData findRun(String id) {
+    return runRows.findRunById(id).orElseThrow(() -> new EmptyResultDataAccessException(1));
+  }
+
+  /** 当前任务版本；补充等信息变更会递增，提交方用它做乐观并发校验。*/
   public int taskVersion(String taskId) {
-    Integer version =
-        db.queryForObject("SELECT version FROM tasks WHERE id=?", Integer.class, taskId);
-    return version == null ? 1 : version;
+    return taskRows
+        .findVersionById(taskId)
+        .orElseThrow(() -> new EmptyResultDataAccessException(1));
   }
 
-  public TaskDefinition taskDefinition(String id) {    Map<String, Object> row = task(id);
-    String fileScope = (String) row.get("FILE_SCOPE");
-    List<String> fileScopes = readTextList(row.get("FILE_SCOPES_JSON"));
+  public TaskDefinition taskDefinition(String id) {
+    var task = findTask(id);
+    String fileScope = task.fileScope();
+    List<String> fileScopes = readTextList(task.fileScopesJson());
     if (fileScopes.isEmpty() && fileScope != null) fileScopes = List.of(fileScope);
     return new TaskDefinition(
-        UUID.fromString(row.get("ID").toString()),
-        row.get("GOAL").toString(),
-        Scenario.fromCode(row.get("SCENARIO").toString()),
-        ModelMode.fromCode(row.get("MODEL_MODE").toString()),
-        (String) row.get("WORKSPACE_ID"),
+        UUID.fromString(task.id()),
+        task.goal(),
+        Scenario.fromCode(task.scenario()),
+        ModelMode.fromCode(task.modelMode()),
+        task.workspaceId(),
         fileScope,
-        Boolean.TRUE.equals(row.get("WRITE_ENABLED")),
-        (String) row.get("BUG_ID"),
-        Boolean.TRUE.equals(row.get("MEMORY_ENABLED")),
-        readTextList(row.get("CONSTRAINTS_JSON")),
-        readTextList(row.get("ACCEPTANCE_JSON")),
-        TaskEntryKind.valueOf(row.get("ENTRY_KIND").toString()),
+        task.writeEnabled(),
+        task.bugId(),
+        task.memoryEnabled(),
+        readTextList(task.constraintsJson()),
+        readTextList(task.acceptanceJson()),
+        TaskEntryKind.valueOf(task.entryKind()),
         fileScopes,
         roleBudgets(id),
         toolBudgets(id));
   }
 
-  /** 读取任务角色策略；未知版本或角色不能当作未设置。 */
+  /** 读取任务角色策略；未知版本或角色不能当作未设置。*/
   public Map<AgentRole, RoleBudget> roleBudgets(String taskId) {
     var result = new java.util.EnumMap<AgentRole, RoleBudget>(AgentRole.class);
-    db.query(
-        "SELECT role_code,policy_version,max_model_calls,max_tool_calls FROM task_role_budgets"
-            + " WHERE task_id=?",
-        (org.springframework.jdbc.core.RowCallbackHandler)
-            row -> {
-              if (row.getInt("policy_version") != 1)
-                throw new IllegalStateException("角色限额策略版本不受支持。");
-              try {
-                AgentRole role = AgentRole.valueOf(row.getString("role_code"));
-                Object models = row.getObject("max_model_calls");
-                Object tools = row.getObject("max_tool_calls");
-                var budget =
-                    new RoleBudget(
-                        models == null ? null : ((Number) models).intValue(),
-                        tools == null ? null : ((Number) tools).intValue());
-                if (result.put(role, budget) != null) throw new IllegalStateException("角色限额重复。");
-              } catch (IllegalArgumentException | NullPointerException e) {
-                throw new IllegalStateException("角色限额策略无法读取。", e);
-              }
-            },
-        taskId);
+    for (var row : taskRows.findRoleBudgets(taskId)) {
+      if (!Integer.valueOf(BUDGET_POLICY_VERSION).equals(row.version()))
+        throw new IllegalStateException("角色限额策略版本不受支持。");
+      try {
+        AgentRole role = AgentRole.valueOf(row.roleCode());
+        if (result.put(role, new RoleBudget(row.maxModels(), row.maxTools())) != null)
+          throw new IllegalStateException("角色限额重复。");
+      } catch (IllegalArgumentException | NullPointerException e) {
+        throw new IllegalStateException("角色限额策略无法读取。", e);
+      }
+    }
     return Map.copyOf(result);
   }
 
-  /** 读取指定工具的策略；未知版本或类型不能当作未设置。 */
+  /** 读取指定工具的策略；未知版本或类型不能当作未设置。*/
   public Map<ToolKind, Integer> toolBudgets(String taskId) {
     var result = new java.util.EnumMap<ToolKind, Integer>(ToolKind.class);
-    db.query(
-        "SELECT tool_kind,policy_version,max_calls FROM task_tool_budgets_v2 WHERE task_id=?",
-        (org.springframework.jdbc.core.RowCallbackHandler)
-            row -> {
-              if (row.getInt("policy_version") != 1)
-                throw new IllegalStateException("工具限额策略版本不受支持。");
-              try {
-                ToolKind kind = ToolKind.valueOf(row.getString("tool_kind"));
-                int limit = row.getInt("max_calls");
-                if (row.wasNull() || limit < 0 || limit > 20 || result.put(kind, limit) != null)
-                  throw new IllegalStateException("工具限额策略无效。");
-              } catch (IllegalArgumentException | NullPointerException e) {
-                throw new IllegalStateException("工具限额策略无法读取。", e);
-              }
-            },
-        taskId);
+    for (var row : taskRows.findToolBudgets(taskId)) {
+      if (!Integer.valueOf(BUDGET_POLICY_VERSION).equals(row.version()))
+        throw new IllegalStateException("工具限额策略版本不受支持。");
+      try {
+        ToolKind kind = ToolKind.valueOf(row.toolKind());
+        Integer limit = row.maxCalls();
+        if (limit == null || limit < 0 || limit > 20 || result.put(kind, limit) != null)
+          throw new IllegalStateException("工具限额策略无效。");
+      } catch (IllegalArgumentException | NullPointerException e) {
+        throw new IllegalStateException("工具限额策略无法读取。", e);
+      }
+    }
     return Map.copyOf(result);
   }
 
-  /** 限额计算使用本运行已启动实例的角色，不能由模型自行声明。 */
+  /** 限额计算使用本运行已启动实例的角色，不能由模型自行声明。*/
   public AgentRole agentRole(String runId, String agentId) {
-    String code =
-        db.queryForObject(
-            "SELECT role_code FROM agent_invocations WHERE run_id=? AND id=?",
-            String.class,
-            runId,
-            agentId);
+    String code = invocationRows.findRoleCode(runId, agentId);
     try {
       return AgentRole.valueOf(code);
     } catch (IllegalArgumentException | NullPointerException e) {
@@ -200,15 +231,11 @@ public class RunRepository {
     }
   }
 
-  private List<String> readTextList(Object value) {
+  private List<String> readTextList(String text) {
     try {
-      String text =
-          value instanceof java.sql.Clob clob
-              ? clob.getSubString(1, (int) clob.length())
-              : String.valueOf(value);
       return json.readValue(
           text, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
-    } catch (java.sql.SQLException | JsonProcessingException e) {
+    } catch (JsonProcessingException e) {
       throw new IllegalStateException("任务结构化要求无法读取。", e);
     }
   }
@@ -221,7 +248,7 @@ public class RunRepository {
     }
   }
 
-  /** 先验证摘要和事件引用，再转换检查点；拒绝不兼容或损坏的数据。 */
+  /** 先验证摘要和事件引用，再转换检查点；拒绝不兼容或损坏的数据。*/
   public CheckpointSnapshot checkedCheckpoint(String id) {
     Map<String, Object> row = checkpoint(id);
     if (!validCheckpoint(row)) throw new IllegalArgumentException("检查点损坏、缺少关联事件或版本不兼容。");
@@ -237,15 +264,35 @@ public class RunRepository {
   }
 
   public List<Map<String, Object>> events(String id) {
-    return db.queryForList("SELECT * FROM events WHERE run_id=? ORDER BY id", id);
+    return eventRows.findByRunId(id).stream().map(RunRecordService::eventMap).toList();
+  }
+
+  private static Map<String, Object> eventMap(EventEntity event) {
+    Map<String, Object> row = new LinkedHashMap<>();
+    row.put("ID", event.getId());
+    row.put("RUN_SEQ", event.getRunSeq());
+    row.put("RUN_ID", event.getRunId());
+    row.put("EVENT_TYPE", event.getEventType());
+    row.put("MESSAGE", event.getMessage());
+    row.put("CREATED_AT", event.getCreatedAt());
+    row.put("REASON_CODE", event.getReasonCode());
+    row.put("PLAN_VERSION_ID", event.getPlanVersionId());
+    row.put("NODE_ID", event.getNodeId());
+    row.put("ATTEMPT_ID", event.getAttemptId());
+    row.put("AGENT_ID", event.getAgentId());
+    row.put("CHECK_ID", event.getCheckId());
+    row.put("MODEL_CALL_ID", event.getModelCallId());
+    row.put("TOOL_CALL_ID", event.getToolCallId());
+    return row;
   }
 
   public List<Map<String, Object>> agents(String runId) {
-    return db.queryForList(
-        "SELECT * FROM agent_invocations WHERE run_id=? ORDER BY created_at", runId);
+    return invocationRows.findAgentCalls(runId).stream()
+        .map(InvocationRepository.AgentData::apiFields)
+        .toList();
   }
 
-  /** 读取真实实例所认领节点的定义；历史节点没有记录时返回空。 */
+  /** 读取真实实例所认领节点的定义；历史节点没有记录时返回空。*/
   public PlannedAgentDefinition plannedDefinitionForAgent(String runId, String agentId) {
     UUID instanceId = UUID.fromString(agentId);
     var matching =
@@ -258,10 +305,10 @@ public class RunRepository {
     return new PlannedAgentDefinition(node.definitionRef(), node.definitionSha256());
   }
 
-  /** 历史计划引用和摘要可同时为空；不根据当前定义伪造历史摘要。 */
+  /** 历史计划引用和摘要可同时为空；不根据当前定义伪造历史摘要。*/
   public record PlannedAgentDefinition(AgentDefinitionRef reference, String sha256) {}
 
-  /** 完整装配及兼容查询所需投影在同一事务内发布。 */
+  /** 完整装配及兼容查询所需投影在同一事务内发布。*/
   public void recordAgentAssembly(String runId, String agentId, AgentAssemblySnapshot snapshot) {
     tx.executeWithoutResult(
         ignored -> {
@@ -277,68 +324,46 @@ public class RunRepository {
           recordAgentSkills(agentId, selected.skills());
           recordAgentVersionedToolGrants(agentId, selected.tools());
           try {
-            db.update(
-                "INSERT INTO agent_assemblies(agent_id,recorded_at,payload) VALUES(?,?,?)",
-                agentId,
-                now(),
-                json.writeValueAsString(snapshot));
+            agentConfiguration.insertAssembly(agentId, now(), json.writeValueAsString(snapshot));
           } catch (JsonProcessingException e) {
             throw new IllegalStateException("实际装配快照无法保存。", e);
           }
         });
   }
 
-  /** 历史没有快照的实例不会由现行配置推测补齐。 */
+  /** 历史没有快照的实例不会由现行配置推测补齐。*/
   public List<AgentAssemblySnapshot.Recorded> agentAssemblies(String runId) {
-    return db.query(
-        """
-        SELECT s.agent_id,s.recorded_at,s.payload FROM agent_assemblies s
-        JOIN agent_invocations a ON a.id=s.agent_id
-        WHERE a.run_id=? ORDER BY a.created_at,a.id
-        """,
-        (row, index) -> {
-          try {
-            return new AgentAssemblySnapshot.Recorded(
-                UUID.fromString(row.getString("agent_id")),
-                Instant.parse(row.getString("recorded_at")),
-                json.readValue(row.getString("payload"), AgentAssemblySnapshot.class));
-          } catch (JsonProcessingException e) {
-            throw new IllegalStateException("实际装配快照版本不受支持或内容无法读取。", e);
-          }
-        },
-        runId);
+    return agentConfiguration.findAssemblies(runId).stream()
+        .map(
+            row -> {
+              try {
+                return new AgentAssemblySnapshot.Recorded(
+                    UUID.fromString(row.agentId()),
+                    Instant.parse(row.recordedAt()),
+                    json.readValue(row.payload(), AgentAssemblySnapshot.class));
+              } catch (JsonProcessingException e) {
+                throw new IllegalStateException("实际装配快照版本不受支持或内容无法读取。", e);
+              }
+            })
+        .toList();
   }
 
-  /** 仅记录运行中实例实际解析的定义；历史空值不自动推断。 */
+  /** 仅记录运行中实例实际解析的定义；历史空值不自动推断。*/
   public void recordAgentDefinition(
       String runId, String agentId, AgentDefinitionRef ref, String sha256) {
     java.util.Objects.requireNonNull(ref, "Agent 定义引用不能为空");
     if (sha256 == null || !sha256.matches("[0-9a-f]{64}"))
       throw new IllegalArgumentException("Agent 定义摘要无效。");
-    int changed =
-        db.update(
-            "UPDATE agent_invocations SET definition_id=?,definition_version=?,definition_sha256=?"
-                + " WHERE run_id=? AND id=? AND status=? AND definition_id IS NULL"
-                + " AND definition_version IS NULL AND definition_sha256 IS NULL",
-            ref.id(),
-            ref.version(),
-            sha256,
-            runId,
-            agentId,
-            InvocationStatus.RUNNING.name());
-    if (changed != 1) throw new IllegalStateException("Agent 不存在、已结束或定义已记录。");
+    if (!invocationRows.recordDefinition(runId, agentId, ref.id(), ref.version(), sha256))
+      throw new IllegalStateException("Agent 不存在、已结束或定义已记录。");
   }
 
-  /** 记录已装配技能的不可变引用；不记录提示正文，也不授予工具权限。 */
+  /** 记录已装配技能的不可变引用；不记录提示正文，也不授予工具权限。*/
   public void recordAgentSkills(String agentId, List<SkillRef> skills) {
     tx.executeWithoutResult(
         s -> {
-          Integer count =
-              db.queryForObject(
-                  "SELECT COUNT(*) FROM agent_invocations WHERE id=? AND status='RUNNING'",
-                  Integer.class,
-                  agentId);
-          if (count == null || count != 1) throw new IllegalStateException("Agent 未处于可装配技能的状态。");
+          if (!invocationRows.isRunningAgent(agentId))
+            throw new IllegalStateException("Agent 未处于可装配技能的状态。");
           for (SkillRef skill : skills) {
             if (skill == null
                 || skill.id() == null
@@ -346,32 +371,16 @@ public class RunRepository {
                 || skill.contentSha256() == null
                 || !skill.contentSha256().matches("[0-9a-f]{64}"))
               throw new IllegalArgumentException("技能引用无效。");
-            db.update(
-                "INSERT INTO agent_skills VALUES(?,?,?,?,?)",
-                agentId,
-                skill.id().name(),
-                skill.version(),
-                skill.contentSha256(),
-                now());
+            agentConfiguration.insertSkill(agentId, skill, now());
           }
         });
   }
 
   public List<SkillAssignment> skills(String runId) {
-    return db.query(
-        "SELECT s.* FROM agent_skills s JOIN agent_invocations a ON a.id=s.agent_id WHERE"
-            + " a.run_id=? ORDER BY a.created_at,s.skill_id",
-        (r, i) ->
-            new SkillAssignment(
-                UUID.fromString(r.getString("agent_id")),
-                SkillId.valueOf(r.getString("skill_id")),
-                r.getInt("skill_version"),
-                r.getString("content_sha256"),
-                Instant.parse(r.getString("created_at"))),
-        runId);
+    return agentConfiguration.findSkills(runId);
   }
 
-  /** 注册集合和空集合标记在同一事务保存；失败时不应启动模型。 */
+  /** 注册集合和空集合标记在同一事务保存；失败时不应启动模型。*/
   public void recordAgentToolGrants(String agentId, java.util.Set<ToolKind> tools) {
     if (tools == null || tools.stream().anyMatch(java.util.Objects::isNull))
       throw new IllegalArgumentException("工具集合无效。");
@@ -380,7 +389,7 @@ public class RunRepository {
     saveAgentToolGrants(agentId, versions);
   }
 
-  /** 新装配必须提供明确的服务端工具契约版本。 */
+  /** 新装配必须提供明确的服务端工具契约版本。*/
   public void recordAgentVersionedToolGrants(
       String agentId, java.util.Map<ToolKind, Integer> tools) {
     if (tools == null
@@ -393,74 +402,31 @@ public class RunRepository {
   private void saveAgentToolGrants(String agentId, java.util.Map<ToolKind, Integer> tools) {
     tx.executeWithoutResult(
         status -> {
-          Integer count =
-              db.queryForObject(
-                  "SELECT COUNT(*) FROM agent_invocations WHERE id=? AND status=?",
-                  Integer.class,
-                  agentId,
-                  InvocationStatus.RUNNING.name());
-          if (count == null || count != 1) throw new IllegalStateException("Agent 未处于可装配工具的状态。");
-          db.update("INSERT INTO agent_tool_loads(agent_id,loaded_at) VALUES(?,?)", agentId, now());
-          for (var tool : tools.entrySet()) {
-            db.update(
-                "INSERT INTO agent_tool_grants(agent_id,tool_kind,tool_version) VALUES(?,?,?)",
-                agentId,
-                tool.getKey().name(),
-                tool.getValue());
-          }
+          if (!invocationRows.isRunningAgent(agentId))
+            throw new IllegalStateException("Agent 未处于可装配工具的状态。");
+          agentConfiguration.insertToolGrants(agentId, tools, now());
         });
   }
 
-  /** 只查询本运行的装配标记；缺失标记与已登记空集合分开。 */
+  /** 缺失标记与已登记空集合分开。*/
   public List<AgentToolGrant> agentToolGrants(String runId) {
-    return db.query(
-        "SELECT l.agent_id,l.loaded_at FROM agent_tool_loads l JOIN agent_invocations a"
-            + " ON a.id=l.agent_id WHERE a.run_id=? ORDER BY a.created_at,a.id",
-        (r, i) -> {
-          String agentId = r.getString("agent_id");
-          var tools =
-              db.query(
-                  "SELECT tool_kind,tool_version FROM agent_tool_grants WHERE agent_id=? ORDER BY"
-                      + " tool_kind",
-                  (row, n) ->
-                      new AgentToolGrant.ToolVersion(
-                          ToolKind.valueOf(row.getString("tool_kind")),
-                          (Integer) row.getObject("tool_version")),
-                  agentId);
-          return new AgentToolGrant(
-              UUID.fromString(agentId),
-              Instant.parse(r.getString("loaded_at")),
-              tools.stream().map(AgentToolGrant.ToolVersion::tool).toList(),
-              tools);
-        },
-        runId);
+    return agentConfiguration.findToolGrants(runId);
   }
 
   public List<Map<String, Object>> tools(String runId) {
-    return db.queryForList(
-        "SELECT * FROM tool_invocations WHERE run_id=? ORDER BY created_at", runId);
+    return invocationRows.findToolCalls(runId).stream()
+        .map(InvocationRepository.ToolData::apiFields)
+        .toList();
   }
 
   public List<Map<String, Object>> models(String runId) {
-    return db.queryForList(
-        "SELECT * FROM model_invocations WHERE run_id=? ORDER BY created_at", runId);
+    return invocationRows.findModelCalls(runId).stream()
+        .map(InvocationRepository.ModelData::apiFields)
+        .toList();
   }
 
   public void startModel(String id, String runId, String agentId, ModelKind model) {
-    String t = now();
-    db.update(
-        "INSERT INTO model_invocations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        id,
-        runId,
-        agentId,
-        model.code(),
-        InvocationStatus.RUNNING.name(),
-        null,
-        null,
-        null,
-        null,
-        t,
-        t);
+    invocationRows.insertModel(id, runId, agentId, model, now());
   }
 
   public void finishModel(
@@ -470,17 +436,7 @@ public class RunRepository {
       Integer output,
       String error,
       long duration) {
-    db.update(
-        "UPDATE model_invocations SET"
-            + " status=?,input_tokens=?,output_tokens=?,duration_ms=?,error_message=?,updated_at=?"
-            + " WHERE id=? AND status='RUNNING'",
-        status.name(),
-        input,
-        output,
-        duration,
-        error,
-        now(),
-        id);
+    invocationRows.finishModel(id, status, input, output, error, duration, now());
   }
 
   public void startTool(String id, String runId, String agentId, String toolName) {
@@ -489,25 +445,10 @@ public class RunRepository {
 
   public void startTool(String id, String runId, String agentId, String toolName, Integer version) {
     if (version != null && version < 1) throw new IllegalArgumentException("工具版本无效。");
-    String t = now();
-    db.update(
-        "INSERT INTO"
-            + " tool_invocations(id,run_id,agent_id,tool_name,status,result,error_message,duration_ms,created_at,updated_at,tool_version)"
-            + " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        id,
-        runId,
-        agentId,
-        toolName,
-        InvocationStatus.RUNNING.name(),
-        null,
-        null,
-        null,
-        t,
-        t,
-        version);
+    invocationRows.insertTool(id, runId, agentId, toolName, version, now());
   }
 
-  /** 已启用重复保护时，调用记录与指纹在同一事务中写入。 */
+  /** 已启用重复保护时，调用记录与指纹在同一事务中写入。*/
   public void startTool(
       String id, String runId, String agentId, ToolKind kind, String fingerprint) {
     startTool(id, runId, agentId, kind, null, fingerprint);
@@ -520,13 +461,7 @@ public class RunRepository {
     tx.executeWithoutResult(
         s -> {
           startTool(id, runId, agentId, kind.recordName(), version);
-          db.update(
-              "INSERT INTO tool_attempt_fingerprints(run_id,tool_id,kind,fingerprint)"
-                  + " VALUES(?,?,?,?)",
-              runId,
-              id,
-              kind.name(),
-              fingerprint);
+          invocationRows.insertToolFingerprint(runId, id, kind, fingerprint);
         });
   }
 
@@ -535,7 +470,7 @@ public class RunRepository {
     finishTool(id, status, result, error, duration, null);
   }
 
-  /** 只读工具的资源版本与调用终态一起保存；旧调用没有该证据时保持为空。 */
+  /** 只读工具的资源版本与调用终态一起保存；旧调用没有该证据时保持为空。*/
   public void finishTool(
       String id,
       InvocationStatus status,
@@ -543,60 +478,47 @@ public class RunRepository {
       String error,
       long duration,
       String resourceVersion) {
-    db.update(
-        "UPDATE tool_invocations SET status=?,result=?,error_message=?,duration_ms=?,"
-            + "resource_version=?,updated_at=? WHERE id=? AND status='RUNNING'",
-        status.name(),
-        result,
-        error,
-        duration,
-        resourceVersion,
-        now(),
-        id);
+    invocationRows.finishTool(id, status, result, error, duration, resourceVersion, now());
   }
 
   public void handoff(HandoffDirection direction, Handoff payload) {
-    handoffValidator.validate(direction, payload);
-    try {
-      String serialized = json.writeValueAsString(payload);
-      try {
-        db.update(
-            "INSERT INTO handoffs VALUES(?,?,?,?,?,?)",
-            payload.handoffId().toString(),
-            payload.runId(),
-            payload.agentId(),
-            direction.name(),
-            serialized,
-            now());
-      } catch (org.springframework.dao.DuplicateKeyException duplicate) {
-        var existing =
-            db.queryForMap(
-                "SELECT direction,CAST(payload AS VARCHAR) AS payload FROM handoffs WHERE id=?",
-                payload.handoffId().toString());
-        if (!direction.name().equals(existing.get("DIRECTION"))
-            || !serialized.equals(existing.get("PAYLOAD")))
-          throw new IllegalStateException("交接 ID 已存在且内容不一致。");
-      }
-    } catch (JsonProcessingException e) {
-      throw new IllegalStateException("无法保存结构化交接记录。", e);
-    }
+    tx.executeWithoutResult(
+        status -> {
+          handoffValidator.validate(direction, payload);
+          if (!runRows.lockForUpdate(payload.runId()))
+            throw new IllegalArgumentException("交接不属于指定任务运行。");
+          try {
+            String serialized = json.writeValueAsString(payload);
+            String id = payload.handoffId().toString();
+            var existing = handoffRows.findById(id).orElse(null);
+            if (existing == null) {
+              handoffRows.insert(
+                  id, payload.runId(), payload.agentId(), direction, serialized, now());
+            } else if (!direction.name().equals(existing.direction())
+                || !serialized.equals(existing.json())) {
+              throw new IllegalStateException("交接 ID 已存在且内容不一致。");
+            }
+          } catch (JsonProcessingException e) {
+            throw new IllegalStateException("无法保存结构化交接记录。", e);
+          }
+        });
   }
 
   public List<Map<String, Object>> handoffs(String runId) {
-    return db
-        .queryForList(
-            "SELECT h.id,h.run_id,h.agent_id,h.direction,CAST(h.payload AS VARCHAR) AS"
-                + " payload,h.created_at,r.receiver_agent_id,r.received_at FROM handoffs h LEFT"
-                + " JOIN handoff_receipts r ON r.handoff_id=h.id AND r.run_id=h.run_id WHERE"
-                + " h.run_id=? ORDER BY h.created_at,h.id",
-            runId)
-        .stream()
-        .map(
+    return handoffRows.findByRunId(runId).stream()
+        .<Map<String, Object>>map(
             row -> {
               try {
-                var result = new LinkedHashMap<>(row);
-                result.put("PAYLOAD", json.readValue(row.get("PAYLOAD").toString(), Handoff.class));
-                return (Map<String, Object>) result;
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("ID", row.id());
+                result.put("RUN_ID", row.runId());
+                result.put("AGENT_ID", row.agentId());
+                result.put("DIRECTION", row.direction());
+                result.put("PAYLOAD", json.readValue(row.payload(), Handoff.class));
+                result.put("CREATED_AT", row.createdAt());
+                result.put("RECEIVER_AGENT_ID", row.receiverAgentId());
+                result.put("RECEIVED_AT", row.receivedAt());
+                return result;
               } catch (JsonProcessingException e) {
                 throw new IllegalStateException("结构化交接记录无法读取。", e);
               }
@@ -605,17 +527,14 @@ public class RunRepository {
   }
 
   public List<Long> toolEvidence(String runId) {
-    return db.queryForList(
-        "SELECT id FROM events WHERE run_id=? AND event_type='TOOL_FINISHED' ORDER BY id",
-        Long.class,
-        runId);
+    return eventRows.findIdsByType(runId, EventType.TOOL_FINISHED);
   }
 
   public void startAgent(String id, String runId, String goal, AgentRole role) {
     tx.executeWithoutResult(ignored -> startAgentRecord(id, runId, goal, role, now()));
   }
 
-  /** 首次委派、实例启动和接收记录共同提交，避免半成品运行。 */
+  /** 首次委派、实例启动和接收记录共同提交，避免半成品运行。*/
   public void startAgentWithDelegation(String id, String runId, String goal, Handoff delegation) {
     tx.executeWithoutResult(
         ignored -> {
@@ -630,35 +549,28 @@ public class RunRepository {
           String time = now();
           startAgentRecord(id, runId, goal, AgentRole.ANALYST, time);
           handoff(HandoffDirection.DELEGATION, delegation);
-          db.update(
-              "INSERT INTO handoff_receipts(handoff_id,run_id,receiver_agent_id,received_at)"
-                  + " VALUES(?,?,?,?)",
-              delegation.handoffId().toString(),
-              runId,
-              id,
-              time);
+          handoffRows.insertReceipt(delegation.handoffId().toString(), runId, id, time);
           event(runId, EventType.HANDOFF_ACCEPTED, "已记录被委派 Agent 启动；不证明模型已读取委派内容。");
         });
   }
 
-  /** 启动下游实例和确认交接为同一事务；确认不证明模型已读取输入。 */
+  /** 启动下游实例和确认交接为同一事务；确认不证明模型已读取输入。*/
   public void startAgentFromHandoff(
       String id, String runId, String goal, AgentRole role, UUID handoffId) {
     tx.executeWithoutResult(
         ignored -> {
           var row =
-              db.queryForMap(
-                  "SELECT direction,CAST(payload AS VARCHAR) AS payload FROM handoffs WHERE id=?"
-                      + " AND run_id=?",
-                  handoffId.toString(),
-                  runId);
+              handoffRows
+                  .findById(handoffId.toString())
+                  .filter(item -> runId.equals(item.runId()))
+                  .orElseThrow(() -> new EmptyResultDataAccessException(1));
           Handoff handoff;
           try {
-            handoff = json.readValue(row.get("PAYLOAD").toString(), Handoff.class);
+            handoff = json.readValue(row.json(), Handoff.class);
           } catch (JsonProcessingException e) {
             throw new IllegalStateException("交接内容无法读取。", e);
           }
-          if (!HandoffDirection.AGENT_TRANSFER.name().equals(row.get("DIRECTION"))
+          if (!HandoffDirection.AGENT_TRANSFER.name().equals(row.direction())
               || !handoffId.equals(handoff.handoffId())
               || !id.equals(handoff.recipientAgentId())
               || !runId.equals(handoff.runId())
@@ -668,66 +580,34 @@ public class RunRepository {
               || (role != AgentRole.CODER && role != AgentRole.REVIEWER))
             throw new IllegalArgumentException("接收实例、角色或交接与运行不匹配。");
           handoffValidator.validate(HandoffDirection.AGENT_TRANSFER, handoff);
-          Integer completed =
-              db.queryForObject(
-                  "SELECT COUNT(*) FROM agent_invocations WHERE id=? AND status=?",
-                  Integer.class,
-                  handoff.agentId(),
-                  InvocationStatus.COMPLETED.name());
-          if (completed == null || completed != 1)
+          if (!invocationRows.isCompletedAgent(handoff.agentId()))
             throw new IllegalStateException("上游 Agent 尚未完成，不能接收交接。");
           // 交接字段有效并不代表发送者属于当前接收节点的直接依赖。
           plans.requireDirectDependencySender(runId, role, UUID.fromString(handoff.agentId()));
           String time = now();
           startAgentRecord(id, runId, goal, role, time);
-          db.update(
-              "INSERT INTO handoff_receipts(handoff_id,run_id,receiver_agent_id,received_at)"
-                  + " VALUES(?,?,?,?)",
-              handoffId.toString(),
-              runId,
-              id,
-              time);
+          handoffRows.insertReceipt(handoffId.toString(), runId, id, time);
           event(runId, EventType.HANDOFF_ACCEPTED, "已记录接收 Agent 启动；不证明模型已读取交接内容。");
         });
   }
 
-  /** 由调用方提供事务，确保计划节点和 Agent 调用一起写入。 */
+  /** 由调用方提供事务，确保计划节点和 Agent 调用一起写入。*/
   private void startAgentRecord(String id, String runId, String goal, AgentRole role, String time) {
     plans.start(runId, id, role, time);
     insertAgent(id, runId, goal, role, time);
   }
 
   void insertAgent(String id, String runId, String goal, AgentRole role, String time) {
-    db.update(
-        "INSERT INTO"
-            + " agent_invocations(id,run_id,role_name,task_goal,status,result,created_at,updated_at,role_code,role_version)"
-            + " VALUES(?,?,?,?,?,?,?,?,?,?)",
-        id,
-        runId,
-        role.displayName(),
-        goal,
-        InvocationStatus.RUNNING.name(),
-        null,
-        time,
-        time,
-        role.name(),
-        role.version());
+    invocationRows.insertAgent(id, runId, role, goal, time);
   }
 
   public void finishAgent(String id, InvocationStatus status, String result) {
     tx.executeWithoutResult(
-        s -> {
-          String t = now();
-          plans.finish(id, status, t);
-          int changed =
-              db.update(
-                  "UPDATE agent_invocations SET status=?,result=?,updated_at=? WHERE id=? AND"
-                      + " status='RUNNING'",
-                  status.name(),
-                  result,
-                  t,
-                  id);
-          if (changed != 1) throw new IllegalStateException("Agent 调用不存在或已经结束。");
+        transaction -> {
+          String time = now();
+          plans.finish(id, status, time);
+          if (!invocationRows.finishAgent(id, status, result, time))
+            throw new IllegalStateException("Agent 调用不存在或已经结束。");
         });
   }
 
@@ -745,41 +625,26 @@ public class RunRepository {
         });
   }
 
-  /** 审查完成、交接和整个运行终态一起提交，外部模型调用不在事务内。 */
+  /** 审查完成、交接和整个运行终态一起提交，外部模型调用不在事务内。*/
   public void finishReviewedRun(ReviewCompletion completion) {
-    java.util.Objects.requireNonNull(completion, "运行终态不能为空");
+    java.util.Objects.requireNonNull(completion, "运行终态不能为。");
     tx.executeWithoutResult(
         ignored -> {
           String runId = completion.runId().toString();
           String agentId = completion.agentId().toString();
-          Integer reviewer =
-              db.queryForObject(
-                  "SELECT COUNT(*) FROM agent_invocations WHERE id=? AND run_id=? AND role_code=?"
-                      + " AND status=?",
-                  Integer.class,
-                  agentId,
-                  runId,
-                  AgentRole.REVIEWER.name(),
-                  InvocationStatus.RUNNING.name());
-          if (reviewer == null || reviewer != 1)
-            throw new IllegalStateException("当前运行没有可完成的审查 Agent。");
+          if (!invocationRows.isRunningReviewer(runId, agentId))
+            throw new IllegalStateException("当前运行没有可完成的审查 Agent?");
           finishAgentWithResult(agentId, completion.review(), completion.resultHandoff());
           event(runId, EventType.HANDOFF, "审查 Agent 已将审查结果返回协调者。");
-          int changed =
-              db.update(
-                  "UPDATE runs SET"
-                      + " status=?,reason=?,result=?,rounds=?,tools=?,elapsed_ms=?,stop_cause=NULL,updated_at=?"
-                      + " WHERE id=? AND status=?",
-                  completion.status().name(),
-                  completion.reason(),
-                  completion.result(),
-                  completion.rounds(),
-                  completion.tools(),
-                  completion.elapsedMs(),
-                  now(),
-                  runId,
-                  RunStatus.RUNNING.name());
-          if (changed != 1) throw new IllegalStateException("运行已暂停或不在执行中，不能提交审查终态。");
+          if (!runRows.finishReview(
+              runId,
+              completion.status(),
+              completion.reason(),
+              completion.result(),
+              completion.rounds(),
+              completion.tools(),
+              completion.elapsedMs(),
+              now())) throw new IllegalStateException("运行已暂停或不在执行中，不能提交审查终态。");
           plans.settle(runId, now());
           if (completion.status() == RunStatus.BLOCKED)
             event(runId, EventType.BLOCKED, completion.reason());
@@ -787,7 +652,7 @@ public class RunRepository {
         });
   }
 
-  /** 受控停止的 Agent、运行终态、事件和系统交接一起提交。 */
+  /** 受控停止与 Agent、运行终态、事件和系统交接一起提交。 */
   public void finishStoppedRun(StopCompletion completion) {
     java.util.Objects.requireNonNull(completion, "停止记录不能为空");
     tx.executeWithoutResult(
@@ -825,9 +690,8 @@ public class RunRepository {
   }
 
   public List<Map<String, Object>> checkpoints(String id) {
-    return db
-        .queryForList("SELECT * FROM checkpoints WHERE run_id=? ORDER BY created_at", id)
-        .stream()
+    return checkpointRows.findByRunId(id).stream()
+        .map(RunCheckpointRepository.CheckpointData::apiFields)
         .map(
             cp -> {
               var result = new LinkedHashMap<>(cp);
@@ -840,23 +704,18 @@ public class RunRepository {
   }
 
   public Map<String, Object> checkpoint(String id) {
-    return db.queryForMap("SELECT * FROM checkpoints WHERE id=?", id);
+    return checkpointRows
+        .findById(id)
+        .map(RunCheckpointRepository.CheckpointData::apiFields)
+        .orElseThrow(() -> new EmptyResultDataAccessException(1));
   }
 
   public List<Map<String, Object>> runs(String taskId) {
-    return db.queryForList("SELECT * FROM runs WHERE task_id=? ORDER BY created_at DESC", taskId);
+    return runRows.findByTaskId(taskId).stream().map(RunData::apiFields).toList();
   }
 
   public boolean hasRecovery(String parent) {
-    return Boolean.TRUE.equals(
-        db.queryForObject(
-            "SELECT COUNT(*) > 0 FROM runs WHERE parent_id=? AND NOT (recovery_dispatch IN (?,?)"
-                + " AND status=?)",
-            Boolean.class,
-            parent,
-            RecoveryDispatchStatus.REJECTED.name(),
-            RecoveryDispatchStatus.PRECONDITION_FAILED.name(),
-            RunStatus.FAILED.name()));
+    return runRows.hasRecovery(parent);
   }
 
   private void createTask(
@@ -873,27 +732,25 @@ public class RunRepository {
       List<String> acceptanceCriteria,
       TaskEntryKind entryKind,
       List<String> fileScopes) {
-    db.update(
-        "INSERT INTO"
-            + " tasks(id,goal,scenario,created_at,model_mode,workspace_id,file_scope,write_enabled,bug_id,memory_enabled,constraints_json,acceptance_json,entry_kind,file_scopes_json)"
-            + " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        id,
-        goal,
-        scenario.code(),
-        now(),
-        modelMode.code(),
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        writeTextList(constraints),
-        writeTextList(acceptanceCriteria),
-        entryKind.name(),
-        writeTextList(fileScopes));
+    TaskEntity task = new TaskEntity();
+    task.setId(id);
+    task.setGoal(goal);
+    task.setScenario(scenario.code());
+    task.setCreatedAt(now());
+    task.setModelMode(modelMode.code());
+    task.setWorkspaceId(workspaceId);
+    task.setFileScope(fileScope);
+    task.setWriteEnabled(writeEnabled);
+    task.setBugId(bugId);
+    task.setMemoryEnabled(memoryEnabled);
+    task.setConstraintsJson(writeTextList(constraints));
+    task.setAcceptanceJson(writeTextList(acceptanceCriteria));
+    task.setEntryKind(entryKind.name());
+    task.setFileScopesJson(writeTextList(fileScopes));
+    taskRows.save(task);
   }
 
-  /** 首运行及计划与任务、创建事件同事务，避免持久化出孤立的半成品。 */
+  /** 首运行及计划与任务、创建事件同事务，避免持久化出孤立的半成品。*/
   public void createTaskAndFirstRun(
       TaskDefinition task, UUID runId, RunLimits limits, String message) {
     createTaskAndFirstRun(task, runId, limits, message, null, false);
@@ -923,24 +780,21 @@ public class RunRepository {
               task.entryKind(),
               task.fileScopes());
           for (var entry : task.roleBudgets().entrySet()) {
-            db.update(
-                "INSERT INTO"
-                    + " task_role_budgets(task_id,role_code,policy_version,max_model_calls,max_tool_calls)"
-                    + " VALUES(?,?,?,?,?)",
-                task.id().toString(),
-                entry.getKey().name(),
-                1,
-                entry.getValue().maxModelCalls(),
-                entry.getValue().maxToolCalls());
+            roleBudgetRows.save(
+                new TaskRoleBudgetEntity(
+                    task.id().toString(),
+                    entry.getKey().name(),
+                    BUDGET_POLICY_VERSION,
+                    entry.getValue().maxModelCalls(),
+                    entry.getValue().maxToolCalls()));
           }
           for (var entry : task.toolBudgets().entrySet()) {
-            db.update(
-                "INSERT INTO task_tool_budgets_v2(task_id,tool_kind,policy_version,max_calls)"
-                    + " VALUES(?,?,?,?)",
-                task.id().toString(),
-                entry.getKey().name(),
-                1,
-                entry.getValue());
+            toolBudgetRows.save(
+                new TaskToolBudgetEntity(
+                    task.id().toString(),
+                    entry.getKey().name(),
+                    BUDGET_POLICY_VERSION,
+                    entry.getValue()));
           }
           createRun(
               runId.toString(),
@@ -964,7 +818,7 @@ public class RunRepository {
         });
   }
 
-  /** 恢复子运行、计划和创建事件一起保存，预算采用父运行与快照的较大值。 */
+  /** 恢复子运行、计划和创建事件一起保存，预算采用父运行与快照的较大值。*/
   public void createRecoveryRun(UUID runId, RunSnapshot original, CheckpointSnapshot checkpoint) {
     if (!checkpoint.runId().equals(original.id()) || original.status() != RunStatus.INTERRUPTED)
       throw new IllegalArgumentException("检查点与中断运行不匹配。");
@@ -989,11 +843,11 @@ public class RunRepository {
           event(
               runId.toString(),
               EventType.RECOVERY_STARTED,
-              "从运行 " + original.id() + " 的检查点恢复；原历史保留。");
+              "从运。" + original.id() + " 的检查点恢复；原历史保留。");
         });
   }
 
-  /** 调用方在源运行锁和恢复校验事务内创建副本。 */
+  /** 调用方在源运行锁和恢复校验事务内创建副本。*/
   void createWorkflowRecoveryRun(
       UUID id,
       RunSnapshot original,
@@ -1022,23 +876,13 @@ public class RunRepository {
         reviewRequired);
   }
 
-  /** 仅在线程池明确拒绝时调用；记录成功后父运行才允许再次申请恢复。 */
+  /** 仅在线程池明确拒绝时调用；记录成功后父运行才允许再次申请恢复。*/
   public void rejectRecoveryBeforeDispatch(String runId) {
     tx.executeWithoutResult(
         status -> {
           String reason = "恢复请求未能进入执行队列，尚未启动 Agent，可重新申请恢复。";
-          int changed =
-              db.update(
-                  "UPDATE runs SET status=?,reason=?,recovery_dispatch=?,updated_at=? WHERE id=?"
-                      + " AND parent_id IS NOT NULL AND status=? AND recovery_dispatch=?",
-                  RunStatus.FAILED.name(),
-                  reason,
-                  RecoveryDispatchStatus.REJECTED.name(),
-                  now(),
-                  runId,
-                  RunStatus.PENDING.name(),
-                  RecoveryDispatchStatus.UNKNOWN.name());
-          if (changed != 1) throw new IllegalStateException("恢复派发状态无法安全确认。");
+          if (!runRows.rejectBeforeDispatch(runId, reason, now()))
+            throw new IllegalStateException("恢复派发状态无法安全确认。");
           plans.settle(runId, now());
           event(runId, EventType.FAILED, reason);
         });
@@ -1058,43 +902,19 @@ public class RunRepository {
         id, taskId, parent, rounds, tools, maxRounds, maxTools, maxTools, maxSeconds, elapsed);
   }
 
-  /** 仅当前置检查在任何 Agent、模型和工具调用之前失败时，才允许父运行重试。 */
+  /** 仅当前置检查在任何 Agent、模型和工具调用之前失败时，才允许父运行重试。*/
   public void rejectRecoveryPrecondition(
       String runId, int rounds, int tools, long elapsed, String reason) {
     tx.executeWithoutResult(
         status -> {
-          int changed =
-              db.update(
-                  "UPDATE runs SET"
-                      + " status=?,reason=?,stop_cause=?,recovery_dispatch=?,rounds=?,tools=?,elapsed_ms=?,updated_at=?"
-                      + " WHERE id=? AND parent_id IS NOT NULL AND status=? AND recovery_dispatch=?"
-                      + " AND NOT EXISTS (SELECT 1 FROM agent_invocations WHERE run_id=?) AND NOT"
-                      + " EXISTS (SELECT 1 FROM model_invocations WHERE run_id=?) AND NOT EXISTS"
-                      + " (SELECT 1 FROM tool_invocations WHERE run_id=?) AND NOT EXISTS (SELECT 1"
-                      + " FROM plan_nodes WHERE run_id=? AND status<>?)",
-                  RunStatus.FAILED.name(),
-                  reason,
-                  dev.workbench.domain.StopCause.RECOVERY_PRECONDITION_FAILED.name(),
-                  RecoveryDispatchStatus.PRECONDITION_FAILED.name(),
-                  rounds,
-                  tools,
-                  elapsed,
-                  now(),
-                  runId,
-                  RunStatus.RUNNING.name(),
-                  RecoveryDispatchStatus.UNKNOWN.name(),
-                  runId,
-                  runId,
-                  runId,
-                  runId,
-                  dev.workbench.framework.workflow.plan.PlanNodeStatus.PENDING.name());
-          if (changed != 1) throw new IllegalStateException("无法确认恢复前置检查发生在任何 Agent 调用之前。");
+          if (!runRows.rejectRecoveryPrecondition(runId, rounds, tools, elapsed, reason, now()))
+            throw new IllegalStateException("无法确认恢复前置检查发生在任何 Agent 调用之前。");
           plans.settle(runId, now());
           event(runId, EventType.FAILED, reason);
         });
   }
 
-  /** 创建运行及固定计划；单工具上限随恢复运行传递。 */
+  /** 创建运行及固定计划；单工具上限随恢复运行传递。*/
   public void createRun(
       String id,
       String taskId,
@@ -1265,84 +1085,62 @@ public class RunRepository {
     String now = now();
     tx.executeWithoutResult(
         s -> {
-          db.update(
-              "INSERT INTO"
-                  + " runs(id,task_id,parent_id,status,reason,result,rounds,tools,max_rounds,max_tools,max_seconds,elapsed_ms,created_at,updated_at,max_per_tool,max_reported_tokens,max_identical_tools,max_agent_rounds,max_agent_tools)"
-                  + " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              id,
-              taskId,
-              parent,
-              RunStatus.PENDING.name(),
-              null,
-              null,
-              rounds,
-              tools,
-              maxRounds,
-              maxTools,
-              maxSeconds,
-              elapsed,
-              now,
-              now,
-              maxPerTool,
-              maxReportedTokens,
-              maxIdenticalTools,
-              maxAgentRounds,
-              maxAgentTools);
+          RunEntity run = new RunEntity();
+          run.setId(id);
+          run.setTaskId(taskId);
+          run.setParentId(parent);
+          run.setStatus(RunStatus.PENDING.name());
+          run.setReason(null);
+          run.setResult(null);
+          run.setRounds(rounds);
+          run.setTools(tools);
+          run.setMaxRounds(maxRounds);
+          run.setMaxTools(maxTools);
+          run.setMaxSeconds(maxSeconds);
+          run.setElapsedMs(elapsed);
+          run.setCreatedAt(now);
+          run.setUpdatedAt(now);
+          run.setMaxPerTool(maxPerTool);
+          run.setMaxReportedTokens(maxReportedTokens);
+          run.setMaxIdenticalTools(maxIdenticalTools);
+          run.setMaxAgentRounds(maxAgentRounds);
+          run.setMaxAgentTools(maxAgentTools);
+          runRows.save(run);
+          // 计划与节点外键引用运行，事件写入还要锁运行行；先落库再继续。
+          runRows.flush();
           if (workflow == null) plans.initialize(id, includeCoder);
           else plans.initializeWorkflow(id, workflow, taskDefinition(taskId), reviewRequired, now);
         });
   }
 
-  /** 仅用于当前实例限额；已开始调用无论最终状态都计数。 */
+  /** 仅用于当前实例限额；已开始调用无论最终状态都计数。*/
   public int countAgentModelCalls(String agentId) {
-    return db.queryForObject(
-        "SELECT COUNT(*) FROM model_invocations WHERE agent_id=?", Integer.class, agentId);
+    return invocationRows.countAgentModelCalls(agentId);
   }
 
   public int countAgentToolCalls(String agentId) {
-    return db.queryForObject(
-        "SELECT COUNT(*) FROM tool_invocations WHERE agent_id=?", Integer.class, agentId);
+    return invocationRows.countAgentToolCalls(agentId);
   }
 
-  /** 累计节点的全部尝试，所有已记录启动的调用占用预算。 */
+  /** 累计节点的全部尝试，所有已记录启动的调用占用预算。*/
   public int countNodeModelCalls(String runId, UUID nodeId) {
-    return db.queryForObject(
-        """
-        SELECT COUNT(*) FROM model_invocations i JOIN workflow_attempts a ON a.agent_id=i.agent_id
-        WHERE i.run_id=? AND a.node_id=?
-        """,
-        Integer.class,
-        runId,
-        nodeId.toString());
+    return invocationRows.countNodeModelCalls(runId, nodeId.toString());
   }
 
   public int countNodeToolCalls(String runId, UUID nodeId) {
-    return db.queryForObject(
-        """
-        SELECT COUNT(*) FROM tool_invocations i JOIN workflow_attempts a ON a.agent_id=i.agent_id
-        WHERE i.run_id=? AND a.node_id=?
-        """,
-        Integer.class,
-        runId,
-        nodeId.toString());
+    return invocationRows.countNodeToolCalls(runId, nodeId.toString());
   }
 
-  /** 按记录顺序倒查当前运行及恢复祖先，遇到不同调用立即停止。 */
+  /** 按记录顺序倒查当前运行及恢复祖先，遇到不同调用立即停止。*/
   public int consecutiveToolAttempts(String runId, ToolKind kind, String fingerprint, int limit) {
     int count = 0;
     var visited = new java.util.HashSet<String>();
     String current = runId;
     while (current != null && count < limit) {
       if (!visited.add(current)) throw new IllegalStateException("运行恢复关系存在循环。");
-      var rows =
-          db.queryForList(
-              "SELECT kind,fingerprint FROM tool_attempt_fingerprints WHERE run_id=? ORDER BY id"
-                  + " DESC LIMIT ?",
-              current,
-              limit - count);
+      var rows = invocationRows.findRecentFingerprints(current, limit - count);
       for (var row : rows) {
-        if (!kind.name().equals(row.get("KIND")) || !fingerprint.equals(row.get("FINGERPRINT")))
-          return count;
+        if (!kind.name().equals(row.kind()) || !fingerprint.equals(row.fingerprint())) return count;
         if (++count >= limit) return count;
       }
       UUID parent = runSnapshot(current).parentId();
@@ -1351,7 +1149,7 @@ public class RunRepository {
     return count;
   }
 
-  /** 已报告用量和未知用量次数；未知不能按零解释。 */
+  /** 已报告用量和未知用量次数；未知不能按零解释。*/
   public record ReportedTokenUsage(long knownTokens, long unknownCalls) {}
 
   public ReportedTokenUsage reportedTokens(String runId) {
@@ -1360,90 +1158,71 @@ public class RunRepository {
     String current = runId;
     while (current != null) {
       if (!visited.add(current)) throw new IllegalStateException("运行恢复关系存在循环。");
-      var row =
-          db.queryForMap(
-              "SELECT COALESCE(SUM(CAST(COALESCE(input_tokens,0) AS"
-                  + " BIGINT)+CAST(COALESCE(output_tokens,0) AS BIGINT)),0) AS known, SUM(CASE WHEN"
-                  + " input_tokens IS NULL OR output_tokens IS NULL THEN 1 ELSE 0 END) AS"
-                  + " unknown_calls FROM model_invocations WHERE run_id=?",
-              current);
-      known += ((Number) row.get("KNOWN")).longValue();
-      if (row.get("UNKNOWN_CALLS") != null)
-        unknown += ((Number) row.get("UNKNOWN_CALLS")).longValue();
+      var usage = invocationRows.summarizeTokens(current);
+      known += usage.known();
+      unknown += usage.unknownCalls();
       UUID parent = runSnapshot(current).parentId();
       current = parent == null ? null : parent.toString();
     }
     return new ReportedTokenUsage(known, unknown);
   }
 
-  /** 包含本运行和恢复祖先中的已启动调用，避免恢复时同种工具限额归零。 */
+  /** 包含本运行和恢复祖先中的已启动调用，避免恢复时同种工具限额归零。*/
   public int countToolCalls(String runId, ToolKind kind) {
     int count = 0;
     var visited = new java.util.HashSet<String>();
     String current = runId;
     while (current != null) {
       if (!visited.add(current)) throw new IllegalStateException("运行恢复关系存在循环。");
-      Integer found =
-          db.queryForObject(
-              "SELECT COUNT(*) FROM tool_invocations WHERE run_id=? AND tool_name=?",
-              Integer.class,
-              current,
-              kind.recordName());
-      count += found == null ? 0 : found;
+      count += invocationRows.countToolCalls(current, kind.recordName());
       UUID parent = runSnapshot(current).parentId();
       current = parent == null ? null : parent.toString();
     }
     return count;
   }
 
-  /** 检查点原因使用受控编码，便于稳定聚合且不暴露用户数据。 */
+  /** 检查点原因使用受控编码，便于稳定聚合且不暴露用户数据。*/
   public void checkpointSkipped(String runId, dev.workbench.domain.CheckpointSkipReason reason) {
-    insertEvent(runId, EventType.CHECKPOINT_SKIPPED, reason.message(), EventRef.empty(), reason.name());
+    insertEvent(
+        runId, EventType.CHECKPOINT_SKIPPED, reason.message(), EventRef.empty(), reason.name());
   }
 
   public void event(String runId, EventType type, String message) {
     event(runId, type, message, EventRef.empty());
   }
 
-  /** 写入带结构化归属的事件；空关联与旧接口行为一致。 */
+  /** 写入带结构化归属的事件；空关联与旧接口行为一致。*/
   public void event(String runId, EventType type, String message, EventRef ref) {
     insertEvent(runId, type, message, ref == null ? EventRef.empty() : ref, null);
   }
 
   /**
-   * 事件写入与每运行序号分配在同一事务：先锁运行行，再取该运行当前最大序号。
+   * 事件写入与每运行序号分配在同一事务：先用 JPA 悲观锁锁定运行行，再取该运行当前最大序号。
    *
-   * <p>同一运行的事件写入因此按提交顺序编号——持锁事务提交前，其他线程无法插入更晚序号。 全局自增
-   * ID 在跨运行并发时可能让晚提交事件落在旧游标之前；读取方一律使用 {@code run_seq} 游标。
+   * <p>同一运行的事件写入因此按提交顺序编号——持锁事务提交前，其他线程无法插入更晚序号。全局自增 ID 在跨运行并发时可能让晚提交事件落在旧游标之前；读取方一律使用 {@code
+   * run_seq} 游标。
    */
   private void insertEvent(
       String runId, EventType type, String message, EventRef checked, String reasonCode) {
     tx.executeWithoutResult(
         status -> {
-          db.queryForObject("SELECT id FROM runs WHERE id=? FOR UPDATE", String.class, runId);
-          Long next =
-              db.queryForObject(
-                  "SELECT COALESCE(MAX(run_seq),0)+1 FROM events WHERE run_id=?",
-                  Long.class,
-                  runId);
-          db.update(
-              "INSERT INTO"
-                  + " events(run_seq,run_id,event_type,message,created_at,reason_code,plan_version_id,"
-                  + "node_id,attempt_id,agent_id,check_id,model_call_id,tool_call_id)"
-                  + " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              next,
-              runId,
-              type.name(),
-              message,
-              now(),
-              reasonCode,
-              text(checked.planVersionId()),
-              text(checked.nodeId()),
-              text(checked.attemptId()),
-              text(checked.agentId()),
-              text(checked.checkId()),
-              text(checked.modelCallId()),
-              text(checked.toolCallId()));
+          if (!runRows.lockForUpdate(runId)) throw new IllegalArgumentException("运行不存在。");
+          long next = eventRows.maxRunSeq(runId) + 1;
+          eventRows.saveAndFlush(
+              new EventEntity(
+                  next,
+                  runId,
+                  type.name(),
+                  message,
+                  now(),
+                  reasonCode,
+                  text(checked.planVersionId()),
+                  text(checked.nodeId()),
+                  text(checked.attemptId()),
+                  text(checked.agentId()),
+                  text(checked.checkId()),
+                  text(checked.modelCallId()),
+                  text(checked.toolCallId())));
         });
   }
 
@@ -1453,23 +1232,14 @@ public class RunRepository {
    * <p>只返回实际存在的归属；兼容流程或尚未认领的实例保持空值，不从角色或计划顺序推断。
    */
   public EventRef eventRefForAgent(String runId, String agentId) {
-    var rows =
-        db.query(
-            """
-            SELECT n.plan_version_id,n.id AS node_id,a.id AS attempt_id
-            FROM agent_invocations i
-            LEFT JOIN plan_nodes n ON n.run_id=i.run_id AND n.agent_id=i.id
-            LEFT JOIN workflow_attempts a ON a.agent_id=i.id AND a.node_id=n.id
-            WHERE i.run_id=? AND i.id=?
-            """,
-            (row, index) ->
-                EventRef.agent(java.util.UUID.fromString(agentId))
-                    .withPlan(nullableUuid(row.getString("plan_version_id")))
-                    .withNode(nullableUuid(row.getString("node_id")))
-                    .withAttempt(nullableUuid(row.getString("attempt_id"))),
-            runId,
-            agentId);
-    return rows.isEmpty() ? EventRef.agent(java.util.UUID.fromString(agentId)) : rows.getFirst();
+    var origin = invocationRows.findEventOrigin(runId, agentId);
+    var event = EventRef.agent(UUID.fromString(agentId));
+    return origin == null
+        ? event
+        : event
+            .withPlan(nullableUuid(origin.planId()))
+            .withNode(nullableUuid(origin.nodeId()))
+            .withAttempt(nullableUuid(origin.attemptId()));
   }
 
   private static String text(java.util.UUID value) {
@@ -1491,7 +1261,7 @@ public class RunRepository {
     update(id, status, reason, result, rounds, tools, elapsed, null);
   }
 
-  /** 状态和停止原因在同一事务保存；旧记录或不适用时原因保持未知。 */
+  /** 状态和停止原因在同一事务保存；旧记录或不适用时原因保持未知。*/
   public void update(
       String id,
       RunStatus status,
@@ -1505,21 +1275,9 @@ public class RunRepository {
       throw new IllegalArgumentException("停止原因与运行状态不一致。");
     tx.executeWithoutResult(
         s -> {
-          int changed =
-              db.update(
-                  "UPDATE runs SET"
-                      + " status=?,reason=?,result=?,rounds=?,tools=?,elapsed_ms=?,stop_cause=?,updated_at=?"
-                      + " WHERE id=? AND status IN ('PENDING','RUNNING','PAUSED')",
-                  status.name(),
-                  reason,
-                  result,
-                  rounds,
-                  tools,
-                  elapsed,
-                  stopCause == null ? null : stopCause.name(),
-                  now(),
-                  id);
-          if (changed != 1) throw new IllegalStateException("运行不存在或已进入终态，不能再更新。");
+          if (!runRows.updateActive(
+              id, status, reason, result, rounds, tools, elapsed, stopCause, now()))
+            throw new IllegalStateException("运行不存在或已进入终态，不能再更新。");
           if (!status.canCancel()) plans.settle(id, now());
         });
   }
@@ -1532,7 +1290,7 @@ public class RunRepository {
     writeCheckpoint(runId, stage, rounds, tools, elapsed, result, version);
   }
 
-  /** 创建只读工作区的审查前检查点；摘要由工作区服务在分析边界取得。 */
+  /** 创建只读工作区的审查前检查点；摘要由工作区服务在分析边界取得。*/
   public void workspaceReviewCheckpoint(
       String runId,
       int rounds,
@@ -1561,7 +1319,7 @@ public class RunRepository {
     }
   }
 
-  /** 检查点 JSON 不含文件正文；格式不合法时拒绝恢复。 */
+  /** 检查点 JSON 不含文件正文；格式不合法时拒绝恢复。*/
   public dev.workbench.domain.WorkspaceReviewCheckpoint workspaceReviewPayload(String value) {
     try {
       return json.readValue(value, dev.workbench.domain.WorkspaceReviewCheckpoint.class);
@@ -1581,8 +1339,7 @@ public class RunRepository {
     tx.executeWithoutResult(
         s -> {
           event(runId, EventType.CHECKPOINT_SAVED, "已保存内部状态：" + stage);
-          Long last =
-              db.queryForObject("SELECT MAX(id) FROM events WHERE run_id=?", Long.class, runId);
+          Long last = eventRows.maxId(runId);
           String checkpointId = id();
           String created = now();
           String sum =
@@ -1598,46 +1355,36 @@ public class RunRepository {
                   result,
                   String.valueOf(last),
                   created);
-          db.update(
-              "INSERT INTO"
-                  + " checkpoints(id,run_id,version,stage,rounds,tools,elapsed_ms,tool_result,event_id,created_at,checksum,engine)"
-                  + " VALUES(?,?,?,?,?,?,?,?,?,?,?,'AGENTSCOPE')",
-              checkpointId,
-              runId,
-              version,
-              stage.name(),
-              rounds,
-              tools,
-              elapsed,
-              result,
-              last,
-              created,
-              sum);
+          checkpointRows.insert(
+              new RunCheckpointRepository.CheckpointData(
+                  checkpointId,
+                  runId,
+                  version,
+                  stage.name(),
+                  rounds,
+                  tools,
+                  elapsed,
+                  result,
+                  last,
+                  created,
+                  sum,
+                  RunCheckpointRepository.AGENT_SCOPE_ENGINE));
         });
   }
 
-  /** 已完成分析的引用与摘要；结果正文保留在原 Agent 调用中。 */
+  /** 已完成分析的引用与摘要；结果正文保留在原 Agent 调用中。*/
   public record AnalysisSource(UUID agentId, String result) {}
 
-  /** 检查点复用的真实分析来源，不把祖先 Agent 当成本次调用。 */
+  /** 检查点复用的真实分析来源，不把祖先 Agent 当成本次调用。*/
   public record CheckpointAnalysisSource(UUID runId, UUID agentId, String result) {}
 
   public String analysisReference(String runId, String agentId) {
-    var rows =
-        db.queryForList(
-            "SELECT result FROM agent_invocations WHERE id=? AND run_id=? AND role_name=? AND"
-                + " status=?",
-            agentId,
-            runId,
-            AgentRole.ANALYST.displayName(),
-            InvocationStatus.COMPLETED.name());
-    if (rows.size() != 1 || rows.getFirst().get("RESULT") == null)
-      throw new IllegalArgumentException("分析来源不存在或尚未完成。");
-    String result = rows.getFirst().get("RESULT").toString();
+    String result = invocationRows.findCompletedAnalysis(runId, agentId);
+    if (result == null) throw new IllegalArgumentException("分析来源不存在或尚未完成。");
     return UUID.fromString(agentId) + ":" + checksum(result);
   }
 
-  /** 拒绝跨运行引用、损坏摘要和已经改变的分析结果。 */
+  /** 拒绝跨运行引用、损坏摘要和已经改变的分析结果。*/
   public AnalysisSource analysisSource(String runId, String reference) {
     if (reference == null || !reference.matches("[0-9a-fA-F-]{36}:[0-9a-f]{64}"))
       throw new IllegalArgumentException("分析检查点内容无效。");
@@ -1646,16 +1393,11 @@ public class RunRepository {
         analysisReference(runId, agentId).getBytes(StandardCharsets.US_ASCII),
         reference.getBytes(StandardCharsets.US_ASCII)))
       throw new IllegalArgumentException("分析来源摘要不匹配。");
-    String result =
-        db.queryForObject(
-            "SELECT result FROM agent_invocations WHERE id=? AND run_id=?",
-            String.class,
-            agentId,
-            runId);
+    String result = invocationRows.readAgentResult(runId, agentId);
     return new AnalysisSource(UUID.fromString(agentId), result);
   }
 
-  /** 解析旧版本运行引用或新版祖先引用，并核验运行链与复用节点。 */
+  /** 解析旧版本运行引用或新版祖先引用，并核验运行链与复用节点。*/
   public CheckpointAnalysisSource checkpointAnalysisSource(
       String checkpointRunId, String reference) {
     if (reference == null) throw new IllegalArgumentException("分析检查点内容无效。");
@@ -1699,7 +1441,7 @@ public class RunRepository {
     return new CheckpointAnalysisSource(sourceRun, source.agentId(), source.result());
   }
 
-  /** 保存引用前复验祖先关系，避免凭模型输出构造来源。 */
+  /** 保存引用前复验祖先关系，避免凭模型输出构造来源。*/
   public String ancestorAnalysisReference(
       String checkpointRunId, String sourceRunId, UUID sourceAgentId) {
     String reference = sourceRunId + "|" + analysisReference(sourceRunId, sourceAgentId.toString());
@@ -1729,7 +1471,7 @@ public class RunRepository {
   public boolean validCheckpoint(Map<String, Object> cp) {
     try {
       // 旧手写流程的快照没有框架上下文，不能当作 AgentScope 状态恢复。
-      if (!"AGENTSCOPE".equals(cp.get("ENGINE"))) return false;
+if (!"AGENTSCOPE".equals(cp.get("ENGINE"))) return false;
       if (cp.get("CHECKSUM") == null) return false;
       int version = ((Number) cp.get("VERSION")).intValue();
       CheckpointStage parsedStage = CheckpointStage.valueOf(cp.get("STAGE").toString());
@@ -1776,65 +1518,36 @@ public class RunRepository {
       if (!MessageDigest.isEqual(
           expected.getBytes(StandardCharsets.US_ASCII),
           cp.get("CHECKSUM").toString().getBytes(StandardCharsets.US_ASCII))) return false;
-      Integer matches =
-          db.queryForObject(
-              "SELECT COUNT(*) FROM events WHERE id=? AND run_id=? AND"
-                  + " event_type='CHECKPOINT_SAVED'",
-              Integer.class,
-              cp.get("EVENT_ID"),
-              cp.get("RUN_ID"));
-      return matches != null && matches == 1;
+      return eventRows.exists(
+          Long.parseLong(cp.get("EVENT_ID").toString()),
+          cp.get("RUN_ID").toString(),
+          EventType.CHECKPOINT_SAVED);
     } catch (NullPointerException
         | IllegalArgumentException
         | ClassCastException
         | org.springframework.dao.DataAccessException e) {
       // 字段缺失或编码非法属于不可恢复的快照，不应让整个列表查询失败。
-      return false;
+return false;
     }
   }
 
   public void interruptRunning() {
     tx.executeWithoutResult(
         s -> {
-          List<Map<String, Object>> active =
-              db.queryForList(
-                  "SELECT r.id,p.id AS plan_id FROM runs r LEFT JOIN workflow_plans p ON"
-                      + " p.run_id=r.id WHERE r.status IN ('PENDING','RUNNING','PAUSED') AND NOT"
-                      + " (p.id IS NOT NULL AND p.approved_at IS NULL AND r.status='PENDING')");
-          for (var row : active) {
-            String id = row.get("ID").toString();
-            db.update(
-                "UPDATE runs SET status='INTERRUPTED',reason=?,updated_at=? WHERE id=?",
-                "进程中断；未结束的调用结果未知。",
-                now(),
-                id);
+          for (var row : runRows.findForStartupInterruption()) {
+            String id = row.id();
+            runRows.interrupt(id, "进程中断；未结束的调用结果未知。", now());
             plans.settle(id, now());
             event(
                 id,
                 EventType.INTERRUPTED,
-                row.get("PLAN_ID") == null ? "运行中断，可查看支持的检查点。" : "动态工作流中断，已保留执行记录。可查询检查点的可用状态。");
+                row.planId() == null ? "运行中断，可查看支持的检查点。" : "动态工作流中断，已保留执行记录。可查询检查点的可用状态。");
           }
-          db.update(
-              "UPDATE agent_invocations SET status='INTERRUPTED',updated_at=? WHERE"
-                  + " status='RUNNING'",
-              now());
-          db.update(
-              "UPDATE tool_invocations SET status='INTERRUPTED',error_message=?,updated_at=? WHERE"
-                  + " status='RUNNING'",
-              "进程中断，结果未知；耗时未完整记录。",
-              now());
-          db.update(
-              "UPDATE model_invocations SET status='INTERRUPTED',error_message=?,updated_at=? WHERE"
-                  + " status='RUNNING'",
-              "进程中断，模型结果及用量未知。",
-              now());
+          invocationRows.interruptRunning(now());
         });
   }
 
   public Map<String, Object> overview() {
-    return db.queryForMap(
-        "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN status='RUNNING' THEN 1 ELSE 0 END),0) AS"
-            + " running, COALESCE(SUM(CASE WHEN status='COMPLETED' THEN 1 ELSE 0 END),0) AS"
-            + " completed FROM runs");
+    return runRows.countByStatus().apiFields();
   }
 }

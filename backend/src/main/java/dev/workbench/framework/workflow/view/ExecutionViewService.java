@@ -2,22 +2,24 @@ package dev.workbench.framework.workflow.view;
 
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.InvocationStatus;
+import dev.workbench.domain.RunSnapshot;
 import dev.workbench.domain.RunStatus;
-import dev.workbench.domain.StopCause;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNode;
-import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowAttempt;
 import dev.workbench.framework.workflow.plan.WorkflowCheck;
 import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
-import dev.workbench.task.RunRepository;
+import dev.workbench.persistence.repository.EventRepository;
+import dev.workbench.persistence.repository.SupplementRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.task.TaskSupplementService;
-import dev.workbench.task.WorkflowExecutionRepository;
-import dev.workbench.task.WorkflowRecoveryRepository;
+import dev.workbench.task.WorkflowExecutionService;
+import dev.workbench.task.WorkflowRecoveryService;
+import dev.workbench.workspace.RunHandoverService;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -26,41 +28,41 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 /**
  * 任务 1 的只读执行视图投影。
  *
- * <p>数据全部来自已持久化的计划、节点、尝试、检查、调用和事件。这里只做归属关联与状态汇总，
- * 不根据模板、角色、节点顺序或消息文本补造事实；旧运行缺失的字段保持空值。
+ * <p>数据全部来自已持久化的计划、节点、尝试、检查、调用和事件。这里只做归属关联与状态汇总， 不根据模板、角色、节点顺序或消息文本补造事实；旧运行缺失的字段保持空值。
  */
 @Service
 public class ExecutionViewService {
   public static final int SCHEMA_VERSION = 1;
 
-  private final RunRepository runs;
-  private final PlanRepository plans;
-  private final WorkflowExecutionRepository workflows;
-  private final WorkflowRecoveryRepository recovery;
+  private final RunRecordService runs;
+  private final PlanService plans;
+  private final WorkflowExecutionService workflows;
+  private final WorkflowRecoveryService recovery;
   private final TaskSupplementService supplements;
-  private final JdbcTemplate db;
+  private final RunHandoverService handovers;
+  private final EventRepository events;
 
   public ExecutionViewService(
-      RunRepository runs,
-      PlanRepository plans,
-      WorkflowExecutionRepository workflows,
-      WorkflowRecoveryRepository recovery,
+      RunRecordService runs,
+      PlanService plans,
+      WorkflowExecutionService workflows,
+      WorkflowRecoveryService recovery,
       TaskSupplementService supplements,
-      JdbcTemplate db) {
+      RunHandoverService handovers,
+      EventRepository events) {
     this.runs = runs;
     this.plans = plans;
     this.workflows = workflows;
     this.recovery = recovery;
     this.supplements = supplements;
-    this.db = db;
+    this.handovers = handovers;
+    this.events = events;
   }
 
   public ExecutionView view(String runId) {
@@ -78,8 +80,18 @@ public class ExecutionViewService {
     for (var node : nodes) nodeViews.add(nodeView(node, nodes, byNodeAttempts, byNodeChecks));
     var blocking = blocking(snapshot.status(), plan, nodes, byNodeChecks);
     var focus = new FocusView(focus(nodes, byNodeAttempts, byNodeChecks, models, tools));
+    var handover = handovers.findByRun(runId);
+    boolean revalidationRequired = handovers.requiresRevalidation(runId);
     var actions =
-        new ArrayList<>(actions(snapshot.status(), runId, plan, nodes, recoveryCheckpoints(runId, plan)));
+        new ArrayList<>(
+            actions(
+                snapshot.status(),
+                runId,
+                plan,
+                nodes,
+                recoveryCheckpoints(runId, plan),
+                handover,
+                revalidationRequired));
     int taskVersion = runs.taskVersion(snapshot.taskId().toString());
     var supplementRequest = supplements.latestRequest(runId);
     if (supplementRequest != null && "OPEN".equals(supplementRequest.status()))
@@ -94,6 +106,8 @@ public class ExecutionViewService {
               supplementRequest.id(),
               "任务 v" + taskVersion));
     var counts = counts(nodes, checks, models, tools);
+    var budget = budgetView(snapshot, runId);
+    var recoverySupport = recoverySupportView(snapshot, plan, runId);
     return new ExecutionView(
         SCHEMA_VERSION,
         Instant.now().toString(),
@@ -118,13 +132,16 @@ public class ExecutionViewService {
         List.copyOf(actions),
         recoveryView(runId, run, plan, nodes, models.size(), tools.size()),
         supplementView(supplementRequest, nodes),
+        handoverView(handover, revalidationRequired),
         counts,
+        budget,
+        recoverySupport,
         lastEventSeq(runId));
   }
 
   public NodeDetail detail(String runId, String nodeIdText) {
     runs.runSnapshot(runId);
-    UUID nodeId = parseUuid(nodeIdText, "节点标识无效。");
+    UUID nodeId = parseUuid(nodeIdText, "节点标识格式无效");
     var plan = plans.workflowPlan(runId);
     var nodes = plans.find(runId);
     var node =
@@ -132,12 +149,14 @@ public class ExecutionViewService {
             .filter(candidate -> candidate.id().equals(nodeId))
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("节点不属于该运行。"));
-    var attempts = workflows.workflowAttempts(runId).stream()
-        .filter(attempt -> attempt.nodeId().equals(nodeId))
-        .toList();
-    var checks = workflows.workflowChecks(runId).stream()
-        .filter(check -> check.nodeId().equals(nodeId))
-        .toList();
+    var attempts =
+        workflows.workflowAttempts(runId).stream()
+            .filter(attempt -> attempt.nodeId().equals(nodeId))
+            .toList();
+    var checks =
+        workflows.workflowChecks(runId).stream()
+            .filter(check -> check.nodeId().equals(nodeId))
+            .toList();
     var models = runs.models(runId);
     var tools = runs.tools(runId);
     var agents = runs.agents(runId);
@@ -152,9 +171,7 @@ public class ExecutionViewService {
             groupAttempts(workflows.workflowAttempts(runId)),
             groupChecks(workflows.workflowChecks(runId))),
         dependencies(nodes, node),
-        attempts.stream()
-            .map(attempt -> attemptView(attempt, models, tools, agents))
-            .toList(),
+        attempts.stream().map(attempt -> attemptView(attempt, models, tools, agents)).toList(),
         checks.stream().map(this::checkView).toList(),
         handoffs.stream()
             .filter(handoff -> nodeId.equals(handoff.receiverNodeId()))
@@ -258,7 +275,8 @@ public class ExecutionViewService {
       List<Map<String, Object>> models,
       List<Map<String, Object>> tools) {
     var result = new ArrayList<FocusItem>();
-    for (var node : nodes.stream().filter(item -> item.status() == PlanNodeStatus.RUNNING).toList()) {
+    for (var node :
+        nodes.stream().filter(item -> item.status() == PlanNodeStatus.RUNNING).toList()) {
       if (node.systemCheck()) {
         var latest =
             latestCheck(checks.getOrDefault(node.id(), List.of()))
@@ -285,7 +303,7 @@ public class ExecutionViewService {
               .max(Comparator.comparingInt(WorkflowAttempt::number))
               .orElse(null);
       // 兼容流程没有 workflow_attempts；实例标识仍来自计划节点，不能用空尝试跳过。
-      String agentId =
+String agentId =
           attempt != null
               ? attempt.agentId().toString()
               : node.agentId() == null ? null : node.agentId().toString();
@@ -434,7 +452,9 @@ public class ExecutionViewService {
             new BlockingView(
                 "DEPENDENCY_NOT_STARTED",
                 "等待未结算的前置步骤："
-                    + blockedBy.stream().map(PlanNode::label).collect(java.util.stream.Collectors.joining("、")),
+                    + blockedBy.stream()
+                        .map(PlanNode::label)
+                        .collect(java.util.stream.Collectors.joining("、")),
                 "NODE",
                 node.id().toString(),
                 node.label(),
@@ -445,7 +465,8 @@ public class ExecutionViewService {
       result.add(new BlockingView("RUN_PAUSED", "运行已暂停，等待用户继续。", "RUN", null, null, List.of()));
     } else if (status == RunStatus.INTERRUPTED) {
       result.add(
-          new BlockingView("RUN_INTERRUPTED", "运行已中断，结果可能未知；可从可用检查点恢复。", "RUN", null, null, List.of()));
+          new BlockingView(
+              "RUN_INTERRUPTED", "运行已中断，结果可能未知；可从可用检查点恢复。", "RUN", null, null, List.of()));
     } else if (status == RunStatus.BLOCKED && !nodeBlocking && !dependencyBlocking) {
       result.add(
           new BlockingView("RUN_BLOCKED", "运行等待用户处理，服务端未记录具体阻塞节点。", "RUN", null, null, List.of()));
@@ -458,7 +479,9 @@ public class ExecutionViewService {
       String runId,
       WorkflowPlan plan,
       List<PlanNode> nodes,
-      List<WorkflowCheckpoint> checkpoints) {
+      List<WorkflowCheckpoint> checkpoints,
+      RunHandoverService.Handover handover,
+      boolean revalidationRequired) {
     var result = new ArrayList<ActionView>();
     if (plan != null
         && plan.reviewRequired()
@@ -477,8 +500,34 @@ public class ExecutionViewService {
     boolean pendingPause = pendingPauseRequest(runId);
     if (status == RunStatus.RUNNING && !pendingPause)
       result.add(new ActionView("PAUSE", "请求暂停", true, null, runId, null, null, "当前运行"));
-    if (status == RunStatus.PAUSED || (status == RunStatus.RUNNING && pendingPause))
-      result.add(new ActionView("RESUME", "继续执行", true, null, runId, null, null, "当前运行"));
+    boolean handoverActive = handover != null && "ACTIVE".equals(handover.status());
+    if ((status == RunStatus.PAUSED || (status == RunStatus.RUNNING && pendingPause))
+        && !handoverActive)
+      result.add(
+          new ActionView(
+              "RESUME",
+              revalidationRequired ? "继续执行（需重新验证）" : "继续执行",
+              !revalidationRequired,
+              revalidationRequired ? "人工修改后代码版本变化，旧测试与审批失效；请重新验证后再继续。" : null,
+              runId,
+              null,
+              null,
+              "当前运行"));
+    if (status == RunStatus.PAUSED
+        && plan != null
+        && plan.scope() != dev.workbench.framework.workflow.plan.WorkflowTemplate.Scope.TEXT_ONLY)
+      result.add(
+          new ActionView(
+              handover != null && "ACTIVE".equals(handover.status())
+                  ? "RETURN_HANDOVER"
+                  : "TAKE_OVER",
+              handover != null && "ACTIVE".equals(handover.status()) ? "交还人工接手" : "人工接手",
+              true,
+              null,
+              runId,
+              null,
+              null,
+              handover != null && handover.evidenceInvalidated() ? "代码已变化，旧测试与审批失效" : "当前暂停运行"));
     if (status.canCancel())
       result.add(new ActionView("CANCEL", "取消运行", true, null, runId, null, null, "当前运行"));
     if (status == RunStatus.INTERRUPTED)
@@ -499,15 +548,14 @@ public class ExecutionViewService {
   }
 
   private boolean pendingPauseRequest(String runId) {
-    var types =
-        db.query(
-            "SELECT event_type FROM events WHERE run_id=? AND event_type IN"
-                + " ('PAUSE_REQUESTED','PAUSED','RESUMED') ORDER BY id DESC LIMIT 1",
-            (row, index) -> row.getString("event_type"),
-            runId);
-    return !types.isEmpty()
-        && (EventType.PAUSE_REQUESTED.name().equals(types.getFirst())
-            || EventType.PAUSED.name().equals(types.getFirst()));
+    var latest =
+        events
+            .findFirstByRunIdAndEventTypeInOrderByIdDesc(
+                runId, List.of("PAUSE_REQUESTED", "PAUSED", "RESUMED"))
+            .map(event -> EventType.valueOf(event.getEventType()));
+    return latest
+        .map(type -> type == EventType.PAUSE_REQUESTED || type == EventType.PAUSED)
+        .orElse(false);
   }
 
   private List<WorkflowCheckpoint> recoveryCheckpoints(String runId, WorkflowPlan plan) {
@@ -516,7 +564,7 @@ public class ExecutionViewService {
       return recovery.checkpoints(runId, plan);
     } catch (RuntimeException e) {
       // 历史运行缺少检查点依赖数据时不阻断流程图；恢复入口显示为未记录。
-      return List.of();
+return List.of();
     }
   }
 
@@ -533,7 +581,8 @@ public class ExecutionViewService {
     InheritedView inherited = null;
     if (sourceCheckpoint != null) {
       var saved = recovery.inherited(UUID.fromString(sourceCheckpoint));
-      if (saved != null) inherited = new InheritedView(saved.rounds(), saved.tools(), saved.elapsedMs());
+      if (saved != null)
+        inherited = new InheritedView(saved.rounds(), saved.tools(), saved.elapsedMs());
     }
     var reused =
         nodes.stream()
@@ -550,8 +599,7 @@ public class ExecutionViewService {
         parentRunId, sourceCheckpoint, reused, inherited, modelCalls, toolCalls);
   }
 
-  private SupplementView supplementView(
-      TaskSupplementService.SupplementRequest request, List<PlanNode> nodes) {
+  private SupplementView supplementView(SupplementRepository.Request request, List<PlanNode> nodes) {
     if (request == null) return null;
     return new SupplementView(
         request.id(),
@@ -566,6 +614,70 @@ public class ExecutionViewService {
         request.taskVersion(),
         request.createdAt(),
         request.decidedAt());
+  }
+
+  private HandoverView handoverView(
+      RunHandoverService.Handover handover, boolean revalidationRequired) {
+    if (handover == null) return null;
+    return new HandoverView(
+        handover.id().toString(),
+        handover.status(),
+        handover.baselineFingerprint(),
+        handover.currentFingerprint(),
+        handover.evidenceInvalidated(),
+        revalidationRequired,
+        handover.note(),
+        handover.takenAt().toString(),
+        handover.returnedAt() == null ? null : handover.returnedAt().toString());
+  }
+
+  private BudgetView budgetView(RunSnapshot snapshot, String runId) {
+    var tokens = runs.reportedTokens(runId);
+    Long remainingTokens =
+        snapshot.maxReportedTokens() == null
+            ? null
+            : Math.max(0, snapshot.maxReportedTokens() - tokens.knownTokens());
+    long remainingRounds = Math.max(0, snapshot.maxRounds() - snapshot.rounds());
+    long remainingTools = Math.max(0, snapshot.maxTools() - snapshot.tools());
+    long remainingMs = Math.max(0, snapshot.maxSeconds() * 1000L - snapshot.elapsedMs());
+    return new BudgetView(
+        snapshot.maxRounds(),
+        snapshot.rounds(),
+        remainingRounds,
+        snapshot.maxTools(),
+        snapshot.tools(),
+        remainingTools,
+        snapshot.maxReportedTokens(),
+        tokens.knownTokens(),
+        tokens.unknownCalls(),
+        remainingTokens,
+        snapshot.maxSeconds(),
+        snapshot.elapsedMs(),
+        remainingMs,
+        snapshot.parentId() != null);
+  }
+
+  /** 中断运行是否可恢复的明确原因；不根据节点顺序猜测。*/
+  private RecoverySupportView recoverySupportView(
+      RunSnapshot snapshot, WorkflowPlan plan, String runId) {
+    if (snapshot.status() != RunStatus.INTERRUPTED) return null;
+    if (runs.hasRecovery(runId)) return new RecoverySupportView(false, "此运行已经发起恢复，请查看关联子运行。");
+    var task = runs.taskDefinition(snapshot.taskId().toString());
+    if (plan != null) {
+      if (plan.sourceCheckpointId() != null) return new RecoverySupportView(false, "恢复子运行不支持再次恢复。");
+      if (plan.scope() != dev.workbench.framework.workflow.plan.WorkflowTemplate.Scope.TEXT_ONLY
+          && plan.scope()
+              != dev.workbench.framework.workflow.plan.WorkflowTemplate.Scope.WORKSPACE_READ_ONLY)
+        return new RecoverySupportView(false, "当前写入、Bug 或外部动作流程尚不支持自动恢复。");
+      var checkpoints = recoveryCheckpoints(runId, plan);
+      if (checkpoints.stream().anyMatch(WorkflowCheckpoint::available))
+        return new RecoverySupportView(true, "可从已结算节点边界恢复，预算和复用来源已记录。");
+      return new RecoverySupportView(false, "没有可用检查点：节点未结算、文件或授权已变化，或检查点保存被跳过。");
+    }
+    if (task.writeEnabled() || task.bugId() != null || task.memoryEnabled())
+      return new RecoverySupportView(false, "写入、模拟 Bug 或启用项目背景的任务不支持自动恢复。");
+    if (task.workspaceId() != null) return new RecoverySupportView(false, "该工作区任务没有可安全恢复的检查点。");
+    return new RecoverySupportView(false, "只有支持的分析检查点可以恢复。");
   }
 
   private CountsView counts(
@@ -586,10 +698,7 @@ public class ExecutionViewService {
         tools.size(),
         (int)
             models.stream()
-                .filter(
-                    row ->
-                        row.get("INPUT_TOKENS") == null
-                            || row.get("OUTPUT_TOKENS") == null)
+                .filter(row -> row.get("INPUT_TOKENS") == null || row.get("OUTPUT_TOKENS") == null)
                 .count());
   }
 
@@ -750,31 +859,27 @@ public class ExecutionViewService {
   }
 
   private List<NodeEventView> nodeEvents(String runId, UUID nodeId) {
-    return db.query(
-        "SELECT id,event_type,message,created_at,attempt_id,check_id,model_call_id,tool_call_id,"
-            + "reason_code FROM events WHERE run_id=? AND node_id=? AND run_seq IS NOT NULL"
-            + " ORDER BY run_seq",
-        (row, index) ->
-            new NodeEventView(
-                row.getLong("id"),
-                row.getString("event_type"),
-                row.getString("message"),
-                row.getString("created_at"),
-                row.getString("attempt_id"),
-                row.getString("check_id"),
-                row.getString("model_call_id"),
-                row.getString("tool_call_id"),
-                row.getString("reason_code")),
-        runId,
-        nodeId.toString());
+    return events.findByRunIdAndNodeIdAndRunSeqIsNotNullOrderByRunSeqAsc(
+            runId, nodeId.toString())
+        .stream()
+        .map(
+            event ->
+                new NodeEventView(
+                    event.getId(),
+                    event.getEventType(),
+                    event.getMessage(),
+                    event.getCreatedAt(),
+                    event.getAttemptId(),
+                    event.getCheckId(),
+                    event.getModelCallId(),
+                    event.getToolCallId(),
+                    event.getReasonCode()))
+        .toList();
   }
 
-  /** 该运行最新已提交事件的序号；诊断游标进度使用，不作为读取入口。 */
+  /** 该运行最新已提交事件的序号；诊断游标进度使用，不作为读取入口。*/
   private long lastEventSeq(String runId) {
-    Long value =
-        db.queryForObject(
-            "SELECT COALESCE(MAX(run_seq),0) FROM events WHERE run_id=?", Long.class, runId);
-    return value == null ? 0 : value;
+    return events.maxRunSeq(runId);
   }
 
   private static java.util.Optional<WorkflowCheck> latestCheck(List<WorkflowCheck> checks) {
@@ -870,7 +975,10 @@ public class ExecutionViewService {
       List<ActionView> availableActions,
       RecoveryView recovery,
       SupplementView supplement,
+      HandoverView handover,
       CountsView counts,
+      BudgetView budget,
+      RecoverySupportView recoverySupport,
       long lastEventSeq) {}
 
   public record PlanView(
@@ -955,12 +1063,11 @@ public class ExecutionViewService {
       long newModelCalls,
       long newToolCalls) {}
 
-  public record ReusedNodeView(
-      String nodeId, String key, String label, String sourceAgentId) {}
+  public record ReusedNodeView(String nodeId, String key, String label, String sourceAgentId) {}
 
   public record InheritedView(Integer rounds, Integer tools, Long elapsedMs) {}
 
-  /** 待补充或已应用的补充请求；不存在时为空。 */
+  /** 待补充或已应用的补充请求；不存在时为空。*/
   public record SupplementView(
       String id,
       String status,
@@ -974,6 +1081,36 @@ public class ExecutionViewService {
       int taskVersion,
       String createdAt,
       String decidedAt) {}
+
+  /** 人工接手记录；旧测试或审批是否失效以服务端快照为准。*/
+  public record HandoverView(
+      String id,
+      String status,
+      String baselineFingerprint,
+      String currentFingerprint,
+      boolean evidenceInvalidated,
+      boolean revalidationRequired,
+      String note,
+      String takenAt,
+      String returnedAt) {}
+
+  public record BudgetView(
+      int maxRounds,
+      int usedRounds,
+      long remainingRounds,
+      int maxTools,
+      int usedTools,
+      long remainingTools,
+      Long maxTokens,
+      long knownTokens,
+      long unknownTokenCalls,
+      Long remainingTokens,
+      int maxSeconds,
+      long elapsedMs,
+      long remainingMs,
+      boolean inherited) {}
+
+  public record RecoverySupportView(boolean supported, String reason) {}
 
   public record CountsView(
       int total,

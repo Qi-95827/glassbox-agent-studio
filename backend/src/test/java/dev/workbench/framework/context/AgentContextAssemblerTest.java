@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.memory.MemoryService;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -34,7 +34,7 @@ class AgentContextAssemblerTest {
   @Test
   void memoryRequiresExplicitTaskAuthorizationAndRecordsLoading() {
     var memories = mock(MemoryService.class);
-    var repository = mock(RunRepository.class);
+    var repository = mock(RunRecordService.class);
     var task = mock(TaskDefinition.class);
     var contributor =
         new BuiltInContextContributors()

@@ -1,18 +1,18 @@
 package dev.workbench.app;
 
+import dev.workbench.persistence.agentscope.JpaAgentStateStore;
 import io.agentscope.core.state.AgentStateStore;
-import io.agentscope.extensions.jdbc.dialect.vendor.H2Dialect;
-import io.agentscope.extensions.jdbc.state.JdbcAgentStateStore;
-import javax.sql.DataSource;
+import jakarta.persistence.EntityManagerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.transaction.PlatformTransactionManager;
 
-/** 使用 AgentScope 官方 JDBC 存储，给本机每个 Agent 实例保存独立会话。 */
+/** 使用 JPA 适配保存 AgentScope 会话，继续读写原有 agentscope_sessions 表。 */
 @Configuration
 public class AgentStateConfiguration {
   @Bean
-  AgentStateStore agentStateStore(DataSource dataSource) {
-    // 使用框架默认前缀 agentscope_，不会覆盖应用自有业务表。
-    return new JdbcAgentStateStore(dataSource, new H2Dialect(), true);
+  AgentStateStore agentStateStore(
+      EntityManagerFactory entityManagerFactory, PlatformTransactionManager transactionManager) {
+    return new JpaAgentStateStore(entityManagerFactory, transactionManager);
   }
 }

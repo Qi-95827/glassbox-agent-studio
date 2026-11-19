@@ -1,47 +1,57 @@
 package dev.workbench.memory;
 
-import dev.workbench.task.RunRepository;
+import dev.workbench.persistence.entity.MemoryHistoryEntity;
+import dev.workbench.persistence.entity.MemoryRecordEntity;
+import dev.workbench.persistence.entity.RunMemoryLoadEntity;
+import dev.workbench.persistence.entity.RunMemoryReferenceEntity;
+import dev.workbench.persistence.repository.MemoryHistoryRepository;
+import dev.workbench.persistence.repository.MemoryRecordRepository;
+import dev.workbench.persistence.repository.RunMemoryLoadRepository;
+import dev.workbench.persistence.repository.RunMemoryReferenceRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.text.Normalizer;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /** 单机本地工作区的用户确认记忆；不自动把模型输出写入长期记忆。 */
 @Service
 public class MemoryService {
-  private final JdbcTemplate db;
+  private final MemoryRecordRepository records;
+  private final MemoryHistoryRepository versions;
+  private final RunMemoryLoadRepository loads;
+  private final RunMemoryReferenceRepository references;
   private final TransactionTemplate tx;
   private final WorkspaceService workspaces;
 
-  public MemoryService(JdbcTemplate db, TransactionTemplate tx, WorkspaceService workspaces) {
-    this.db = db;
+  public MemoryService(
+      MemoryRecordRepository records,
+      MemoryHistoryRepository versions,
+      RunMemoryLoadRepository loads,
+      RunMemoryReferenceRepository references,
+      TransactionTemplate tx,
+      WorkspaceService workspaces) {
+    this.records = records;
+    this.versions = versions;
+    this.loads = loads;
+    this.references = references;
     this.tx = tx;
     this.workspaces = workspaces;
   }
 
   public List<MemoryRecord> list(String workspaceId) {
     workspaces.get(workspaceId);
-    return db.query(
-        "SELECT * FROM memory_records WHERE workspace_id=? AND status=? ORDER BY updated_at"
-            + " DESC,id",
-        (r, i) ->
-            new MemoryRecord(
-                UUID.fromString(r.getString("id")),
-                UUID.fromString(r.getString("workspace_id")),
-                MemoryCategory.valueOf(r.getString("category")),
-                r.getString("content"),
-                MemorySource.valueOf(r.getString("source")),
-                MemoryStatus.valueOf(r.getString("status")),
-                r.getInt("version"),
-                Instant.parse(r.getString("created_at")),
-                Instant.parse(r.getString("updated_at"))),
-        workspaceId,
-        MemoryStatus.ACTIVE.name());
+    return records
+        .findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(workspaceId, MemoryStatus.ACTIVE)
+        .stream()
+        .map(MemoryService::toRecord)
+        .toList();
   }
 
   /** 新任务显式开启记忆时才调用；最多取五条且重新查权威库。 */
@@ -53,71 +63,53 @@ public class MemoryService {
   public List<MemoryRecord> loadContextAndRecord(String runId, String workspaceId) {
     return tx.execute(
         status -> {
-          var records = context(workspaceId);
-          db.update(
-              "INSERT INTO run_memory_loads(run_id,workspace_id,item_count,loaded_at)"
-                  + " VALUES(?,?,?,?)",
-              runId,
-              workspaceId,
-              records.size(),
-              RunRepository.now());
-          for (int index = 0; index < records.size(); index++) {
-            var record = records.get(index);
-            db.update(
-                "INSERT INTO"
-                    + " run_memory_references(run_id,sequence_no,memory_id,memory_version,category)"
-                    + " VALUES(?,?,?,?,?)",
-                runId,
-                index + 1,
-                record.id().toString(),
-                record.version(),
-                record.category().name());
+          var selected = context(workspaceId);
+          loads.save(
+              new RunMemoryLoadEntity(
+                  runId, workspaceId, selected.size(), RunRecordService.now()));
+          for (int index = 0; index < selected.size(); index++) {
+            var record = selected.get(index);
+            references.save(
+                new RunMemoryReferenceEntity(
+                    runId,
+                    index + 1,
+                    record.id().toString(),
+                    record.version(),
+                    record.category()));
           }
-          return records;
+          return selected;
         });
   }
 
   /** 没有装配标记时返回未记录，不能把历史数据缺失解释为已装配零条。 */
   public MemoryLoad loadForRun(String runId) {
-    var loads =
-        db.query(
-            "SELECT workspace_id,loaded_at,item_count FROM run_memory_loads WHERE run_id=?",
-            (r, i) ->
-                new MemoryLoad(
-                    true,
-                    UUID.fromString(r.getString("workspace_id")),
-                    Instant.parse(r.getString("loaded_at")),
-                    r.getInt("item_count"),
-                    MemoryLoadIntegrity.INCONSISTENT,
-                    List.of()),
-            runId);
-    if (loads.isEmpty())
+    var load = loads.findById(runId);
+    if (load.isEmpty())
       return new MemoryLoad(false, null, null, null, MemoryLoadIntegrity.NOT_RECORDED, List.of());
-    var references =
-        db.query(
-            "SELECT sequence_no,memory_id,memory_version,category FROM run_memory_references"
-                + " WHERE run_id=? ORDER BY sequence_no",
-            (r, i) ->
-                new MemoryReference(
-                    r.getInt("sequence_no"),
-                    UUID.fromString(r.getString("memory_id")),
-                    r.getInt("memory_version"),
-                    MemoryCategory.valueOf(r.getString("category"))),
-            runId);
-    var load = loads.getFirst();
+    var stored = load.get();
+    var selected =
+        references.findByRunId(runId).stream()
+            .map(
+                reference ->
+                    new MemoryReference(
+                        reference.getId().getSequenceNo(),
+                        UUID.fromString(reference.getMemoryId()),
+                        reference.getMemoryVersion(),
+                        reference.getCategory()))
+            .toList();
     boolean ordered = true;
-    for (int i = 0; i < references.size(); i++) {
-      if (references.get(i).sequence() != i + 1) ordered = false;
+    for (int i = 1; i <= selected.size(); i++) {
+      if (selected.get(i - 1).sequence() != i) ordered = false;
     }
     boolean consistent =
-        load.declaredCount() >= 0 && load.declaredCount() == references.size() && ordered;
+        stored.getItemCount() >= 0 && stored.getItemCount() == selected.size() && ordered;
     return new MemoryLoad(
         true,
-        load.workspaceId(),
-        load.loadedAt(),
-        load.declaredCount(),
+        UUID.fromString(stored.getWorkspaceId()),
+        Instant.parse(stored.getLoadedAt()),
+        stored.getItemCount(),
         consistent ? MemoryLoadIntegrity.CONSISTENT : MemoryLoadIntegrity.INCONSISTENT,
-        references);
+        selected);
   }
 
   /** 只读历史严格按工作区过滤；游标只取更早版本，避免并发新增导致重复。 */
@@ -126,37 +118,18 @@ public class MemoryService {
     if (limit < 1 || limit > 50 || (beforeVersion != null && beforeVersion < 1))
       throw new IllegalArgumentException("历史页大小应为 1 至 50，版本游标必须为正数。");
     workspaces.get(workspaceId);
-    Integer exists =
-        db.queryForObject(
-            "SELECT COUNT(*) FROM memory_records WHERE id=? AND workspace_id=?",
-            Integer.class,
-            memoryId,
-            workspaceId);
-    if (exists == null || exists != 1)
-      throw new org.springframework.dao.EmptyResultDataAccessException(1);
-    String cursor = beforeVersion == null ? "" : " AND h.version<?";
-    var args = new java.util.ArrayList<Object>();
-    args.add(memoryId);
-    args.add(workspaceId);
-    if (beforeVersion != null) args.add(beforeVersion);
-    args.add(limit + 1);
+    if (!records.existsByIdAndWorkspaceId(memoryId, workspaceId))
+      throw new EmptyResultDataAccessException(1);
+    var page = PageRequest.of(0, limit + 1);
     var rows =
-        db.query(
-            "SELECT h.* FROM memory_history h JOIN memory_records m ON m.id=h.memory_id"
-                + " WHERE m.id=? AND m.workspace_id=?"
-                + cursor
-                + " ORDER BY h.version DESC LIMIT ?",
-            (r, i) ->
-                new MemoryHistoryVersion(
-                    UUID.fromString(r.getString("memory_id")),
-                    r.getInt("version"),
-                    MemoryCategory.valueOf(r.getString("category")),
-                    r.getString("content"),
-                    MemoryStatus.valueOf(r.getString("status")),
-                    Instant.parse(r.getString("changed_at"))),
-            args.toArray());
+        beforeVersion == null
+            ? versions.findNewest(memoryId, page)
+            : versions.findBefore(memoryId, beforeVersion, page);
     boolean hasMore = rows.size() > limit;
-    var items = hasMore ? List.copyOf(rows.subList(0, limit)) : List.copyOf(rows);
+    var items =
+        (hasMore ? rows.subList(0, limit) : rows).stream()
+            .map(MemoryService::toHistoryVersion)
+            .toList();
     return new MemoryHistoryPage(items, hasMore ? items.getLast().version() : null);
   }
 
@@ -185,20 +158,20 @@ public class MemoryService {
     String text = validate(category, content);
     return tx.execute(
         s -> {
-          if (list(workspaceId).size() >= 20)
+          if (records.countByWorkspaceIdAndStatus(workspaceId, MemoryStatus.ACTIVE) >= 20)
             throw new IllegalStateException("每个工作区最多保存 20 条有效记忆。");
-          String id = RunRepository.id(), time = RunRepository.now();
-          db.update(
-              "INSERT INTO memory_records VALUES(?,?,?,?,?,?,?,?,?)",
-              id,
-              workspaceId,
-              category.name(),
-              text,
-              MemorySource.USER_CONFIRMED.name(),
-              MemoryStatus.ACTIVE.name(),
-              1,
-              time,
-              time);
+          String id = RunRecordService.id(), time = RunRecordService.now();
+          records.saveAndFlush(
+              new MemoryRecordEntity(
+                  id,
+                  workspaceId,
+                  category,
+                  text,
+                  MemorySource.USER_CONFIRMED,
+                  MemoryStatus.ACTIVE,
+                  1,
+                  time,
+                  time));
           saveHistory(id);
           return getActive(workspaceId, id);
         });
@@ -210,15 +183,13 @@ public class MemoryService {
     return tx.execute(
         s -> {
           int changed =
-              db.update(
-                  "UPDATE memory_records SET category=?,content=?,version=version+1,updated_at=?"
-                      + " WHERE id=? AND workspace_id=? AND status=? AND version=?",
-                  category.name(),
-                  text,
-                  RunRepository.now(),
+              records.updateIfActive(
                   id,
                   workspaceId,
-                  MemoryStatus.ACTIVE.name(),
+                  category,
+                  text,
+                  RunRecordService.now(),
+                  MemoryStatus.ACTIVE,
                   version);
           if (changed != 1) throw new IllegalStateException("记忆不存在、已删除或版本已变化。");
           saveHistory(id);
@@ -230,14 +201,12 @@ public class MemoryService {
     tx.executeWithoutResult(
         s -> {
           int changed =
-              db.update(
-                  "UPDATE memory_records SET status=?,version=version+1,updated_at=? WHERE id=? AND"
-                      + " workspace_id=? AND status=? AND version=?",
-                  MemoryStatus.DELETED.name(),
-                  RunRepository.now(),
+              records.softDelete(
                   id,
                   workspaceId,
-                  MemoryStatus.ACTIVE.name(),
+                  RunRecordService.now(),
+                  MemoryStatus.DELETED,
+                  MemoryStatus.ACTIVE,
                   version);
           if (changed != 1) throw new IllegalStateException("记忆不存在、已删除或版本已变化。");
           saveHistory(id);
@@ -245,17 +214,45 @@ public class MemoryService {
   }
 
   private MemoryRecord getActive(String workspaceId, String id) {
-    return list(workspaceId).stream()
-        .filter(r -> r.id().toString().equals(id))
-        .findFirst()
+    return records
+        .findByIdAndWorkspaceIdAndStatus(id, workspaceId, MemoryStatus.ACTIVE)
+        .map(MemoryService::toRecord)
         .orElseThrow();
   }
 
   private void saveHistory(String id) {
-    db.update(
-        "INSERT INTO memory_history(memory_id,version,category,content,status,changed_at) SELECT"
-            + " id,version,category,content,status,updated_at FROM memory_records WHERE id=?",
-        id);
+    var row = records.findById(id).orElseThrow();
+    versions.save(
+        new MemoryHistoryEntity(
+            row.getId(),
+            row.getVersion(),
+            row.getCategory(),
+            row.getContent(),
+            row.getStatus(),
+            row.getUpdatedAt()));
+  }
+
+  private static MemoryRecord toRecord(MemoryRecordEntity row) {
+    return new MemoryRecord(
+        UUID.fromString(row.getId()),
+        UUID.fromString(row.getWorkspaceId()),
+        row.getCategory(),
+        row.getContent(),
+        row.getSource(),
+        row.getStatus(),
+        row.getVersion(),
+        Instant.parse(row.getCreatedAt()),
+        Instant.parse(row.getUpdatedAt()));
+  }
+
+  private static MemoryHistoryVersion toHistoryVersion(MemoryHistoryEntity row) {
+    return new MemoryHistoryVersion(
+        UUID.fromString(row.getId().getMemoryId()),
+        row.getId().getVersion(),
+        row.getCategory(),
+        row.getContent(),
+        row.getStatus(),
+        Instant.parse(row.getChangedAt()));
   }
 
   private static String validate(MemoryCategory category, String content) {

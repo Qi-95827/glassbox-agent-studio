@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -28,7 +28,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 class BugWorkflowIntegrationTest {
   @Autowired WorkspaceService workspaces;
   @Autowired RunService runs;
-  @Autowired RunRepository repository;
+  @Autowired RunRecordService repository;
   @Autowired BugService bugs;
   @Autowired org.springframework.test.web.servlet.MockMvc mvc;
   @Autowired org.springframework.jdbc.core.JdbcTemplate db;

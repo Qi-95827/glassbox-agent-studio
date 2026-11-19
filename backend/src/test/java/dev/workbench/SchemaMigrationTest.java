@@ -59,25 +59,35 @@ class SchemaMigrationTest {
       var db =
           new org.springframework.jdbc.core.JdbcTemplate(
               new org.springframework.jdbc.datasource.SingleConnectionDataSource(connection, true));
-      var repository =
-          new dev.workbench.framework.workflow.plan.PlanRepository(
-              db,
-              new dev.workbench.framework.workflow.plan.PlanFactory(
-                  new dev.workbench.framework.workflow.plan.PlanValidator()));
       assertEquals(
           1, db.queryForObject("SELECT COUNT(*) FROM plan_node_dependencies", Integer.class));
       assertEquals(0, db.queryForObject("SELECT COUNT(*) FROM workflow_checks", Integer.class));
       assertEquals(
-          dev.workbench.framework.workflow.plan.PlanNodeKind.AGENT,
-          repository.find(run).getFirst().kind());
+          "AGENT",
+          db.queryForObject(
+              "SELECT node_kind FROM plan_nodes WHERE run_id=? ORDER BY sequence_no LIMIT 1",
+              String.class,
+              run));
       assertEquals(
-          java.util.List.of(UUID.fromString(analyst)),
-          repository.find(run).getLast().dependencyIds());
-      assertNull(repository.find(run).getFirst().definitionRef());
-      assertNull(repository.find(run).getLast().definitionRef());
-      assertNull(repository.find(run).getFirst().definitionSha256());
+          analyst,
+          db.queryForObject(
+              "SELECT prerequisite_id FROM plan_node_dependencies WHERE run_id=? AND node_id="
+                  + "(SELECT id FROM plan_nodes WHERE run_id=? ORDER BY sequence_no DESC LIMIT 1)",
+              String.class,
+              run,
+              run));
+      assertEquals(
+          2,
+          db.queryForObject(
+              "SELECT COUNT(*) FROM plan_nodes WHERE run_id=? AND definition_id IS NULL"
+                  + " AND definition_sha256 IS NULL",
+              Integer.class,
+              run));
       assertEquals(3, db.queryForObject("SELECT COUNT(*) FROM plan_nodes", Integer.class));
-      assertThrows(IllegalStateException.class, () -> repository.find(missingRun));
+      assertEquals(
+          1,
+          db.queryForObject(
+              "SELECT COUNT(*) FROM plan_nodes WHERE run_id=?", Integer.class, missingRun));
     }
   }
 

@@ -5,11 +5,11 @@ import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.framework.workflow.plan.PlanNode;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowAttempt;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
-import dev.workbench.task.RunRepository;
-import dev.workbench.task.WorkflowExecutionRepository;
+import dev.workbench.task.RunRecordService;
+import dev.workbench.task.WorkflowExecutionService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -18,12 +18,12 @@ import org.springframework.stereotype.Component;
 /** 使用系统持久化记录展开固定评测断言，不信任模型自述。 */
 @Component
 public class SeedCaseEvaluator {
-  private final RunRepository records;
-  private final PlanRepository plans;
-  private final WorkflowExecutionRepository workflows;
+  private final RunRecordService records;
+  private final PlanService plans;
+  private final WorkflowExecutionService workflows;
 
   public SeedCaseEvaluator(
-      RunRepository records, PlanRepository plans, WorkflowExecutionRepository workflows) {
+      RunRecordService records, PlanService plans, WorkflowExecutionService workflows) {
     this.records = records;
     this.plans = plans;
     this.workflows = workflows;

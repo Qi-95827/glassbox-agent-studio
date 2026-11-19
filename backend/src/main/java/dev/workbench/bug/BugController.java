@@ -7,9 +7,11 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/bugs")
 public class BugController {
   private final BugService service;
+  private final BugIntakeService intakes;
 
-  public BugController(BugService service) {
+  public BugController(BugService service, BugIntakeService intakes) {
     this.service = service;
+    this.intakes = intakes;
   }
 
   public record CheckRequest(String workspaceId, BugService.CheckKind kind) {}
@@ -36,6 +38,18 @@ public class BugController {
   @GetMapping("/feedback")
   public Object feedbackHistory(@RequestParam String workspaceId) {
     return service.feedbackHistory(workspaceId);
+  }
+
+  /** 原始描述、来源版本与分诊记录；按工作区倒序。 */
+  @GetMapping("/intakes")
+  public Object intakes(@RequestParam String workspaceId) {
+    return intakes.history(workspaceId);
+  }
+
+  /** 交付视图：只读组合原始描述、分诊、检查和当前结论。 */
+  @GetMapping("/delivery")
+  public Object delivery(@RequestParam String runId) {
+    return intakes.delivery(runId);
   }
 
   @PostMapping("/{id}/checks")

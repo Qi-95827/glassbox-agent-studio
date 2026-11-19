@@ -1,83 +1,87 @@
 package dev.workbench.workspace;
 
-import dev.workbench.task.RunRepository;
+import dev.workbench.persistence.entity.ApprovalEntity;
+import dev.workbench.persistence.repository.ApprovalRepository;
+import dev.workbench.task.RunRecordService;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 
 /** 本地审查决定只记录对具体差异的意见，不触发提交、推送或合并。 */
 @Service
 public class ApprovalService {
-  private final JdbcTemplate db;
+  private final ApprovalRepository rows;
   private final WorkspaceService workspaces;
 
-  public ApprovalService(JdbcTemplate db, WorkspaceService workspaces) {
-    this.db = db;
+  public ApprovalService(ApprovalRepository rows, WorkspaceService workspaces) {
+    this.rows = rows;
     this.workspaces = workspaces;
   }
 
   public synchronized List<Map<String, Object>> list(String workspaceId) {
-    var rows =
-        db.queryForList(
-            "SELECT * FROM approvals WHERE workspace_id=? ORDER BY created_at DESC", workspaceId);
-    for (var row : rows) {
-      if (!"PENDING".equals(row.get("STATUS")) && !"APPROVED".equals(row.get("STATUS"))) continue;
+    var approvals = rows.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
+    for (var row : approvals) {
+      if (!"PENDING".equals(row.getStatus()) && !"APPROVED".equals(row.getStatus())) continue;
       boolean valid;
       try {
-        valid = workspaces.approvalFingerprint(workspaceId).equals(row.get("FINGERPRINT"));
+        valid = workspaces.approvalFingerprint(workspaceId).equals(row.getFingerprint());
       } catch (RuntimeException e) {
         valid = false;
       }
       if (!valid)
-        db.update(
-            "UPDATE approvals SET status='STALE',updated_at=? WHERE id=?",
-            RunRepository.now(),
-            row.get("ID"));
+        rows.updateStatus(row.getId(), "STALE", RunRecordService.now());
     }
-    return db.queryForList(
-        "SELECT * FROM approvals WHERE workspace_id=? ORDER BY created_at DESC", workspaceId);
+    return rows.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId).stream()
+        .map(ApprovalService::map)
+        .toList();
   }
 
   public Map<String, Object> propose(String workspaceId) {
     String fingerprint = workspaces.approvalFingerprint(workspaceId),
-        id = RunRepository.id(),
-        now = RunRepository.now();
-    db.update(
-        "INSERT INTO approvals VALUES(?,?,?,?,?,?)",
-        id,
-        workspaceId,
-        fingerprint,
-        "PENDING",
-        now,
-        now);
-    return db.queryForMap("SELECT * FROM approvals WHERE id=?", id);
+        id = RunRecordService.id(),
+        now = RunRecordService.now();
+    rows.save(new ApprovalEntity(id, workspaceId, fingerprint, "PENDING", now, now));
+    return map(
+        rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
   }
 
   public synchronized Map<String, Object> decide(String id, Decision decision) {
-    var row = db.queryForMap("SELECT * FROM approvals WHERE id=?", id);
-    if (!"PENDING".equals(row.get("STATUS"))) throw new IllegalStateException("该审查已处理，请重新发起。");
+    ApprovalEntity row =
+        rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1));
+    if (!"PENDING".equals(row.getStatus())) throw new IllegalStateException("该审查已处理，请重新发起。");
     if (decision == Decision.APPROVE) {
       String current;
       try {
-        current = workspaces.approvalFingerprint(row.get("WORKSPACE_ID").toString());
+        current = workspaces.approvalFingerprint(row.getWorkspaceId());
       } catch (RuntimeException e) {
-        db.update(
-            "UPDATE approvals SET status='STALE',updated_at=? WHERE id=?", RunRepository.now(), id);
+        rows.updateStatus(id, "STALE", RunRecordService.now());
         throw new IllegalStateException("工作区状态已改变，原审查已失效。");
       }
-      if (!current.equals(row.get("FINGERPRINT"))) {
-        db.update(
-            "UPDATE approvals SET status='STALE',updated_at=? WHERE id=?", RunRepository.now(), id);
+      if (!current.equals(row.getFingerprint())) {
+        rows.updateStatus(id, "STALE", RunRecordService.now());
         throw new IllegalStateException("代码或目标分支已变化，原审查已失效。");
       }
     }
-    db.update(
-        "UPDATE approvals SET status=?,updated_at=? WHERE id=?",
+    rows.updateStatus(
+        id,
         decision == Decision.APPROVE ? "APPROVED" : "REJECTED",
-        RunRepository.now(),
-        id);
-    return db.queryForMap("SELECT * FROM approvals WHERE id=?", id);
+        RunRecordService.now());
+    return map(
+        rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
+  }
+
+  /** 保持原查询返回的大写列名和字符串值，HTTP 与报告继续按原字段读取。 */
+  private static Map<String, Object> map(ApprovalEntity row) {
+    Map<String, Object> values = new LinkedHashMap<>();
+    values.put("ID", row.getId());
+    values.put("WORKSPACE_ID", row.getWorkspaceId());
+    values.put("FINGERPRINT", row.getFingerprint());
+    values.put("STATUS", row.getStatus());
+    values.put("CREATED_AT", row.getCreatedAt());
+    values.put("UPDATED_AT", row.getUpdatedAt());
+    return values;
   }
 
   public enum Decision {

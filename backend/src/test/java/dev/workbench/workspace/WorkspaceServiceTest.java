@@ -2,6 +2,10 @@ package dev.workbench.workspace;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.workbench.TestJpa;
+import dev.workbench.persistence.repository.ApprovalRepository;
+import dev.workbench.persistence.repository.WorkspaceDeclaredFileRepository;
+import dev.workbench.persistence.repository.WorkspaceRepository;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,7 +40,13 @@ class WorkspaceServiceTest {
     db.execute(
         "CREATE TABLE approvals (id VARCHAR(36) PRIMARY KEY, workspace_id VARCHAR(36), fingerprint"
             + " VARCHAR(64), status VARCHAR(30), created_at VARCHAR(40), updated_at VARCHAR(40))");
-    WorkspaceService service = new WorkspaceService(db, temp.resolve("workspaces").toString());
+    db.execute(
+        "CREATE TABLE workspace_declared_files (workspace_id VARCHAR(36), path VARCHAR(200),"
+            + " sha256 VARCHAR(64), source VARCHAR(30), created_at VARCHAR(40),"
+            + " PRIMARY KEY(workspace_id,path))");
+    TestJpa jpa = new TestJpa(source);
+    WorkspaceService service =
+        workspaceService(jpa, temp.resolve("workspaces").toString());
     var workspace = service.create(repo.toString(), "main");
     assertEquals("用户未提交的内容", Files.readString(repo.resolve("demo.txt")));
     var before = service.read(workspace.id(), "demo.txt");
@@ -49,7 +59,7 @@ class WorkspaceServiceTest {
         IllegalStateException.class,
         () -> service.write(workspace.id(), "demo.txt", before.sha256(), "覆盖"));
     assertTrue(service.status(workspace.id()).diff().contains("工作区修改"));
-    var approvals = new ApprovalService(db, service);
+    var approvals = new ApprovalService(jpa.repository(ApprovalRepository.class), service);
     var request = approvals.propose(workspace.id());
     service.write(workspace.id(), "demo.txt", modified.sha256(), "更新后的修改");
     assertThrows(
@@ -93,7 +103,8 @@ class WorkspaceServiceTest {
         "commit",
         "branch",
         "time");
-    var service = new WorkspaceService(db, temp.resolve("unused").toString());
+    var jpa = new TestJpa(source);
+    var service = workspaceService(jpa, temp.resolve("unused").toString());
     assertThrows(IllegalArgumentException.class, () -> service.read(id, "link.txt"));
   }
 
@@ -118,7 +129,8 @@ class WorkspaceServiceTest {
         "CREATE TABLE workspace_declared_files (workspace_id VARCHAR(36), path VARCHAR(200),"
             + " sha256 VARCHAR(64), source VARCHAR(30), created_at VARCHAR(40),"
             + " PRIMARY KEY(workspace_id,path))");
-    var service = new WorkspaceService(db, temp.resolve("workspaces-supplement").toString());
+    var jpa = new TestJpa(source);
+    var service = workspaceService(jpa, temp.resolve("workspaces-supplement").toString());
     var workspace = service.create(repo.toString(), "main");
     Path root = Path.of(workspace.workspacePath());
 
@@ -167,7 +179,8 @@ class WorkspaceServiceTest {
         "CREATE TABLE workspace_declared_files (workspace_id VARCHAR(36), path VARCHAR(200),"
             + " sha256 VARCHAR(64), source VARCHAR(30), created_at VARCHAR(40),"
             + " PRIMARY KEY(workspace_id,path))");
-    var service = new WorkspaceService(db, temp.resolve("workspaces-race").toString());
+    var jpa = new TestJpa(source);
+    var service = workspaceService(jpa, temp.resolve("workspaces-race").toString());
     var workspace = service.create(repo.toString(), "main");
     Path root = Path.of(workspace.workspacePath());
 
@@ -244,6 +257,13 @@ class WorkspaceServiceTest {
     }
     service.createSupplementTestFile(workspace.id(), "tests/test_retry.py", "retry\n");
     assertTrue(Files.exists(root.resolve("tests").resolve("test_retry.py")));
+  }
+
+  private static WorkspaceService workspaceService(TestJpa jpa, String root) {
+    return new WorkspaceService(
+        jpa.repository(WorkspaceRepository.class),
+        jpa.repository(WorkspaceDeclaredFileRepository.class),
+        root);
   }
 
   private static String sha256(String text) throws Exception {

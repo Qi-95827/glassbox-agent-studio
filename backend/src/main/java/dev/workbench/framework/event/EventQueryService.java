@@ -1,10 +1,12 @@
 package dev.workbench.framework.event;
 
 import dev.workbench.domain.EventType;
-import dev.workbench.task.RunRepository;
+import dev.workbench.persistence.entity.EventEntity;
+import dev.workbench.persistence.repository.EventRepository;
+import dev.workbench.task.RunRecordService;
 import java.time.Instant;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 /**
@@ -15,42 +17,43 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class EventQueryService {
-  private final JdbcTemplate db;
-  private final RunRepository runs;
+  private final EventRepository events;
+  private final RunRecordService runs;
 
-  public EventQueryService(JdbcTemplate db, RunRepository runs) {
-    this.db = db;
+  public EventQueryService(EventRepository events, RunRecordService runs) {
+    this.events = events;
     this.runs = runs;
   }
 
   public EventPage page(String runId, long after, int limit) {
     if (after < 0 || limit < 1 || limit > 200) throw new IllegalArgumentException("事件游标或分页数量无效。");
     runs.runSnapshot(runId);
-    var events =
-        db.query(
-            "SELECT id,run_seq,run_id,event_type,message,created_at,plan_version_id,node_id,"
-                + "attempt_id,agent_id,check_id,model_call_id,tool_call_id,reason_code FROM events"
-                + " WHERE run_id=? AND run_seq>? AND run_seq IS NOT NULL ORDER BY run_seq LIMIT ?",
-            (r, i) ->
-                new RunEvent(
-                    r.getLong("id"),
-                    r.getLong("run_seq"),
-                    UUID.fromString(r.getString("run_id")),
-                    EventType.valueOf(r.getString("event_type")),
-                    r.getString("message"),
-                    Instant.parse(r.getString("created_at")),
-                    nullableUuid(r.getString("plan_version_id")),
-                    nullableUuid(r.getString("node_id")),
-                    nullableUuid(r.getString("attempt_id")),
-                    nullableUuid(r.getString("agent_id")),
-                    nullableUuid(r.getString("check_id")),
-                    nullableUuid(r.getString("model_call_id")),
-                    nullableUuid(r.getString("tool_call_id")),
-                    r.getString("reason_code")),
-            runId,
-            after,
-            limit);
-    return new EventPage(events, events.isEmpty() ? after : events.getLast().runSeq());
+    var page =
+        events
+            .findByRunIdAndRunSeqGreaterThanOrderByRunSeqAsc(
+                runId, after, PageRequest.of(0, limit))
+            .stream()
+            .map(EventQueryService::toEvent)
+            .toList();
+    return new EventPage(page, page.isEmpty() ? after : page.getLast().runSeq());
+  }
+
+  private static RunEvent toEvent(EventEntity event) {
+    return new RunEvent(
+        event.getId(),
+        event.getRunSeq(),
+        UUID.fromString(event.getRunId()),
+        EventType.valueOf(event.getEventType()),
+        event.getMessage(),
+        Instant.parse(event.getCreatedAt()),
+        nullableUuid(event.getPlanVersionId()),
+        nullableUuid(event.getNodeId()),
+        nullableUuid(event.getAttemptId()),
+        nullableUuid(event.getAgentId()),
+        nullableUuid(event.getCheckId()),
+        nullableUuid(event.getModelCallId()),
+        nullableUuid(event.getToolCallId()),
+        event.getReasonCode());
   }
 
   private static UUID nullableUuid(String value) {

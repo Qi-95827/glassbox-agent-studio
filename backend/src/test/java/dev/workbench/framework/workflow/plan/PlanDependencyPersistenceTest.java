@@ -2,52 +2,55 @@ package dev.workbench.framework.workflow.plan;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.agent.definition.AgentDefinitionRegistry;
+import dev.workbench.persistence.repository.PlanGraphRepository;
+import dev.workbench.persistence.repository.PlanStateRepository;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.io.ClassPathResource;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.transaction.support.TransactionTemplate;
 
-/** 使用独立 H2 验证持久化依赖和条件启动，不依赖真实模型。 */
+/** 使用生产 JPA 计划路径验证持久化依赖和条件启动，不依赖真实模型。 */
+@SpringBootTest(
+    classes = WorkbenchApplication.class,
+    properties = {
+      "spring.datasource.url=jdbc:h2:mem:plandep;DB_CLOSE_DELAY=-1",
+      "workbench.workspace-root=${java.io.tmpdir}/agent-workbench-plandep"
+    })
 class PlanDependencyPersistenceTest {
-  private JdbcTemplate db;
-  private PlanRepository plans;
-  private DriverManagerDataSource source;
-
-  @BeforeEach
-  void setup() throws Exception {
-    source =
-        new DriverManagerDataSource(
-            "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
-    try (var connection = source.getConnection()) {
-      ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
-    }
-    db = new JdbcTemplate(source);
-    plans = new PlanRepository(db, new PlanFactory(new PlanValidator()));
-  }
+  @Autowired JdbcTemplate db;
+  @Autowired PlanService plans;
+  @Autowired PlanGraphRepository graphStore;
+  @Autowired PlanStateRepository states;
+  @Autowired TransactionTemplate tx;
 
   @Test
   void failingDependencyInsertRollsBackNodesInSameTransaction() {
     String run = UUID.randomUUID().toString();
+    String constraint = "reject_test_edge_" + UUID.randomUUID().toString().replace("-", "");
     db.execute(
-        "ALTER TABLE plan_node_dependencies ADD CONSTRAINT reject_test_edge CHECK"
-            + " (node_id='impossible')");
-    var transactions =
-        new org.springframework.transaction.support.TransactionTemplate(
-            new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
-    assertThrows(
-        org.springframework.dao.DataAccessException.class,
-        () -> transactions.executeWithoutResult(status -> plans.initialize(run, false)));
+        "ALTER TABLE plan_node_dependencies ADD CONSTRAINT "
+            + constraint
+            + " CHECK (run_id <> '"
+            + run
+            + "')");
+    try {
+      assertThrows(
+          org.springframework.dao.DataAccessException.class,
+          () -> tx.executeWithoutResult(status -> plans.initialize(run, false)));
+    } finally {
+      db.execute("ALTER TABLE plan_node_dependencies DROP CONSTRAINT " + constraint);
+    }
     assertEquals(
         0, db.queryForObject("SELECT COUNT(*) FROM plan_nodes WHERE run_id=?", Integer.class, run));
     assertEquals(
@@ -71,13 +74,14 @@ class PlanDependencyPersistenceTest {
                         AgentRole.ANALYST,
                         List.of(dev.workbench.domain.ToolKind.WORKSPACE_READ),
                         List.of())));
-    plans =
-        new PlanRepository(
-            db,
+    var custom =
+        new PlanService(
+            states,
             new PlanFactory(new PlanValidator()),
             definitions,
             new dev.workbench.framework.workflow.check.SystemCheckRegistry(
-                List.of(new dev.workbench.framework.workflow.check.AuthorizedReadEvidenceCheck())));
+                List.of(new dev.workbench.framework.workflow.check.AuthorizedReadEvidenceCheck())),
+            graphStore);
     var template =
         new WorkflowTemplate(
             "bad-check",
@@ -111,15 +115,22 @@ class PlanDependencyPersistenceTest {
             List.of(),
             dev.workbench.domain.TaskEntryKind.GENERAL,
             List.of("a.txt"));
+    String run = UUID.randomUUID().toString();
     var failure =
         assertThrows(
             IllegalArgumentException.class,
             () ->
-                plans.initializeWorkflow(
-                    UUID.randomUUID().toString(), template, task, true, "2026-01-01T00:00:00Z"));
+                tx.executeWithoutResult(
+                    status ->
+                        custom.initializeWorkflow(
+                            run, template, task, true, "2026-01-01T00:00:00Z")));
     assertTrue(failure.getMessage().contains("未注册的系统检查"));
-    assertEquals(0, db.queryForObject("SELECT COUNT(*) FROM workflow_plans", Integer.class));
-    assertEquals(0, db.queryForObject("SELECT COUNT(*) FROM plan_nodes", Integer.class));
+    assertEquals(
+        0,
+        db.queryForObject(
+            "SELECT COUNT(*) FROM workflow_plans WHERE run_id=?", Integer.class, run));
+    assertEquals(
+        0, db.queryForObject("SELECT COUNT(*) FROM plan_nodes WHERE run_id=?", Integer.class, run));
   }
 
   @Test
@@ -221,8 +232,7 @@ class PlanDependencyPersistenceTest {
         reviewer.id().toString(),
         analyst.id().toString());
     assertEquals(2, plans.find(run).getLast().dependencyIds().size());
-    var afterRestart = new PlanRepository(db, new PlanFactory(new PlanValidator()));
-    assertEquals(2, afterRestart.find(run).getLast().dependencyIds().size());
+    assertEquals(2, plans.find(run).getLast().dependencyIds().size());
     db.update("UPDATE plan_nodes SET status='COMPLETED' WHERE id=?", coder.id().toString());
     assertThrows(
         IllegalStateException.class,

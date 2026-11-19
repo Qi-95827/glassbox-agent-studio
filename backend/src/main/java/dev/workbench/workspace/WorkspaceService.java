@@ -1,6 +1,10 @@
 package dev.workbench.workspace;
 
-import dev.workbench.task.RunRepository;
+import dev.workbench.persistence.entity.WorkspaceDeclaredFileEntity;
+import dev.workbench.persistence.entity.WorkspaceEntity;
+import dev.workbench.persistence.repository.WorkspaceDeclaredFileRepository;
+import dev.workbench.persistence.repository.WorkspaceRepository;
+import dev.workbench.task.RunRecordService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -13,20 +17,24 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 
 /** 个人本地仓库工作区；Git 隔离不等于不可信代码执行沙箱。 */
 @Service
 public class WorkspaceService {
   private static final int OUTPUT_LIMIT = 1_000_000;
-  private final JdbcTemplate db;
+  private final WorkspaceRepository workspaceRows;
+  private final WorkspaceDeclaredFileRepository declaredFileRows;
   private final Path workspaceRoot;
 
   @Autowired
   public WorkspaceService(
-      JdbcTemplate db, @Value("${workbench.workspace-root:data/workspaces}") String workspaceRoot) {
-    this.db = db;
+      WorkspaceRepository workspaceRows,
+      WorkspaceDeclaredFileRepository declaredFileRows,
+      @Value("${workbench.workspace-root:data/workspaces}") String workspaceRoot) {
+    this.workspaceRows = workspaceRows;
+    this.declaredFileRows = declaredFileRows;
     this.workspaceRoot = Path.of(workspaceRoot).toAbsolutePath().normalize();
   }
 
@@ -51,7 +59,7 @@ public class WorkspaceService {
     }
     String commit = runGit(root, "rev-parse", "--verify", branchRef + "^{commit}").strip();
     if (!commit.matches("[0-9a-fA-F]{40,64}")) throw new IllegalStateException("无法确定基础提交。");
-    String id = RunRepository.id();
+    String id = RunRecordService.id();
     String name = "agent/work-" + id.substring(0, 12);
     Path target = workspaceRoot.resolve(id).normalize();
     if (!target.startsWith(workspaceRoot)) throw new IllegalStateException("工作区路径越界。");
@@ -62,35 +70,38 @@ public class WorkspaceService {
     }
     // 使用独立 worktree 和分支；命令参数分离，且关闭 Git hooks。
     runGit(root, "worktree", "add", "-b", name, "--", target.toString(), commit);
-    db.update(
-        "INSERT INTO workspaces VALUES(?,?,?,?,?,?,?)",
-        id,
-        root.toString(),
-        target.toString(),
-        branch,
-        commit,
-        name,
-        RunRepository.now());
+    workspaceRows.save(
+        new WorkspaceEntity(
+            id,
+            root.toString(),
+            target.toString(),
+            branch,
+            commit,
+            name,
+            RunRecordService.now()));
     return get(id);
   }
 
   public List<Workspace> list() {
-    return db.query("SELECT * FROM workspaces ORDER BY created_at DESC", (rs, row) -> map(rs));
+    return workspaceRows.findAllByOrderByCreatedAtDesc().stream().map(this::map).toList();
   }
 
   public Workspace get(String id) {
-    return db.queryForObject("SELECT * FROM workspaces WHERE id=?", (rs, row) -> map(rs), id);
+    return workspaceRows
+        .findById(id)
+        .map(this::map)
+        .orElseThrow(() -> new EmptyResultDataAccessException(1));
   }
 
-  private Workspace map(java.sql.ResultSet rs) throws java.sql.SQLException {
+  private Workspace map(WorkspaceEntity row) {
     return new Workspace(
-        rs.getString("id"),
-        rs.getString("repository_path"),
-        rs.getString("workspace_path"),
-        rs.getString("base_branch"),
-        rs.getString("base_commit"),
-        rs.getString("branch_name"),
-        rs.getString("created_at"));
+        row.getId(),
+        row.getRepositoryPath(),
+        row.getWorkspacePath(),
+        row.getBaseBranch(),
+        row.getBaseCommit(),
+        row.getBranchName(),
+        row.getCreatedAt());
   }
 
   /** 显示真实差异和目标分支是否发生变化，不自动合并或推送。 */
@@ -109,15 +120,133 @@ public class WorkspaceService {
     return new Status(changes, diff, !currentBase.equals(workspace.baseCommit()), currentBase);
   }
 
-  /** 审查绑定当前提交、差异和目标分支；尚未支持对未跟踪文件的完整性签名。 */
+  /** 审查绑定当前提交、差异、目标分支和已复核的未跟踪文件。 */
   public String approvalFingerprint(String id) {
     Workspace workspace = get(id);
     Path path = Path.of(workspace.workspacePath());
     Status status = status(id);
-    if (status.changes().lines().anyMatch(line -> line.startsWith("?? ")))
-      throw new IllegalStateException("存在未跟踪文件，当前版本不能将其完整绑定到审批。");
-    if (status.diff().isBlank()) throw new IllegalStateException("没有已跟踪文件差异可供审查。");
-    return fingerprint(workspace, status, path);
+    var untracked = untrackedPaths(status);
+    var declared = declaredFiles(id);
+    for (String file : untracked)
+      if (!declared.containsKey(file))
+        throw new IllegalStateException("存在未复核的未跟踪文件，当前版本不能将其完整绑定到审批。");
+    if (status.diff().isBlank() && untracked.isEmpty())
+      throw new IllegalStateException("没有已跟踪文件差异或已复核的新文件可供审查。");
+    var bound = new java.util.TreeMap<String, String>();
+    for (String file : untracked) bound.put(file, hashUntracked(workspace, file));
+    return fingerprint(workspace, status, path, bound);
+  }
+
+  /** 人工接手快照：包含未跟踪文件的实际内容，不要求预先声明。 */
+  public String snapshotFingerprint(String id) {
+    Workspace workspace = get(id);
+    Status status = status(id);
+    var bound = new java.util.TreeMap<String, String>(declaredFiles(id));
+    for (String file : untrackedPaths(status)) bound.put(file, hashUntracked(workspace, file));
+    return fingerprint(workspace, status, Path.of(workspace.workspacePath()), bound);
+  }
+
+  /** 列出未跟踪文件及是否已声明；只读，不修改工作区。 */
+  public List<UntrackedFile> untrackedFiles(String id) {
+    Workspace workspace = get(id);
+    var declared = declaredFiles(id);
+    return untrackedPaths(status(id)).stream()
+        .map(
+            file -> {
+              Path target = resolveFile(workspace, file);
+              long size;
+              try {
+                size = Files.size(target);
+              } catch (IOException e) {
+                throw new IllegalStateException("无法读取未跟踪文件大小：" + file);
+              }
+              return new UntrackedFile(
+                  file,
+                  size,
+                  hashUntracked(workspace, file),
+                  declared.containsKey(file),
+                  declared.get(file));
+            })
+        .toList();
+  }
+
+  /** 用户明确复核一个未跟踪文件；摘要不符时拒绝声明。 */
+  public UntrackedFile declareUntracked(String id, String relative, String expectedSha256) {
+    Workspace workspace = get(id);
+    String path = pathIdentity(relative);
+    boolean found = untrackedPaths(status(id)).stream().anyMatch(path::equals);
+    if (!found) throw new IllegalArgumentException("该路径不是当前未跟踪文件。");
+    String actual = hashUntracked(workspace, path);
+    if (expectedSha256 == null || !actual.equals(expectedSha256))
+      throw new IllegalStateException("未跟踪文件内容已变化，请重新读取后再复核。");
+    declareFile(id, path, actual, "USER_REVIEWED");
+    return new UntrackedFile(path, sizeOf(workspace, path), actual, true, "USER_REVIEWED");
+  }
+
+  /** 用户显式新建文本文件；原子创建并登记，声明失败只删除本次创建的文件。 */
+  public synchronized FileContent createUserFile(String id, String relative, String content) {
+    if (content == null || content.getBytes(StandardCharsets.UTF_8).length > 1_000_000)
+      throw new IllegalArgumentException("文件内容不能为空或超过 1MB。");
+    Workspace workspace = get(id);
+    String path = pathIdentity(relative);
+    Path target = resolveFile(workspace, relative);
+    byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+    try {
+      Files.createDirectories(target.getParent());
+      Files.write(
+          target, bytes, java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE);
+    } catch (java.nio.file.FileAlreadyExistsException e) {
+      throw new IllegalArgumentException("目标文件已存在，不能覆盖现有文件。");
+    } catch (IOException e) {
+      throw new IllegalStateException("无法创建新文件。");
+    }
+    String sha = hash(content);
+    try {
+      declareFile(id, path, sha, "USER");
+      return new FileContent(content, sha);
+    } catch (RuntimeException failure) {
+      try {
+        Files.deleteIfExists(target);
+      } catch (IOException ignored) {
+        /* 保留现场供人工检查。 */
+      }
+      throw failure;
+    }
+  }
+
+  private static String pathIdentity(String relative) {
+    if (relative == null || relative.isBlank()) throw new IllegalArgumentException("请指定相对文件路径。");
+    Path path = Path.of(relative);
+    if (path.isAbsolute()) throw new IllegalArgumentException("必须使用相对路径。");
+    return path.normalize().toString().replace('\\', '/');
+  }
+
+  private static List<String> untrackedPaths(Status status) {
+    return status.changes().lines()
+        .filter(line -> line.startsWith("?? "))
+        .map(line -> unquote(line.substring(3).strip()))
+        .toList();
+  }
+
+  private String hashUntracked(Workspace workspace, String relative) {
+    Path target = resolveFile(workspace, relative);
+    try {
+      if (Files.isSymbolicLink(target) || !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS))
+        throw new IllegalStateException("未跟踪文件不是普通文件：" + relative);
+      if (Files.size(target) > 1_000_000)
+        throw new IllegalStateException("未跟踪文件超过允许大小：" + relative);
+    } catch (IOException e) {
+      throw new IllegalStateException("无法读取未跟踪文件：" + relative);
+    }
+    return hashFile(target);
+  }
+
+  private long sizeOf(Workspace workspace, String relative) {
+    try {
+      return Files.size(resolveFile(workspace, relative));
+    } catch (IOException e) {
+      throw new IllegalStateException("无法读取文件大小：" + relative);
+    }
   }
 
   /** 测试证据需绑定当前文件和分支；未跟踪文件不能被该版本完整签名。 */
@@ -157,12 +286,16 @@ public class WorkspaceService {
 
   private Map<String, String> declaredFiles(String workspaceId) {
     var result = new java.util.LinkedHashMap<String, String>();
-    db.query(
-        "SELECT path,sha256 FROM workspace_declared_files WHERE workspace_id=?",
-        (org.springframework.jdbc.core.RowCallbackHandler)
-            row -> result.put(row.getString("path"), row.getString("sha256")),
-        workspaceId);
+    for (WorkspaceDeclaredFileEntity row : declaredFileRows.findByWorkspaceId(workspaceId))
+      result.put(row.getPath(), row.getSha256());
     return result;
+  }
+
+  /** 声明文件使用合并语义：同一 (workspace_id, path) 再次声明时更新摘要和来源。 */
+  private void declareFile(String workspaceId, String path, String sha256, String source) {
+    declaredFileRows.save(
+        new WorkspaceDeclaredFileEntity(
+            workspaceId, path, sha256, source, java.time.Instant.now().toString()));
   }
 
   private String fingerprint(Workspace workspace, Status status, Path path) {
@@ -200,7 +333,7 @@ public class WorkspaceService {
     }
   }
 
-  /** 本地提交已批准的全部已跟踪差异；调用方必须持有当前服务对象的锁并核验审批。 Git 不属于数据库事务，异常时提交结果需要人工核对。 */
+  /** 本地提交已批准的已跟踪差异和已复核新文件；调用方必须持有当前服务对象的锁并核验审批。 Git 不属于数据库事务，异常时提交结果需要人工核对。 */
   String commitApproved(String workspaceId, String approvedFingerprint, String message) {
     if (!approvalFingerprint(workspaceId).equals(approvedFingerprint))
       throw new IllegalStateException("工作区或目标分支已变化。");
@@ -208,9 +341,13 @@ public class WorkspaceService {
     Path path = Path.of(workspace.workspacePath());
     String head = runGit(path, "rev-parse", "--verify", "HEAD").strip();
     Status before = status(workspaceId);
-    String expectedDiff =
-        runGit(path, "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--", ".");
+    var declared = declaredFiles(workspaceId);
+    // 已复核的新文件必须先按原摘要加入暂存区；未复核文件仍会被拒绝。
     runGit(path, "add", "-u", "--", ".");
+    for (String file : declared.keySet()) {
+      Path target = resolveFile(workspace, file);
+      if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) runGit(path, "add", "--", file);
+    }
     String stagedDiff =
         runGit(
             path,
@@ -224,17 +361,87 @@ public class WorkspaceService {
             ".");
     String unstaged = runGit(path, "diff", "--binary", "--no-ext-diff", "--no-textconv", "--", ".");
     Status after = status(workspaceId);
-    if (!expectedDiff.equals(stagedDiff)
+    boolean unclean =
+        after.changes().lines()
+            .anyMatch(
+                line ->
+                    line.startsWith("?? ")
+                        || line.startsWith(" M")
+                        || line.startsWith("MM")
+                        || line.startsWith(" D")
+                        || line.startsWith("AD"));
+    if (stagedDiff.isBlank()
         || !unstaged.isBlank()
+        || unclean
         || !before.currentBase().equals(after.currentBase())
-        || !head.equals(runGit(path, "rev-parse", "--verify", "HEAD").strip())
-        || after.changes().lines().anyMatch(line -> line.startsWith("?? ")))
+        || !head.equals(runGit(path, "rev-parse", "--verify", "HEAD").strip()))
       throw new IllegalStateException("暂存后工作区状态变化，停止提交。");
+    for (String file : declared.keySet()) {
+      Path target = resolveFile(workspace, file);
+      if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
+          && !hashFile(target).equals(declared.get(file)))
+        throw new IllegalStateException("已复核文件在暂存期间变化，停止提交：" + file);
+    }
     runGit(path, "commit", "--no-verify", "-m", message);
     String commitId = runGit(path, "rev-parse", "--verify", "HEAD").strip();
     if (!commitId.matches("[0-9a-fA-F]{40,64}") || head.equals(commitId))
       throw new IllegalStateException("提交结果无法确认。");
     return commitId;
+  }
+
+  String head(String workspaceId) {
+    return runGit(Path.of(get(workspaceId).workspacePath()), "rev-parse", "--verify", "HEAD").strip();
+  }
+
+  /** 读取本地分支当前提交；用于合并审批绑定被合入版本。 */
+  String branchCommit(String workspaceId, String branch) {
+    WorkspaceService.Workspace workspace = get(workspaceId);
+    Path repository = Path.of(workspace.repositoryPath());
+    requireBranchName(repository, branch);
+    String commit =
+        runGit(repository, "rev-parse", "--verify", "refs/heads/" + branch + "^{commit}").strip();
+    if (!commit.matches("[0-9a-fA-F]{40,64}"))
+      throw new IllegalStateException("无法确认待合入分支提交。");
+    return commit;
+  }
+
+  String currentBranch(String workspaceId) {
+    return runGit(
+            Path.of(get(workspaceId).workspacePath()), "rev-parse", "--abbrev-ref", "HEAD")
+        .strip();
+  }
+
+  /** 解析实际推送地址；只以摘要进入审批，避免数据库或日志保存 URL 中的凭据。 */
+  String remotePushUrlFingerprint(String workspaceId, String remote) {
+    if (remote == null || !remote.matches("[A-Za-z0-9._-]{1,80}") || remote.startsWith("-"))
+      throw new IllegalArgumentException("远端名称无效。");
+    String url =
+        runGit(
+                Path.of(get(workspaceId).workspacePath()),
+                "remote",
+                "get-url",
+                "--push",
+                remote)
+            .strip();
+    if (url.isBlank() || url.contains("\n") || url.contains("\r"))
+      throw new IllegalStateException("无法解析远端推送地址。");
+    return hash(url);
+  }
+
+  String remotePushUrl(String workspaceId, String remote) {
+    return runGit(
+            Path.of(get(workspaceId).workspacePath()),
+            "remote",
+            "get-url",
+            "--push",
+            remote)
+        .strip();
+  }
+
+  void requireBranchName(Path repository, String branch) {
+    if (branch == null || branch.isBlank() || branch.startsWith("-"))
+      throw new IllegalArgumentException("请填写有效的分支名。");
+    runGit(repository, "check-ref-format", "refs/heads/" + branch);
   }
 
   /** 只读取工作区内普通文本文件；链接和 .git 元数据均不允许访问。 */
@@ -313,14 +520,7 @@ public class WorkspaceService {
     String sha = hash(content);
     try {
       // 显式声明的补充文件才允许以未跟踪状态进入证据指纹；其他未跟踪文件仍被拒绝。
-      db.update(
-          "MERGE INTO workspace_declared_files(workspace_id,path,sha256,source,created_at)"
-              + " KEY(workspace_id,path) VALUES(?,?,?,?,?)",
-          workspace.id(),
-          relative,
-          sha,
-          "SUPPLEMENT",
-          java.time.Instant.now().toString());
+      declareFile(workspace.id(), relative, sha, "SUPPLEMENT");
       return sha;
     } catch (RuntimeException failure) {
       // 声明入库失败时只回滚本次 CREATE_NEW 创建的文件；写入前已存在的文件不会被删除。
@@ -338,8 +538,7 @@ public class WorkspaceService {
     if (!isTestFilePath(relative)) return;
     try {
       Files.deleteIfExists(resolveFile(get(id), relative));
-      db.update(
-          "DELETE FROM workspace_declared_files WHERE workspace_id=? AND path=?", id, relative);
+      declaredFileRows.deleteForWorkspace(id, relative);
     } catch (IOException | IllegalArgumentException ignored) {
       /* 保留现场供用户检查。 */
     }
@@ -400,7 +599,9 @@ public class WorkspaceService {
     }
   }
 
-  String runGit(Path dir, String... args) {
+  public record GitResult(int exitCode, String output) {}
+
+  GitResult runGitResult(Path dir, String... args) {
     List<String> command =
         new ArrayList<>(
             List.of(
@@ -438,15 +639,20 @@ public class WorkspaceService {
         process.destroyForcibly();
         throw new IllegalStateException("Git 操作超时。");
       }
-      String output = reader.join();
-      if (process.exitValue() != 0) throw new IllegalArgumentException("Git 操作失败，请检查仓库、分支和访问权限。");
-      return output;
+      return new GitResult(process.exitValue(), reader.join());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("Git 操作已中断。");
     } catch (IOException e) {
       throw new IllegalStateException("无法启动 Git，请检查本机安装。");
     }
+  }
+
+  String runGit(Path dir, String... args) {
+    GitResult result = runGitResult(dir, args);
+    if (result.exitCode() != 0)
+      throw new IllegalArgumentException("Git 操作失败，请检查仓库、分支和访问权限。");
+    return result.output();
   }
 
   public record Workspace(
@@ -459,6 +665,9 @@ public class WorkspaceService {
       String createdAt) {}
 
   public record Status(String changes, String diff, boolean baseChanged, String currentBase) {}
+
+  public record UntrackedFile(
+      String path, long size, String sha256, boolean declared, String declarationSource) {}
 
   public record FileContent(String content, String sha256) {}
 }

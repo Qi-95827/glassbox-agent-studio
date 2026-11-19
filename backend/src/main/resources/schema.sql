@@ -1,4 +1,5 @@
 CREATE TABLE IF NOT EXISTS tasks (id VARCHAR(36) PRIMARY KEY, goal VARCHAR(500) NOT NULL, scenario VARCHAR(20) NOT NULL, created_at VARCHAR(40) NOT NULL);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at VARCHAR(40);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS model_mode VARCHAR(20) DEFAULT 'mock' NOT NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(36);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS file_scope VARCHAR(2000);
@@ -194,11 +195,20 @@ CREATE TABLE IF NOT EXISTS workspaces (id VARCHAR(36) PRIMARY KEY, repository_pa
 CREATE TABLE IF NOT EXISTS bug_checks (id VARCHAR(36) PRIMARY KEY, bug_id VARCHAR(80) NOT NULL, workspace_id VARCHAR(36) NOT NULL, kind VARCHAR(30) NOT NULL, status VARCHAR(30) NOT NULL, output CLOB, duration_ms BIGINT NOT NULL, created_at VARCHAR(40) NOT NULL);
 ALTER TABLE bug_checks ADD COLUMN IF NOT EXISTS workspace_fingerprint VARCHAR(64);
 ALTER TABLE bug_checks ADD COLUMN IF NOT EXISTS run_id VARCHAR(36);
+CREATE TABLE IF NOT EXISTS bug_check_cases (check_id VARCHAR(36) NOT NULL, sequence_no INT NOT NULL, test_id VARCHAR(300) NOT NULL, result VARCHAR(30) NOT NULL, message CLOB, PRIMARY KEY(check_id,sequence_no));
+CREATE TABLE IF NOT EXISTS bug_intakes (id VARCHAR(36) PRIMARY KEY, bug_id VARCHAR(80) NOT NULL, source VARCHAR(80) NOT NULL, source_version INT NOT NULL, original_description CLOB NOT NULL, bug_description CLOB NOT NULL, expected_symptom CLOB NOT NULL, expected_test_id VARCHAR(300) NOT NULL, content_sha256 VARCHAR(64) NOT NULL, workspace_id VARCHAR(36), task_id VARCHAR(36) NOT NULL, run_id VARCHAR(36) NOT NULL, submission_seq INT NOT NULL, duplicate_of VARCHAR(36), previous_intake_id VARCHAR(36), triage_status VARCHAR(30) NOT NULL, triage_reason VARCHAR(1000), triage_check_id VARCHAR(36), triage_updated_at VARCHAR(40), regression_status VARCHAR(30), regression_check_id VARCHAR(36), regression_updated_at VARCHAR(40), created_at VARCHAR(40) NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_bug_intakes_run ON bug_intakes(run_id);
+CREATE INDEX IF NOT EXISTS idx_bug_intakes_source ON bug_intakes(bug_id,source,source_version,workspace_id,created_at);
 CREATE TABLE IF NOT EXISTS approvals (id VARCHAR(36) PRIMARY KEY, workspace_id VARCHAR(36) NOT NULL, fingerprint VARCHAR(64) NOT NULL, status VARCHAR(30) NOT NULL, created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL);
 CREATE TABLE IF NOT EXISTS bug_feedback (id VARCHAR(36) PRIMARY KEY, bug_id VARCHAR(80) NOT NULL, workspace_id VARCHAR(36) NOT NULL, status VARCHAR(40) NOT NULL, note VARCHAR(1000), created_at VARCHAR(40) NOT NULL);
 CREATE TABLE IF NOT EXISTS evaluation_batches (id VARCHAR(36) PRIMARY KEY, suite VARCHAR(40) NOT NULL, status VARCHAR(30) NOT NULL, created_at VARCHAR(40) NOT NULL, finished_at VARCHAR(40));
 ALTER TABLE evaluation_batches ADD COLUMN IF NOT EXISTS definition_json CLOB;
 ALTER TABLE evaluation_batches ADD COLUMN IF NOT EXISTS definition_sha256 VARCHAR(64);
+ALTER TABLE evaluation_batches ADD COLUMN IF NOT EXISTS suite_version INT;
+ALTER TABLE evaluation_batches ADD COLUMN IF NOT EXISTS config_json CLOB;
+ALTER TABLE evaluation_batches ADD COLUMN IF NOT EXISTS config_sha256 VARCHAR(64);
+ALTER TABLE evaluation_batches ADD COLUMN IF NOT EXISTS requested_by VARCHAR(80);
+CREATE TABLE IF NOT EXISTS evaluation_suite_versions (id VARCHAR(36) PRIMARY KEY, suite VARCHAR(40) NOT NULL, version INT NOT NULL, definition_json CLOB NOT NULL, definition_sha256 VARCHAR(64) NOT NULL, active BOOLEAN NOT NULL, created_at VARCHAR(40) NOT NULL, UNIQUE(suite,version));
 CREATE TABLE IF NOT EXISTS evaluation_cases (id VARCHAR(36) PRIMARY KEY, batch_id VARCHAR(36) NOT NULL, case_code VARCHAR(40) NOT NULL, sequence_no INT NOT NULL, status VARCHAR(30) NOT NULL, run_id VARCHAR(36), explanation VARCHAR(1000), updated_at VARCHAR(40) NOT NULL, UNIQUE(batch_id, case_code));
 CREATE TABLE IF NOT EXISTS evaluation_checks (case_id VARCHAR(36) NOT NULL, sequence_no INT NOT NULL, check_code VARCHAR(50) NOT NULL, passed BOOLEAN NOT NULL, detail VARCHAR(1000) NOT NULL, PRIMARY KEY(case_id, check_code), UNIQUE(case_id, sequence_no));
 CREATE TABLE IF NOT EXISTS memory_records (id VARCHAR(36) PRIMARY KEY, workspace_id VARCHAR(36) NOT NULL, category VARCHAR(30) NOT NULL, content VARCHAR(300) NOT NULL, source VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, version INT NOT NULL, created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL);
@@ -206,3 +216,14 @@ CREATE TABLE IF NOT EXISTS memory_history (memory_id VARCHAR(36) NOT NULL, versi
 CREATE TABLE IF NOT EXISTS run_memory_loads (run_id VARCHAR(36) PRIMARY KEY, workspace_id VARCHAR(36) NOT NULL, item_count INT NOT NULL, loaded_at VARCHAR(40) NOT NULL);
 CREATE TABLE IF NOT EXISTS run_memory_references (run_id VARCHAR(36) NOT NULL, sequence_no INT NOT NULL, memory_id VARCHAR(36) NOT NULL, memory_version INT NOT NULL, category VARCHAR(30) NOT NULL, PRIMARY KEY(run_id, sequence_no), UNIQUE(run_id, memory_id));
 CREATE TABLE IF NOT EXISTS git_actions (id VARCHAR(36) PRIMARY KEY, workspace_id VARCHAR(36) NOT NULL, kind VARCHAR(30) NOT NULL, status VARCHAR(30) NOT NULL, approval_id VARCHAR(36) NOT NULL, commit_id VARCHAR(64), created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL);
+ALTER TABLE git_actions ADD COLUMN IF NOT EXISTS target VARCHAR(300);
+ALTER TABLE git_actions ADD COLUMN IF NOT EXISTS detail VARCHAR(1000);
+CREATE TABLE IF NOT EXISTS git_delivery_requests (id VARCHAR(36) PRIMARY KEY, workspace_id VARCHAR(36) NOT NULL, kind VARCHAR(30) NOT NULL, remote VARCHAR(80) NOT NULL, target VARCHAR(200) NOT NULL, target_commit VARCHAR(64), head_commit VARCHAR(64) NOT NULL, source_branch VARCHAR(200) NOT NULL, remote_url_sha256 VARCHAR(64), status VARCHAR(30) NOT NULL, note VARCHAR(500), result_detail VARCHAR(1000), created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL);
+ALTER TABLE git_delivery_requests ADD COLUMN IF NOT EXISTS remote_url_sha256 VARCHAR(64);
+ALTER TABLE git_delivery_requests ADD COLUMN IF NOT EXISTS target_commit VARCHAR(64);
+CREATE TABLE IF NOT EXISTS run_handovers (id VARCHAR(36) PRIMARY KEY, run_id VARCHAR(36) NOT NULL, workspace_id VARCHAR(36) NOT NULL, status VARCHAR(20) NOT NULL, baseline_fingerprint VARCHAR(64) NOT NULL, current_fingerprint VARCHAR(64), evidence_invalidated BOOLEAN NOT NULL, note VARCHAR(1000), taken_at VARCHAR(40) NOT NULL, returned_at VARCHAR(40));
+CREATE TABLE IF NOT EXISTS audit_events (id VARCHAR(36) PRIMARY KEY, actor VARCHAR(80) NOT NULL, action VARCHAR(60) NOT NULL, target_type VARCHAR(40) NOT NULL, target_id VARCHAR(80), outcome VARCHAR(20) NOT NULL, detail VARCHAR(1000), created_at VARCHAR(40) NOT NULL);
+CREATE TABLE IF NOT EXISTS task_entry_policies (task_id VARCHAR(36) PRIMARY KEY, policy_version INT NOT NULL, deliverables_json CLOB NOT NULL, acceptance_json CLOB NOT NULL, warnings_json CLOB, created_at VARCHAR(40) NOT NULL);
+-- AgentScope 会话状态沿用框架原表名、复合键、JSON 文本和版本列；旧库已有数据不迁移、不清空。
+CREATE TABLE IF NOT EXISTS agentscope_sessions (session_id VARCHAR(255) NOT NULL, state_key VARCHAR(255) NOT NULL, item_index INT NOT NULL DEFAULT 0, state_data CLOB NOT NULL, version BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (session_id, state_key, item_index));
+CREATE INDEX IF NOT EXISTS agentscope_sessions_session_idx ON agentscope_sessions (session_id);

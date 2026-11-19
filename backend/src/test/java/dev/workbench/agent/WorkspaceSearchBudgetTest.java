@@ -9,7 +9,7 @@ import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.control.StopExecution;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -37,7 +37,7 @@ class WorkspaceSearchBudgetTest {
             0,
             null,
             null);
-    var repository = mock(RunRepository.class);
+    var repository = mock(RunRecordService.class);
     var control =
         new RunControl(
             runId.toString(),

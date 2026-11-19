@@ -16,9 +16,11 @@ import org.springframework.stereotype.Component;
 public class BugRegressionCheck implements SystemCheckExecutor {
   public static final SystemCheckRef REF = new SystemCheckRef("bug-regression", 1);
   private final BugService bugs;
+  private final BugIntakeService intakes;
 
-  public BugRegressionCheck(BugService bugs) {
+  public BugRegressionCheck(BugService bugs, BugIntakeService intakes) {
     this.bugs = bugs;
+    this.intakes = intakes;
   }
 
   @Override
@@ -41,6 +43,7 @@ public class BugRegressionCheck implements SystemCheckExecutor {
             task.workspaceId(),
             BugService.CheckKind.REGRESSION,
             request.guard());
+    intakes.regression(check);
     return BugCheckResults.regression(check);
   }
 }

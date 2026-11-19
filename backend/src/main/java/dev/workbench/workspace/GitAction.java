@@ -11,9 +11,13 @@ public record GitAction(
     GitActionStatus status,
     UUID approvalId,
     String commitId,
+    String target,
+    String detail,
     Instant createdAt,
     Instant updatedAt) {
   public enum Kind {
-    LOCAL_COMMIT
+    LOCAL_COMMIT,
+    PUSH,
+    MERGE
   }
 }

@@ -1,0 +1,53 @@
+package dev.workbench.orchestration;
+
+import dev.workbench.bug.BugIntakeService;
+import dev.workbench.domain.EntryPolicyService;
+import dev.workbench.domain.TaskDefinition;
+import dev.workbench.framework.workflow.plan.WorkflowTemplate;
+import dev.workbench.task.RunLimits;
+import dev.workbench.task.RunRecordService;
+import java.util.UUID;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * 创建任务的唯一业务提交边界。
+ *
+ * <p>任务、首运行、初始计划、角色/工具预算、入口策略、Bug 接收记录和创建事件在同一事务中写入。
+ * 调用方必须在本方法返回（事务已提交）后再派发执行；任一写入失败时全部回滚，不留下可执行的半成品。
+ */
+@Service
+public class TaskCreationService {
+  private final RunRecordService runs;
+  private final BugIntakeService intakes;
+  private final EntryPolicyService entryPolicies;
+  private final TaskCreationHooks hooks;
+
+  public TaskCreationService(
+      RunRecordService runs,
+      BugIntakeService intakes,
+      EntryPolicyService entryPolicies,
+      TaskCreationHooks hooks) {
+    this.runs = runs;
+    this.intakes = intakes;
+    this.entryPolicies = entryPolicies;
+    this.hooks = hooks;
+  }
+
+  @Transactional
+  public void persist(
+      TaskDefinition task,
+      UUID runId,
+      RunLimits limits,
+      String message,
+      WorkflowTemplate workflow,
+      boolean reviewRequired,
+      EntryPolicyService.Validation entryValidation) {
+    runs.createTaskAndFirstRun(task, runId, limits, message, workflow, reviewRequired);
+    if (task.bugId() != null) intakes.record(task, runId.toString());
+    if (entryValidation != null) {
+      hooks.runBeforeEntryPolicySave();
+      entryPolicies.save(task.id().toString(), entryValidation);
+    }
+  }
+}

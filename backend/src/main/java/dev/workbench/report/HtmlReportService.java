@@ -1,14 +1,16 @@
 package dev.workbench.report;
 
+import dev.workbench.bug.BugIntakeService;
 import dev.workbench.bug.BugService;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.RunMetricsService;
 import dev.workbench.orchestration.Handoff;
-import dev.workbench.task.RunRepository;
-import dev.workbench.task.WorkflowExecutionRepository;
+import dev.workbench.task.RunRecordService;
+import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.WorkspaceService;
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
@@ -16,27 +18,30 @@ import org.springframework.web.util.HtmlUtils;
 /** 从持久化的运行事实生成静态 HTML；不可信内容只作为文本展示。 */
 @Service
 public class HtmlReportService {
-  private final RunRepository repository;
+  private final RunRecordService repository;
   private final WorkspaceService workspaces;
   private final BugService bugs;
+  private final BugIntakeService intakes;
   private final ApprovalService approvals;
-  private final PlanRepository plans;
+  private final PlanService plans;
   private final RunMetricsService metrics;
   private final MemoryService memories;
-  private final WorkflowExecutionRepository workflows;
+  private final WorkflowExecutionService workflows;
 
   public HtmlReportService(
-      RunRepository repository,
+      RunRecordService repository,
       WorkspaceService workspaces,
       BugService bugs,
+      BugIntakeService intakes,
       ApprovalService approvals,
-      PlanRepository plans,
+      PlanService plans,
       RunMetricsService metrics,
       MemoryService memories,
-      WorkflowExecutionRepository workflows) {
+      WorkflowExecutionService workflows) {
     this.repository = repository;
     this.workspaces = workspaces;
     this.bugs = bugs;
+    this.intakes = intakes;
     this.approvals = approvals;
     this.plans = plans;
     this.metrics = metrics;
@@ -93,8 +98,7 @@ public class HtmlReportService {
     return html.toString();
   }
 
-  public String render(String runId) {
-    Map<String, Object> run = repository.run(runId),
+  public String render(String runId) {    Map<String, Object> run = repository.run(runId),
         task = repository.task(run.get("TASK_ID").toString());
     var taskDefinition = repository.taskDefinition(run.get("TASK_ID").toString());
     StringBuilder html =
@@ -126,6 +130,7 @@ public class HtmlReportService {
         .append(escape(run.get("REASON")))
         .append("</pre></section>");
     appendRequirements(html, run.get("TASK_ID").toString());
+    if (task.get("BUG_ID") != null) appendBugDelivery(html, runId);
     appendBudgetPolicies(html, taskDefinition.roleBudgets(), taskDefinition.toolBudgets());
     appendPlanAndAgents(html, runId);
     appendWorkflowMetrics(html, runId);
@@ -220,6 +225,114 @@ public class HtmlReportService {
         "<section><h2>未验证事项</h2><p>模拟工具不是实际代码测试；模型意见不能代替人工审查。此报告不自动判定 Bug"
             + " 已修复或代码已合并。</p></section></body></html>");
     return html.toString();
+  }
+
+  /** 完整报告的结构不变，但把常见绝对路径、邮箱和凭据样式文本替换为脱敏占位。 */
+  public String renderRedacted(String runId) {
+    return redact(render(runId));
+  }
+
+  public static String redact(String html) {
+    String value = html == null ? "" : html;
+    value = value.replaceAll("[A-Za-z]:[\\\\/][^<>\\r\\n\\\"]+", "[已脱敏路径]");
+    value = value.replaceAll("/(?:Users|home|root)/[^<>\\r\\n\\\"]+", "[已脱敏路径]");
+    value = value.replaceAll("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "[已脱敏邮箱]");
+    value = value.replaceAll("sk-[A-Za-z0-9_-]{8,}", "[已脱敏密钥]");
+    value = value.replaceAll("ghp_[A-Za-z0-9]{8,}", "[已脱敏密钥]");
+    value = value.replaceAll("Bearer\\s+[A-Za-z0-9._-]{8,}", "Bearer [已脱敏]");
+    return value;
+  }
+
+  /** 分诊和交付结论来自持久化记录；报告生成时只读组合，不重新执行测试。 */
+  private void appendBugDelivery(StringBuilder html, String runId) {
+    Map<String, Object> delivery = intakes.delivery(runId);
+    BugIntakeService.Intake intake = (BugIntakeService.Intake) delivery.get("intake");
+    html.append("<section><h2>Bug 分诊与交付</h2>");
+    if (intake == null) {
+      html.append("<p>本次运行没有保存 Bug 原始描述记录，无法生成完整交付结论。</p></section>");
+      return;
+    }
+    html.append("<p>原始描述：</p><pre>")
+        .append(escape(intake.originalDescription()))
+        .append("</pre><p>模拟 Bug 定义：</p><pre>")
+        .append(escape(intake.bugDescription()))
+        .append("</pre><p>来源：")
+        .append(escape(intake.source()))
+        .append(" v")
+        .append(intake.sourceVersion())
+        .append("；目标用例：")
+        .append(escape(intake.expectedTestId()))
+        .append("；提交时间：")
+        .append(escape(intake.createdAt()))
+        .append("；提交序号：")
+        .append(intake.submissionSeq())
+        .append("。</p><p>预期现象：")
+        .append(escape(intake.expectedSymptom()))
+        .append("</p>");
+    if (intake.duplicateOf() != null)
+      html.append("<p>同来源同内容重复提交；首次记录：")
+          .append(escape(intake.duplicateOf()))
+          .append("。</p>");
+    else if (intake.previousIntakeId() != null)
+      html.append("<p>同来源内容已变化；上一记录：")
+          .append(escape(intake.previousIntakeId()))
+          .append("。</p>");
+    else html.append("<p>该来源的首次提交。</p>");
+    html.append("<p>分诊：")
+        .append(escape(intake.triageStatus().label()))
+        .append("（")
+        .append(escape(intake.triageStatus().name()))
+        .append("）；原因：")
+        .append(escape(intake.triageReason()))
+        .append("。</p>");
+    appendDeliveryCheck(html, "复现检查", delivery.get("reproduction"));
+    appendDeliveryCheck(html, "回归检查", delivery.get("regression"));
+    Object currentFingerprint = delivery.get("currentFingerprint");
+    Object regressionFingerprint = delivery.get("regressionFingerprint");
+    Object regressionCurrent = delivery.get("regressionEvidenceCurrent");
+    html.append("<p>当前代码状态摘要：")
+        .append(currentFingerprint == null ? "无法读取" : escape(currentFingerprint))
+        .append("；回归记录代码状态摘要：")
+        .append(regressionFingerprint == null ? "未记录" : escape(regressionFingerprint))
+        .append("；回归证据对应当前版本：")
+        .append(regressionCurrent == null ? "尚无回归" : Boolean.TRUE.equals(regressionCurrent) ? "是" : "否")
+        .append("。</p>");
+    html.append("<p>交付结论：")
+        .append(escape(delivery.get("conclusionLabel")))
+        .append("；")
+        .append(escape(delivery.get("conclusionReason")))
+        .append("</p><p>该结论不自动合并、关闭 Bug 或替代用户审查。</p></section>");
+  }
+
+  @SuppressWarnings("unchecked")
+  private void appendDeliveryCheck(StringBuilder html, String title, Object value) {
+    html.append("<p>").append(title).append("：");
+    if (!(value instanceof Map<?, ?> check)) {
+      html.append("未执行或未记录。</p>");
+      return;
+    }
+    html.append("检测 ")
+        .append(escape(check.get("ID")))
+        .append(" · 结果 ")
+        .append(escape(check.get("STATUS")))
+        .append(" · 代码状态摘要 ")
+        .append(escape(check.get("WORKSPACE_FINGERPRINT")))
+        .append("</p>");
+    Object cases = check.get("CASES");
+    if (cases instanceof List<?> list && !list.isEmpty()) {
+      html.append("<ul>");
+      for (Object item : list) {
+        Map<String, Object> test = (Map<String, Object>) item;
+        html.append("<li>")
+            .append(escape(test.get("TEST_ID")))
+            .append(" · ")
+            .append(escape(test.get("RESULT")));
+        if (test.get("MESSAGE") != null && !test.get("MESSAGE").toString().isBlank())
+          html.append(" · ").append(escape(test.get("MESSAGE")));
+        html.append("</li>");
+      }
+      html.append("</ul>");
+    }
   }
 
   /** 引用只证明装配阶段选中该版本，其他报告字段仍可能包含敏感内容。 */

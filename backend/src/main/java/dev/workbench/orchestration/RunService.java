@@ -2,6 +2,7 @@ package dev.workbench.orchestration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.bug.BugIntakeService;
 import dev.workbench.bug.BugService;
 import dev.workbench.domain.*;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
@@ -15,8 +16,9 @@ import dev.workbench.framework.control.StopExecution;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.workspace.AuthorizedFileSet;
+import dev.workbench.workspace.RunHandoverService;
 import dev.workbench.workspace.WorkspaceService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -30,31 +32,47 @@ import org.springframework.stereotype.Service;
 /** 负责 0.1 单进程任务的创建、调度、取消和检查点恢复。 安全和额度检查由执行器实施，Agent 本身不能授予工具权限。 */
 @Service
 public class RunService {
-  private final RunRepository repository;
+  private final RunRecordService repository;
+  private final TaskCreationService taskCreations;
   private final AgentExecutor agent;
   private final ObjectMapper json;
   private final WorkspaceService workspaces;
   private final BugService bugs;
+  private final BugIntakeService intakes;
+  private final RunHandoverService handovers;
+  private final EntryPolicyService entryPolicies;
   private final AgentContextAssembler contexts;
   private final WorkflowScheduler workflows;
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
   private final Set<String> paused = ConcurrentHashMap.newKeySet();
   private final java.util.Map<String, Object> pauseMonitors = new ConcurrentHashMap<>();
+  /** 诊断计数：只统计真正提交给执行队列的派发次数。 */
+  volatile int dispatchInvocationCount;
+  /** 测试注入点：在派发前同步观察数据库提交结果。 */
+  volatile Runnable beforeDispatch = () -> {};
 
   public RunService(
-      RunRepository repository,
+      RunRecordService repository,
+      TaskCreationService taskCreations,
       AgentExecutor agent,
       ObjectMapper json,
       WorkspaceService workspaces,
       BugService bugs,
+      BugIntakeService intakes,
+      RunHandoverService handovers,
+      EntryPolicyService entryPolicies,
       AgentContextAssembler contexts,
       WorkflowScheduler workflows) {
     this.repository = repository;
+    this.taskCreations = taskCreations;
     this.agent = agent;
     this.json = json;
     this.workspaces = workspaces;
     this.bugs = bugs;
+    this.intakes = intakes;
+    this.handovers = handovers;
+    this.entryPolicies = entryPolicies;
     this.contexts = contexts;
     this.workflows = workflows;
   }
@@ -154,8 +172,17 @@ public class RunService {
     List<String> acceptance = validatedItems(request.acceptanceCriteria(), "验收条件");
     TaskEntryKind entryKind =
         request.entryKind() == null ? TaskEntryKind.GENERAL : request.entryKind();
-    String taskId = RunRepository.id();
-    String runId = RunRepository.id();
+    EntryPolicyService.Validation entryValidation =
+        switch (entryKind) {
+          case REQUIREMENT, DESIGN, CODE, TEST ->
+              entryPolicies.validate(
+                  entryKind, goal, workspaceId, writeEnabled, fileScopes, acceptance);
+          default -> null;
+        };
+    List<String> effectiveAcceptance =
+        entryValidation == null ? acceptance : entryValidation.acceptance();
+    String taskId = RunRecordService.id();
+    String runId = RunRecordService.id();
     var task =
         new TaskDefinition(
             java.util.UUID.fromString(taskId),
@@ -168,7 +195,7 @@ public class RunService {
             bugId,
             memoryEnabled,
             constraints,
-            acceptance,
+            effectiveAcceptance,
             entryKind,
             fileScopes,
             roleBudgets,
@@ -193,33 +220,62 @@ public class RunService {
             ? "任务已创建：AgentScope 使用 DeepSeek Flash，可调用模拟工具。"
             : "任务已创建：AgentScope 使用模拟模型和模拟工具。";
     if (template == null) {
-      repository.createTaskAndFirstRun(
-          task, java.util.UUID.fromString(runId), limits, createdMessage);
+      taskCreations.persist(
+          task,
+          java.util.UUID.fromString(runId),
+          limits,
+          createdMessage,
+          null,
+          false,
+          entryValidation);
     } else {
-      repository.createTaskAndFirstRun(
+      taskCreations.persist(
           task,
           java.util.UUID.fromString(runId),
           limits,
           reviewPlan ? "工作流计划已保存，等待用户确认。" : "工作流计划已保存，等待执行。",
           template,
-          reviewPlan);
+          reviewPlan,
+          entryValidation);
     }
-    if (!reviewPlan) dispatchInitial(runId);
+    // 事务已提交；待确认计划仍等待用户批准，不触发派发。
+    if (!reviewPlan) dispatchAfterCommit(runId);
     return runId;
   }
 
   /** 一个计划版本只接受一次确认。 */
   public synchronized void approvePlan(String runId, java.util.UUID planVersionId) {
     workflows.approvePlan(runId, planVersionId);
-    dispatchInitial(runId);
+    dispatchAfterCommit(runId);
   }
 
   /** 补充接受后从安全边界重新排队；沿用与首次派发相同的单线程队列与拒绝语义。 */
   public void dispatchContinuation(String runId) {
+    dispatchAfterCommit(runId);
+  }
+
+  /** 有外层事务时只在提交成功后派发；无活动事务时调用方已完成提交。 */
+  private void dispatchAfterCommit(String runId) {
+    if (org.springframework.transaction.support.TransactionSynchronizationManager
+            .isSynchronizationActive()
+        && org.springframework.transaction.support.TransactionSynchronizationManager
+            .isActualTransactionActive()) {
+      org.springframework.transaction.support.TransactionSynchronizationManager
+          .registerSynchronization(
+              new org.springframework.transaction.support.TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                  dispatchInitial(runId);
+                }
+              });
+      return;
+    }
     dispatchInitial(runId);
   }
 
   private void dispatchInitial(String runId) {
+    beforeDispatch.run();
+    dispatchInvocationCount++;
     try {
       executor.submit(() -> execute(runId, CheckpointStage.BEFORE_TOOL, null, false));
     } catch (java.util.concurrent.RejectedExecutionException e) {
@@ -277,6 +333,8 @@ public class RunService {
     if (run.status() != RunStatus.PAUSED
         && !(run.status() == RunStatus.RUNNING && paused.contains(id)))
       throw new IllegalStateException("该任务没有可继续的暂停请求。");
+    String handoverBlock = handovers.resumeBlockReason(id);
+    if (handoverBlock != null) throw new IllegalStateException(handoverBlock);
     paused.remove(id);
     repository.event(id, EventType.RESUMED, "用户请求继续执行。");
     Object monitor = pauseMonitors.get(id);
@@ -291,7 +349,7 @@ public class RunService {
     RunSnapshot original = repository.runSnapshot(oldId);
     if (original.status() != RunStatus.INTERRUPTED) throw new IllegalStateException("只有中断的运行可以恢复。");
     if (workflows.plan(oldId) != null) {
-      String nextId = RunRepository.id();
+      String nextId = RunRecordService.id();
       workflows.recover(
           oldId, java.util.UUID.fromString(checkpointId), java.util.UUID.fromString(nextId));
       dispatchRecovery(nextId, CheckpointStage.BEFORE_TOOL, null);
@@ -311,7 +369,7 @@ public class RunService {
     }
     if (repository.hasRecovery(oldId)) throw new IllegalStateException("此运行已经发起恢复。");
 
-    String nextId = RunRepository.id();
+    String nextId = RunRecordService.id();
     repository.createRecoveryRun(java.util.UUID.fromString(nextId), original, checkpoint);
     dispatchRecovery(nextId, checkpoint.stage(), checkpoint.toolResult());
     return nextId;
@@ -371,7 +429,7 @@ public class RunService {
       }
       return;
     }
-    String agentId = RunRepository.id();
+    String agentId = RunRecordService.id();
     boolean agentStarted = false;
     AgentRole activeRole = AgentRole.ANALYST;
     try {
@@ -387,6 +445,7 @@ public class RunService {
                 task.workspaceId(),
                 BugService.CheckKind.REPRODUCE,
                 control::check);
+        intakes.triage(initial);
         repository.event(
             id,
             EventType.TEST_FINISHED,
@@ -514,7 +573,7 @@ public class RunService {
       String analysisAnswer = answer;
       HandoffParty upstreamParty = HandoffParty.ANALYSIS_AGENT;
       if (task.writeEnabled()) {
-        String coderId = RunRepository.id();
+        String coderId = RunRecordService.id();
         Handoff codingInput =
             new Handoff(
                 task.id().toString(),
@@ -595,12 +654,13 @@ public class RunService {
                 task.workspaceId(),
                 BugService.CheckKind.REGRESSION,
                 control::check);
+        intakes.regression(regression);
         repository.event(
             id,
             EventType.TEST_FINISHED,
             "回归检测记录 " + regression.id() + "：" + regression.status() + "；需结合具体测试与差异审查。");
       }
-      String reviewerId = RunRepository.id();
+      String reviewerId = RunRecordService.id();
       String verification =
           regression == null
               ? "没有执行本次回归测试"

@@ -2,7 +2,7 @@ package dev.workbench.evaluation;
 
 import dev.workbench.observability.AgentMetrics;
 import dev.workbench.observability.RunMetricsService;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Map;
@@ -14,14 +14,19 @@ import org.springframework.stereotype.Service;
 @Service
 public class EvaluationComparisonService {
   private final EvaluationRepository repository;
-  private final RunRepository runs;
+  private final RunRecordService runs;
   private final RunMetricsService metrics;
+  private final com.fasterxml.jackson.databind.ObjectMapper json;
 
   public EvaluationComparisonService(
-      EvaluationRepository repository, RunRepository runs, RunMetricsService metrics) {
+      EvaluationRepository repository,
+      RunRecordService runs,
+      RunMetricsService metrics,
+      com.fasterxml.jackson.databind.ObjectMapper json) {
     this.repository = repository;
     this.runs = runs;
     this.metrics = metrics;
+    this.json = json;
   }
 
   public EvaluationComparison compare(String baselineId, String candidateId) {
@@ -30,12 +35,32 @@ public class EvaluationComparisonService {
     var baseline = repository.get(baselineId);
     var candidate = repository.get(candidateId);
     boolean sameSuite = baseline.suite().equals(candidate.suite());
+    boolean validBaseline = validDefinition(baseline);
+    boolean validCandidate = validDefinition(candidate);
+    String baselineBudget = budgetLabel(baseline);
+    String candidateBudget = budgetLabel(candidate);
+    boolean sameBudget = baselineBudget.equals(candidateBudget);
     boolean comparableDefinition =
         sameSuite
-            && validDefinition(baseline)
-            && validDefinition(candidate)
+            && validBaseline
+            && validCandidate
             && baseline.definitionSha256().equals(candidate.definitionSha256())
-            && baseline.definitionJson().equals(candidate.definitionJson());
+            && baseline.definitionJson().equals(candidate.definitionJson())
+            && sameBudget;
+    String comparabilityReason =
+        !sameSuite
+            ? "套件编码不同，不能按案例直接比较。"
+            : !validBaseline
+                ? "基线批次缺少有效定义快照或摘要校验失败。"
+                : !validCandidate
+                    ? "候选批次缺少有效定义快照或摘要校验失败。"
+                    : !baseline.definitionSha256().equals(candidate.definitionSha256())
+                            || !baseline.definitionJson().equals(candidate.definitionJson())
+                        ? "评测定义快照不同，条件不可比。"
+                        : !sameBudget
+                            ? "评测预算不同：基线 " + baselineBudget + "，候选 " + candidateBudget
+                                + "；结果差异可能来自额度变化，不能按质量改善解释。"
+                            : "套件编码、评测定义快照和预算配置一致；代码、模型或环境仍可能不同。";
     Map<SeedCase, EvaluationCase> before = index(repository.cases(baselineId));
     Map<SeedCase, EvaluationCase> after = index(repository.cases(candidateId));
     var codes = EnumSet.noneOf(SeedCase.class);
@@ -55,7 +80,8 @@ public class EvaluationComparisonService {
                         resourceFor(before.get(code), resources),
                         resourceFor(after.get(code), resources)))
             .toList();
-    return new EvaluationComparison(baseline, candidate, sameSuite, comparableDefinition, cases);
+    return new EvaluationComparison(
+        baseline, candidate, sameSuite, comparableDefinition, comparabilityReason, cases);
   }
 
   /** 无快照、摘要错误或快照不同均不能判断结果变化。 */
@@ -101,6 +127,26 @@ public class EvaluationComparisonService {
             .filter(java.util.Objects::nonNull)
             .toList();
     return values.isEmpty() ? null : values.stream().mapToLong(Long::longValue).sum();
+  }
+
+  /** 预算配置只比较实际限制；操作者字段不参与可比性。 */
+  private String budgetLabel(EvaluationBatch batch) {
+    if (batch.configJson() == null) return "默认预算";
+    try {
+      var node = json.readTree(batch.configJson());
+      return "轮次 "
+          + value(node, "maxRounds")
+          + "，工具 "
+          + value(node, "maxTools")
+          + "，秒 "
+          + value(node, "maxSeconds");
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      return "预算配置无效";
+    }
+  }
+
+  private static String value(com.fasterxml.jackson.databind.JsonNode node, String field) {
+    return node.hasNonNull(field) ? node.get(field).asText() : "默认";
   }
 
   private static Map<SeedCase, EvaluationCase> index(java.util.List<EvaluationCase> cases) {

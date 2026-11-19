@@ -10,25 +10,36 @@ public class WorkspaceController {
   private final ApprovalService approvals;
   private final WorkspaceCommitService commits;
   private final WorkspaceFileCatalog catalog;
+  private final GitDeliveryService deliveries;
 
   public WorkspaceController(
       WorkspaceService service,
       ApprovalService approvals,
       WorkspaceCommitService commits,
-      WorkspaceFileCatalog catalog) {
+      WorkspaceFileCatalog catalog,
+      GitDeliveryService deliveries) {
     this.service = service;
     this.approvals = approvals;
     this.commits = commits;
     this.catalog = catalog;
+    this.deliveries = deliveries;
   }
 
   public record CreateWorkspace(String repositoryPath, String baseBranch) {}
 
   public record UpdateFile(String path, String expectedHash, String content) {}
 
+  public record CreateFile(String path, String content) {}
+
+  public record ReviewUntracked(String path, String sha256) {}
+
   public record ApprovalDecision(ApprovalService.Decision decision) {}
 
   public record CommitRequest(String approvalId, String message) {}
+
+  public record DeliveryRequest(String kind, String remote, String target, String note) {}
+
+  public record DeliveryDecision(boolean approve) {}
 
   @GetMapping("/{id}/commits")
   public Object commits(@PathVariable String id) {
@@ -71,6 +82,46 @@ public class WorkspaceController {
   @PutMapping("/{id}/file")
   public Object write(@PathVariable String id, @RequestBody UpdateFile request) {
     return service.write(id, request.path(), request.expectedHash(), request.content());
+  }
+
+  /** 新建文本文件；原子创建并登记，不能覆盖现有文件。 */
+  @PostMapping("/{id}/file")
+  public Object createFile(@PathVariable String id, @RequestBody CreateFile request) {
+    return service.createUserFile(id, request.path(), request.content());
+  }
+
+  @GetMapping("/{id}/untracked")
+  public Object untracked(@PathVariable String id) {
+    return service.untrackedFiles(id);
+  }
+
+  /** 用户逐项复核未跟踪文件；摘要不符时拒绝。 */
+  @PostMapping("/{id}/untracked/review")
+  public Object reviewUntracked(@PathVariable String id, @RequestBody ReviewUntracked request) {
+    return service.declareUntracked(id, request.path(), request.sha256());
+  }
+
+  @GetMapping("/{id}/deliveries")
+  public Object deliveries(@PathVariable String id) {
+    return deliveries.list(id);
+  }
+
+  @PostMapping("/{id}/deliveries")
+  public Object prepareDelivery(
+      @PathVariable String id, @RequestBody DeliveryRequest request) {
+    return deliveries.prepare(
+        id, request.kind(), request.remote(), request.target(), request.note());
+  }
+
+  @PostMapping("/deliveries/{id}/decision")
+  public Object decideDelivery(
+      @PathVariable String id, @RequestBody DeliveryDecision request) {
+    return deliveries.decide(id, request.approve());
+  }
+
+  @PostMapping("/deliveries/{id}/execute")
+  public Object executeDelivery(@PathVariable String id) {
+    return deliveries.execute(id);
   }
 
   @GetMapping("/{id}/approvals")

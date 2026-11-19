@@ -3,36 +3,36 @@ package dev.workbench.evaluation;
 import dev.workbench.bug.BugService;
 import dev.workbench.bug.BugService.CheckKind;
 import dev.workbench.bug.BugService.CheckStatus;
+import dev.workbench.persistence.repository.BugCheckRepository;
 import dev.workbench.workspace.WorkspaceService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 
 /** 基于本次运行与工作区当前状态生成只读证据判断，不启动测试或修改代码。 */
 @Service
 public class BugEvidenceAssessmentService {
-  private final JdbcTemplate db;
+  private final BugCheckRepository bugChecks;
   private final BugService bugs;
   private final WorkspaceService workspaces;
 
   public BugEvidenceAssessmentService(
-      JdbcTemplate db, BugService bugs, WorkspaceService workspaces) {
-    this.db = db;
+      BugCheckRepository bugChecks, BugService bugs, WorkspaceService workspaces) {
+    this.bugChecks = bugChecks;
     this.bugs = bugs;
     this.workspaces = workspaces;
   }
 
   public BugEvidenceAssessment assess(String runId) {
     var task =
-        db.queryForMap(
-            "SELECT t.bug_id,t.workspace_id FROM runs r JOIN tasks t ON t.id=r.task_id WHERE"
-                + " r.id=?",
-            runId);
-    String bugId = (String) task.get("BUG_ID");
+        bugChecks
+            .findTaskOwner(runId)
+            .orElseThrow(() -> new EmptyResultDataAccessException(1));
+    String bugId = task.bugId();
     if (bugId == null)
       return new BugEvidenceAssessment(
           runId,
@@ -43,7 +43,7 @@ public class BugEvidenceAssessmentService {
           List.of(),
           List.of(),
           0);
-    String workspace = (String) task.get("WORKSPACE_ID");
+    String workspace = task.workspaceId();
     String current = null;
     if (workspace != null) {
       try {

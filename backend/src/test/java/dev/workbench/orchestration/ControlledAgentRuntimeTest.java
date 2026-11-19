@@ -15,7 +15,7 @@ import dev.workbench.framework.control.AgentBudgetPolicy;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.model.AgentModelRegistry.ModelReference;
 import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
 class ControlledAgentRuntimeTest {
   @Test
   void toolCallsRequireSuccessfulMatchingRegistration() {
-    var repository = mock(RunRepository.class);
+    var repository = mock(RunRecordService.class);
     var control = mock(RunControl.class);
     var runtime = new ControlledAgentRuntime("run", "agent", control, repository);
     var id = UUID.randomUUID();
@@ -54,7 +54,7 @@ class ControlledAgentRuntimeTest {
 
   @Test
   void failedRegistrationDoesNotAuthorizeToolsAndUsageIsRecordedBeforeBudgetCheck() {
-    var repository = mock(RunRepository.class);
+    var repository = mock(RunRecordService.class);
     var control = mock(RunControl.class);
     budget(control);
     var runtime = new ControlledAgentRuntime("run", "agent", control, repository);

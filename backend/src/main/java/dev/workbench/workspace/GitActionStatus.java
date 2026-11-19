@@ -4,5 +4,7 @@ package dev.workbench.workspace;
 public enum GitActionStatus {
   STARTED,
   CONFIRMED,
-  UNKNOWN
+  CONFLICT,
+  UNKNOWN,
+  REJECTED
 }

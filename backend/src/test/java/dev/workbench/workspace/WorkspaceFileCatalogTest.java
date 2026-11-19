@@ -2,6 +2,9 @@ package dev.workbench.workspace;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.workbench.TestJpa;
+import dev.workbench.persistence.repository.WorkspaceDeclaredFileRepository;
+import dev.workbench.persistence.repository.WorkspaceRepository;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,7 +40,12 @@ class WorkspaceFileCatalogTest {
         "CREATE TABLE workspaces (id VARCHAR(36) PRIMARY KEY, repository_path VARCHAR(2000),"
             + " workspace_path VARCHAR(2000), base_branch VARCHAR(500), base_commit VARCHAR(64),"
             + " branch_name VARCHAR(500), created_at VARCHAR(40))");
-    var service = new WorkspaceService(db, temp.resolve("workspaces").toString());
+    var jpa = new TestJpa(dataSource);
+    var service =
+        new WorkspaceService(
+            jpa.repository(WorkspaceRepository.class),
+            jpa.repository(WorkspaceDeclaredFileRepository.class),
+            temp.resolve("workspaces").toString());
     var workspace = service.create(repo.toString(), "main");
     Path root = Path.of(workspace.workspacePath());
     Files.writeString(root.resolve("untracked.txt"), "secret");

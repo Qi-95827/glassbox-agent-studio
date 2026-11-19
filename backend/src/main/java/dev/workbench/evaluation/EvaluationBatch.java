@@ -11,4 +11,8 @@ public record EvaluationBatch(
     Instant createdAt,
     Instant finishedAt,
     String definitionJson,
-    String definitionSha256) {}
+    String definitionSha256,
+    Integer suiteVersion,
+    String configJson,
+    String configSha256,
+    String requestedBy) {}

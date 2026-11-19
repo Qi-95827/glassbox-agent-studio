@@ -1,16 +1,12 @@
 package dev.workbench.app;
 
 import dev.workbench.agent.AgentSessionService;
-import dev.workbench.framework.workflow.plan.PlanRepository;
-import dev.workbench.memory.MemoryService;
-import dev.workbench.observability.RunMetricsService;
+import dev.workbench.domain.EntryPolicyService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRepository;
 import dev.workbench.task.TaskSupplementService;
-import dev.workbench.task.WorkflowExecutionRepository;
-import dev.workbench.task.WorkflowRecoveryRepository;
-import java.util.List;
+import dev.workbench.task.WorkbenchTaskService;
+import dev.workbench.workspace.RunHandoverService;
 import java.util.Map;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
@@ -19,40 +15,44 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api")
 public class WorkbenchController {
-  private final RunRepository repo;
+  private final WorkbenchTaskService taskService;
   private final RunService service;
-  private final PlanRepository plans;
-  private final WorkflowExecutionRepository workflowRuns;
-  private final WorkflowRecoveryRepository workflowRecovery;
   private final TaskSupplementService supplements;
-  private final MemoryService memories;
   private final AgentSessionService sessions;
-  private final RunMetricsService metrics;
+  private final RunHandoverService handovers;
+  private final EntryPolicyService entryPolicies;
 
   public WorkbenchController(
-      RunRepository repo,
+      WorkbenchTaskService taskService,
       RunService service,
-      PlanRepository plans,
-      WorkflowExecutionRepository workflowRuns,
-      WorkflowRecoveryRepository workflowRecovery,
       TaskSupplementService supplements,
-      MemoryService memories,
       AgentSessionService sessions,
-      RunMetricsService metrics) {
-    this.repo = repo;
+      RunHandoverService handovers,
+      EntryPolicyService entryPolicies) {
+    this.taskService = taskService;
     this.service = service;
-    this.plans = plans;
-    this.workflowRuns = workflowRuns;
-    this.workflowRecovery = workflowRecovery;
     this.supplements = supplements;
-    this.memories = memories;
     this.sessions = sessions;
-    this.metrics = metrics;
+    this.handovers = handovers;
+    this.entryPolicies = entryPolicies;
   }
 
   @GetMapping("/tasks")
   Object tasks() {
-    return repo.tasks();
+    return taskService.tasks();
+  }
+
+  @GetMapping("/entry-policies")
+  Object entryPolicies() {
+    return entryPolicies.all();
+  }
+
+  public record TaskArchiveRequest(boolean archived) {}
+
+  @PostMapping("/tasks/{taskId}/archive")
+  Object archiveTask(@PathVariable String taskId, @RequestBody TaskArchiveRequest request) {
+    taskService.archive(taskId, request.archived());
+    return Map.of("archived", request.archived());
   }
 
   @PostMapping("/tasks")
@@ -62,31 +62,7 @@ public class WorkbenchController {
 
   @GetMapping("/runs/{id}")
   Object run(@PathVariable String id, @RequestParam(defaultValue = "true") boolean includeEvents) {
-    var run = repo.run(id);
-    Map<String, Object> detail = new java.util.LinkedHashMap<>();
-    detail.put("run", run);
-    detail.put("task", repo.task(run.get("TASK_ID").toString()));
-    detail.put("agents", repo.agents(id));
-    detail.put("agentAssemblies", repo.agentAssemblies(id));
-    detail.put("planNodes", plans.find(id));
-    detail.put("workflowMetrics", metrics.workflow(id));
-    var workflow = plans.workflowPlan(id);
-    if (workflow != null) {
-      detail.put("workflowPlan", workflow);
-      detail.put("workflowAttempts", workflowRuns.workflowAttempts(id));
-      detail.put("workflowChecks", workflowRuns.workflowChecks(id));
-      detail.put("workflowHandoffs", workflowRuns.workflowHandoffs(id));
-      detail.put("workflowCheckpoints", workflowRecovery.checkpoints(id, workflow));
-    }
-    detail.put("tools", repo.tools(id));
-    detail.put("models", repo.models(id));
-    detail.put("handoffs", repo.handoffs(id));
-    detail.put("events", includeEvents ? repo.events(id) : List.of());
-    detail.put("checkpoints", repo.checkpoints(id));
-    detail.put("runs", repo.runs(run.get("TASK_ID").toString()));
-    detail.put("roleBudgets", repo.roleBudgets(run.get("TASK_ID").toString()));
-    detail.put("toolBudgets", repo.toolBudgets(run.get("TASK_ID").toString()));
-    return detail;
+    return taskService.run(id, includeEvents);
   }
 
   @PostMapping("/runs/{id}/plans/{planVersionId}/approve")
@@ -103,14 +79,12 @@ public class WorkbenchController {
 
   @GetMapping("/runs/{id}/skills")
   Object skills(@PathVariable String id) {
-    repo.runSnapshot(id);
-    return repo.skills(id);
+    return taskService.skills(id);
   }
 
   @GetMapping("/runs/{id}/memory-load")
   Object memoryLoad(@PathVariable String id) {
-    repo.runSnapshot(id);
-    return memories.loadForRun(id);
+    return taskService.memoryLoad(id);
   }
 
   @GetMapping("/runs/{id}/agent-sessions")
@@ -120,8 +94,7 @@ public class WorkbenchController {
 
   @GetMapping("/runs/{id}/tool-grants")
   Object toolGrants(@PathVariable String id) {
-    repo.runSnapshot(id);
-    return repo.agentToolGrants(id);
+    return taskService.toolGrants(id);
   }
 
   @PostMapping("/runs/{id}/pause")
@@ -136,6 +109,25 @@ public class WorkbenchController {
     return Map.of("accepted", true);
   }
 
+  public record HandoverRequest(String note) {}
+
+  @GetMapping("/runs/{id}/handover")
+  Object handover(@PathVariable String id) {
+    return taskService.handover(id);
+  }
+
+  @PostMapping("/runs/{id}/handover")
+  Object takeHandover(
+      @PathVariable String id, @RequestBody(required = false) HandoverRequest request) {
+    return handovers.take(id, request == null ? null : request.note());
+  }
+
+  @PostMapping("/runs/{id}/handover/return")
+  Object returnHandover(
+      @PathVariable String id, @RequestBody(required = false) HandoverRequest request) {
+    return handovers.returnControl(id, request == null ? null : request.note());
+  }
+
   @PostMapping("/runs/{id}/recover/{checkpoint}")
   Object recover(@PathVariable String id, @PathVariable String checkpoint) {
     return Map.of("runId", service.recover(id, checkpoint));
@@ -147,12 +139,12 @@ public class WorkbenchController {
       @PathVariable String id,
       @PathVariable String requestId,
       @RequestBody SupplementSubmission request) {
-    if (request.expectedTaskVersion() == null)
-      throw new IllegalArgumentException("请携带读取页面时的任务版本。");
+    if (request.expectedTaskVersion() == null) throw new IllegalArgumentException("请携带读取页面时的任务版本。");
     var applied =
         supplements.apply(
             id, requestId, request.expectedTaskVersion(), request.path(), request.content());
-    return Map.of("accepted", true, "taskVersion", applied.newTaskVersion(), "runStatus", "PENDING");
+    return Map.of(
+        "accepted", true, "taskVersion", applied.newTaskVersion(), "runStatus", "PENDING");
   }
 
   /** 补充提交体：期望任务版本、测试文件路径与内容。 */
@@ -160,7 +152,7 @@ public class WorkbenchController {
 
   @GetMapping("/overview")
   Object overview() {
-    return repo.overview();
+    return taskService.overview();
   }
 
   @ExceptionHandler(EmptyResultDataAccessException.class)

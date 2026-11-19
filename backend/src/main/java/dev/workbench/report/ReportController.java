@@ -20,8 +20,18 @@ public class ReportController {
   @GetMapping(value = "/{id}/report", produces = MediaType.TEXT_HTML_VALUE)
   public ResponseEntity<byte[]> report(
       @PathVariable String id, @RequestParam(defaultValue = "FULL") ReportView view) {
-    String html = view == ReportView.SUMMARY ? service.renderSummary(id) : service.render(id);
-    String filename = view == ReportView.SUMMARY ? "agent-summary.html" : "agent-report.html";
+    String html =
+        switch (view) {
+          case SUMMARY -> service.renderSummary(id);
+          case REDACTED -> service.renderRedacted(id);
+          default -> service.render(id);
+        };
+    String filename =
+        switch (view) {
+          case SUMMARY -> "agent-summary.html";
+          case REDACTED -> "agent-report-redacted.html";
+          default -> "agent-report.html";
+        };
     return ResponseEntity.ok()
         .header(
             HttpHeaders.CONTENT_DISPOSITION,

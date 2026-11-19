@@ -17,12 +17,12 @@ import dev.workbench.framework.workflow.check.StaleEvidenceException;
 import dev.workbench.framework.workflow.check.SystemCheckRegistry;
 import dev.workbench.framework.workflow.check.SystemCheckRequest;
 import dev.workbench.framework.workflow.check.SystemCheckResult;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
-import dev.workbench.task.RunRepository;
-import dev.workbench.task.WorkflowExecutionRepository;
-import dev.workbench.task.WorkflowRecoveryRepository;
+import dev.workbench.task.RunRecordService;
+import dev.workbench.task.WorkflowExecutionService;
+import dev.workbench.task.WorkflowRecoveryService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -33,20 +33,20 @@ import org.springframework.stereotype.Component;
 /** 按持久化依赖顺序执行受控计划；整个运行共享一个控制器。 */
 @Component
 class WorkflowScheduler {
-  private final RunRepository repository;
-  private final PlanRepository plans;
-  private final WorkflowExecutionRepository workflowRuns;
-  private final WorkflowRecoveryRepository recovery;
+  private final RunRecordService repository;
+  private final PlanService plans;
+  private final WorkflowExecutionService workflowRuns;
+  private final WorkflowRecoveryService recovery;
   private final AgentExecutor agent;
   private final ObjectMapper json;
   private final Map<String, WorkflowTemplate> templates;
   private final SystemCheckRegistry checks;
 
   WorkflowScheduler(
-      RunRepository repository,
-      PlanRepository plans,
-      WorkflowExecutionRepository workflowRuns,
-      WorkflowRecoveryRepository recovery,
+      RunRecordService repository,
+      PlanService plans,
+      WorkflowExecutionService workflowRuns,
+      WorkflowRecoveryService recovery,
       AgentExecutor agent,
       ObjectMapper json,
       List<WorkflowTemplate> templates,
@@ -205,7 +205,7 @@ class WorkflowScheduler {
   private String executeAttempt(
       String runId,
       TaskDefinition task,
-      WorkflowExecutionRepository.ClaimedNode attempt,
+      WorkflowExecutionService.ClaimedNode attempt,
       RunControl control,
       RunControl.NodePolicy nodePolicy)
       throws InterruptedException, com.fasterxml.jackson.core.JsonProcessingException {
@@ -261,7 +261,7 @@ class WorkflowScheduler {
   }
 
   private static AgentInput stepInput(
-      TaskDefinition task, WorkflowExecutionRepository.ClaimedNode attempt, String text) {
+      TaskDefinition task, WorkflowExecutionService.ClaimedNode attempt, String text) {
     var sources = new java.util.ArrayList<AgentInput.Source>();
     sources.add(new AgentInput.Source(AgentInput.Kind.TASK, task.id().toString(), null));
     sources.add(
@@ -291,5 +291,5 @@ class WorkflowScheduler {
       List<String> constraints,
       List<String> acceptanceCriteria,
       List<String> authorizedFiles,
-      List<WorkflowExecutionRepository.WorkflowInput> dependencies) {}
+      List<WorkflowExecutionService.WorkflowInput> dependencies) {}
 }

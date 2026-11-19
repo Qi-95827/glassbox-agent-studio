@@ -17,9 +17,11 @@ import org.springframework.stereotype.Component;
 public class BugReproductionCheck implements SystemCheckExecutor {
   public static final SystemCheckRef REF = new SystemCheckRef("bug-reproduction", 1);
   private final BugService bugs;
+  private final BugIntakeService intakes;
 
-  public BugReproductionCheck(BugService bugs) {
+  public BugReproductionCheck(BugService bugs, BugIntakeService intakes) {
     this.bugs = bugs;
+    this.intakes = intakes;
   }
 
   @Override
@@ -41,6 +43,7 @@ public class BugReproductionCheck implements SystemCheckExecutor {
             task.workspaceId(),
             BugService.CheckKind.REPRODUCE,
             request.guard());
+    intakes.triage(check);
     return BugCheckResults.reproduction(check);
   }
 }

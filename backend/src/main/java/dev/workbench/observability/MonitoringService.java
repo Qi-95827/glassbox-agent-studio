@@ -4,76 +4,64 @@ import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.evaluation.CaseStatus;
+import dev.workbench.persistence.repository.ObservabilityRepository;
 import java.util.List;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-/** 查询低敏运行概况；SQL 表名固定，避免接收用户提供的查询表达式。 */
+/** 查询低敏运行概况；聚合全部通过已映射实体的 JPQL 完成。 */
 @Service
 public class MonitoringService {
-  private final JdbcTemplate db;
+  private final ObservabilityRepository rows;
 
-  public MonitoringService(JdbcTemplate db) {
-    this.db = db;
+  public MonitoringService(ObservabilityRepository rows) {
+    this.rows = rows;
   }
 
   public MonitoringOverview overview() {
     var runs =
-        db.query(
-            "SELECT status, COUNT(*) AS n FROM runs GROUP BY status ORDER BY status",
-            (r, i) -> {
-              String raw = r.getString("status");
-              RunStatus parsed = parseStatus(RunStatus.class, raw);
-              return new MonitoringOverview.RunCount(
-                  parsed, parsed == null ? raw : null, r.getLong("n"));
-            });
-    var agents = invocations("agent_invocations");
-    var models = invocations("model_invocations");
-    var tools = invocations("tool_invocations");
+        rows.runStatusCounts().stream()
+            .map(
+                row -> {
+                  RunStatus parsed = parseStatus(RunStatus.class, row.status());
+                  return new MonitoringOverview.RunCount(
+                      parsed, parsed == null ? row.status() : null, row.count());
+                })
+            .toList();
+    var agents = invocations(rows.agentStatusCounts());
+    var models = invocations(rows.modelStatusCounts());
+    var tools = invocations(rows.toolStatusCounts());
     var cases =
-        db.query(
-            "SELECT status, COUNT(*) AS n FROM evaluation_cases GROUP BY status ORDER BY status",
-            (r, i) -> {
-              String raw = r.getString("status");
-              CaseStatus parsed = parseStatus(CaseStatus.class, raw);
-              return new MonitoringOverview.CaseCount(
-                  parsed, parsed == null ? raw : null, r.getLong("n"));
-            });
-    var modelUsage =
-        db.queryForMap(
-            "SELECT SUM(input_tokens) AS input_sum, COUNT(*)-COUNT(input_tokens) AS input_unknown,"
-                + " SUM(output_tokens) AS output_sum, COUNT(*)-COUNT(output_tokens) AS"
-                + " output_unknown, SUM(duration_ms) AS duration_sum, COUNT(*)-COUNT(duration_ms)"
-                + " AS duration_unknown FROM model_invocations");
-    var toolUsage =
-        db.queryForMap(
-            "SELECT SUM(duration_ms) AS duration_sum, COUNT(*)-COUNT(duration_ms) AS"
-                + " duration_unknown FROM tool_invocations");
+        rows.evaluationStatusCounts().stream()
+            .map(
+                row -> {
+                  CaseStatus parsed = parseStatus(CaseStatus.class, row.status());
+                  return new MonitoringOverview.CaseCount(
+                      parsed, parsed == null ? row.status() : null, row.count());
+                })
+            .toList();
+    var modelUsage = rows.modelUsage();
+    var toolUsage = rows.toolUsage();
     var usage =
         new MonitoringOverview.Usage(
-            numberOrNull(modelUsage.get("INPUT_SUM")),
-            ((Number) modelUsage.get("INPUT_UNKNOWN")).longValue(),
-            numberOrNull(modelUsage.get("OUTPUT_SUM")),
-            ((Number) modelUsage.get("OUTPUT_UNKNOWN")).longValue(),
-            numberOrNull(modelUsage.get("DURATION_SUM")),
-            ((Number) modelUsage.get("DURATION_UNKNOWN")).longValue(),
-            numberOrNull(toolUsage.get("DURATION_SUM")),
-            ((Number) toolUsage.get("DURATION_UNKNOWN")).longValue());
-    var groupedStops =
-        db.queryForList(
-            "SELECT status,stop_cause,COUNT(*) AS n FROM runs WHERE status IN"
-                + " ('LIMITED','FAILED','INTERRUPTED','CANCELLED') GROUP BY status,stop_cause");
+            modelUsage.inputSum(),
+            modelUsage.inputUnknownCalls(),
+            modelUsage.outputSum(),
+            modelUsage.outputUnknownCalls(),
+            modelUsage.durationSum(),
+            modelUsage.durationUnknownCalls(),
+            toolUsage.durationSum(),
+            toolUsage.durationUnknownCalls());
     var counts = new java.util.EnumMap<StopCause, Long>(StopCause.class);
     long missing = 0, inconsistent = 0;
-    for (var row : groupedStops) {
-      long count = ((Number) row.get("N")).longValue();
-      Object raw = row.get("STOP_CAUSE");
+    for (var row : rows.stoppedRunCounts()) {
+      long count = row.count();
+      String raw = row.stopCause();
       if (raw == null) {
         missing += count;
         continue;
       }
-      StopCause cause = parseStatus(StopCause.class, raw.toString());
-      if (cause == null || !cause.status().name().equals(row.get("STATUS"))) {
+      StopCause cause = parseStatus(StopCause.class, raw);
+      if (cause == null || !cause.status().name().equals(row.status())) {
         inconsistent += count;
         continue;
       }
@@ -87,15 +75,16 @@ public class MonitoringService {
         runs, agents, models, tools, cases, stops, missing, inconsistent, usage);
   }
 
-  private List<MonitoringOverview.InvocationCount> invocations(String table) {
-    return db.query(
-        "SELECT status, COUNT(*) AS n FROM " + table + " GROUP BY status ORDER BY status",
-        (r, i) -> {
-          String raw = r.getString("status");
-          InvocationStatus parsed = parseStatus(InvocationStatus.class, raw);
-          return new MonitoringOverview.InvocationCount(
-              parsed, parsed == null ? raw : null, r.getLong("n"));
-        });
+  private static List<MonitoringOverview.InvocationCount> invocations(
+      List<ObservabilityRepository.StatusCount> rows) {
+    return rows.stream()
+        .map(
+            row -> {
+              InvocationStatus parsed = parseStatus(InvocationStatus.class, row.status());
+              return new MonitoringOverview.InvocationCount(
+                  parsed, parsed == null ? row.status() : null, row.count());
+            })
+        .toList();
   }
 
   private static <T extends Enum<T>> T parseStatus(Class<T> type, String raw) {
@@ -105,9 +94,5 @@ public class MonitoringService {
     } catch (IllegalArgumentException e) {
       return null;
     }
-  }
-
-  private static Long numberOrNull(Object value) {
-    return value == null ? null : ((Number) value).longValue();
   }
 }

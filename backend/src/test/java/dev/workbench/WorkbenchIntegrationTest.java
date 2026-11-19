@@ -32,7 +32,7 @@ import dev.workbench.framework.workflow.check.SystemCheckRef;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.view.ExecutionViewService;
 import dev.workbench.memory.MemoryCategory;
 import dev.workbench.memory.MemoryService;
@@ -42,8 +42,8 @@ import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.Handoff;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.report.HtmlReportService;
-import dev.workbench.task.RunRepository;
-import dev.workbench.task.WorkflowExecutionRepository;
+import dev.workbench.task.RunRecordService;
+import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.GitActionStatus;
 import dev.workbench.workspace.WorkspaceCommitService;
@@ -71,9 +71,9 @@ import org.springframework.boot.test.autoconfigure.actuate.observability.AutoCon
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
 
 @AutoConfigureMockMvc
@@ -86,14 +86,14 @@ import reactor.core.publisher.Flux;
     })
 class WorkbenchIntegrationTest {
   @Autowired RunService service;
-  @Autowired RunRepository repo;
-  @Autowired WorkflowExecutionRepository workflowRuns;
+  @Autowired RunRecordService repo;
+  @Autowired WorkflowExecutionService workflowRuns;
   @Autowired JdbcTemplate db;
   @Autowired TransactionTemplate transactions;
   @Autowired HtmlReportService reports;
   @Autowired ApprovalService approvals;
   @Autowired WorkspaceCommitService commits;
-  @Autowired PlanRepository plans;
+  @Autowired PlanService plans;
   @Autowired ExecutionViewService executionViews;
   @Autowired MockMvc mvc;
   @Autowired EvaluationService evaluations;
@@ -1136,7 +1136,7 @@ class WorkbenchIntegrationTest {
     var plan = plans.workflowPlan(original);
     var nodes = plans.find(original);
     var first = workflowRuns.claimWorkflowNode(original, plan.id(), nodes.getFirst().id(), "工作流测试");
-    String modelId = RunRepository.id();
+    String modelId = RunRecordService.id();
     repo.recordAgentDefinition(
         original, first.agentId(), first.node().definitionRef(), first.node().definitionSha256());
     repo.startModel(modelId, original, first.agentId(), ModelKind.MOCK);
@@ -4380,7 +4380,7 @@ class WorkbenchIntegrationTest {
         .andExpect(jsonPath("$.cases[0].checks.length()").value(6))
         .andExpect(jsonPath("$.cases[1].checks.length()").value(6));
 
-    String baseline = RunRepository.id();
+    String baseline = RunRecordService.id();
     evaluationRecords.create(baseline);
     evaluationRecords.finishBatch(baseline, EvaluationStatus.INTERRUPTED);
     mvc.perform(get("/api/evaluations/compare").param("baseline", baseline).param("candidate", id))

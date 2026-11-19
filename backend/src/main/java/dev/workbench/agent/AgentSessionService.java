@@ -1,6 +1,6 @@
 package dev.workbench.agent;
 
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
 import java.util.List;
@@ -10,10 +10,10 @@ import org.springframework.stereotype.Service;
 /** 只读取 AgentScope 会话状态元数据，不允许由该接口修改或恢复会话。 */
 @Service
 public class AgentSessionService {
-  private final RunRepository runs;
+  private final RunRecordService runs;
   private final AgentStateStore states;
 
-  public AgentSessionService(RunRepository runs, AgentStateStore states) {
+  public AgentSessionService(RunRecordService runs, AgentStateStore states) {
     this.runs = runs;
     this.states = states;
   }

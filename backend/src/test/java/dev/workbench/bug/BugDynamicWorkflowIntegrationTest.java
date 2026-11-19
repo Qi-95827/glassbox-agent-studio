@@ -22,13 +22,13 @@ import dev.workbench.framework.workflow.check.StaleEvidenceException;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.view.ExecutionViewService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.task.TaskSupplementService;
-import dev.workbench.task.WorkflowExecutionRepository;
+import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.WorkspaceService;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.TextBlock;
@@ -66,13 +66,14 @@ import reactor.core.publisher.Flux;
     })
 class BugDynamicWorkflowIntegrationTest {
   @Autowired RunService service;
-  @Autowired RunRepository repo;
+  @Autowired RunRecordService repo;
   @Autowired WorkspaceService workspaces;
   @Autowired BugService bugs;
-  @Autowired PlanRepository plans;
+  @Autowired BugIntakeService intakes;
+  @Autowired PlanService plans;
   @Autowired ExecutionViewService executionViews;
   @Autowired TaskSupplementService supplements;
-  @Autowired WorkflowExecutionRepository workflowRuns;
+  @Autowired WorkflowExecutionService workflowRuns;
   @Autowired JdbcTemplate db;
   @Autowired dev.workbench.report.HtmlReportService reports;
   @Autowired org.springframework.test.web.servlet.MockMvc mvc;
@@ -197,6 +198,30 @@ class BugDynamicWorkflowIntegrationTest {
     var report = reports.render(id);
     assertTrue(report.contains(reproduction.get("ID").toString()));
     assertTrue(report.contains(regression.get("ID").toString()));
+    assertTrue(report.contains("Bug 分诊与交付"));
+    var delivery = intakes.delivery(id);
+    var intake = (BugIntakeService.Intake) delivery.get("intake");
+    assertNotNull(intake);
+    assertEquals("synthetic-local", intake.source());
+    assertEquals(1, intake.sourceVersion());
+    assertEquals("修复模拟 Bug MOCK-PY-001", intake.originalDescription());
+    assertEquals("test_calc.TestCalc.test_add", intake.expectedTestId());
+    assertEquals("MATCHED", ((Map<?, ?>) delivery.get("triage")).get("status"));
+    assertEquals("WAITING_USER_REVIEW", delivery.get("conclusion"));
+    assertEquals("PASSED", intake.regressionStatus());
+    assertTrue(report.contains("等待用户核对"));
+
+    // 回归通过后改动工作区：当前版本证据过期，历史 PASSED 记录仍保留。
+    var currentFile = workspaces.read(fixture.workspace().id(), "calculator.py");
+    workspaces.write(
+        fixture.workspace().id(),
+        "calculator.py",
+        currentFile.sha256(),
+        "def add(a,b):\n    return a-b\n");
+    var staleDelivery = intakes.delivery(id);
+    assertEquals("EVIDENCE_STALE", staleDelivery.get("conclusion"));
+    assertEquals("PASSED", ((Map<?, ?>) staleDelivery.get("regression")).get("STATUS"));
+    assertEquals(Boolean.FALSE, staleDelivery.get("regressionEvidenceCurrent"));
     assertEquals(
         0,
         db.queryForObject(
@@ -223,6 +248,9 @@ class BugDynamicWorkflowIntegrationTest {
     assertNotNull(request, "阻塞后没有保存待补充事项。");
     assertEquals("REPRODUCTION_MISSING_INFO", request.reasonCode());
     assertEquals(1, request.taskVersion());
+    var pendingDelivery = intakes.delivery(id);
+    assertEquals("NEEDS_INFO", pendingDelivery.get("conclusion"));
+    assertEquals("NEEDS_INFO", ((Map<?, ?>) pendingDelivery.get("triage")).get("status"));
     var nodes = plans.find(id);
     assertEquals(PlanNodeStatus.FAILED, nodes.getFirst().status());
     assertTrue(
@@ -301,6 +329,9 @@ class BugDynamicWorkflowIntegrationTest {
         finalView.nodes().stream()
             .allMatch(
                 node -> "COMPLETED".equals(node.status()) || "REUSED".equals(node.status())));
+    var completedDelivery = intakes.delivery(id);
+    assertEquals("MATCHED", ((Map<?, ?>) completedDelivery.get("triage")).get("status"));
+    assertEquals("WAITING_USER_REVIEW", completedDelivery.get("conclusion"));
   }
 
   @Test
@@ -316,14 +347,17 @@ class BugDynamicWorkflowIntegrationTest {
     assertEquals(1, checks.size());
     assertEquals(SystemCheckStatus.FAILED, checks.getFirst().status());
     assertTrue(
-        checks.getFirst().summary().contains("未出现模拟 Bug 的目标现象"),
+        checks.getFirst().summary().contains("没有找到并执行目标测试用例"),
         checks.getFirst().summary());
     assertTrue(checks.getFirst().evidence().contains("FAIL: test_other"));
-    assertTrue(checks.getFirst().evidence().contains("test_add"));
+    assertTrue(checks.getFirst().evidence().contains("test_calc.TestCalc.test_add"));
     assertTrue(checks.getFirst().evidence().contains("synthetic-local v1"));
     var bugChecks = bugs.checksForRun(id);
     assertEquals(1, bugChecks.size());
-    assertEquals("TARGET_MISMATCH", bugChecks.getFirst().get("STATUS"));
+    assertEquals("TARGET_NOT_EXECUTED", bugChecks.getFirst().get("STATUS"));
+    var delivery = intakes.delivery(id);
+    assertEquals("TARGET_MISMATCH", delivery.get("conclusion"));
+    assertEquals("TARGET_MISMATCH", ((Map<?, ?>) delivery.get("triage")).get("status"));
     // 未匹配目标现象时下游完全未启动，写入调用为零。
     assertTrue(repo.agents(id).isEmpty());
     assertTrue(repo.models(id).isEmpty());
@@ -338,6 +372,163 @@ class BugDynamicWorkflowIntegrationTest {
         view.nodes().stream()
             .filter(node -> "fix".equals(node.key()))
             .allMatch(node -> "SKIPPED".equals(node.status())));
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "RUN_DOCKER_TESTS", matches = "true")
+  void mixedFailureReproductionBlocksBeforeFix() throws Exception {
+    assertReproductionBlocked(
+        workspaceWithMixedTargetFailure(), "TARGET_MISMATCH", "AssertionError: 1 != 4");
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "RUN_DOCKER_TESTS", matches = "true")
+  void similarTestNameReproductionBlocksBeforeFix() throws Exception {
+    assertReproductionBlocked(
+        workspaceWithSimilarTestName(), "TARGET_NOT_EXECUTED", "test_add_extra");
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "RUN_DOCKER_TESTS", matches = "true")
+  void assertionPrefixReproductionBlocksBeforeFix() throws Exception {
+    assertReproductionBlocked(
+        workspaceWithAssertionPrefix(), "TARGET_MISMATCH", "AssertionError: 1 != 30");
+  }
+
+  @Test
+  void skippedTargetRegressionNeverReportsFixed() throws Exception {
+    var fixture = failingPythonWorkspace();
+    stubFileWriter();
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REPRODUCE,
+        BugService.CheckStatus.FAILURES_OBSERVED,
+        "AssertionError: 1 != 3");
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REGRESSION,
+        BugService.CheckStatus.TARGET_SKIPPED,
+        "test_add (test_calc.TestCalc.test_add) ... skipped 'target not ready'");
+
+    String id = createBugTask(fixture.workspace().id(), true, null);
+    var run = await(id);
+    assertEquals("BLOCKED", run.get("STATUS"), String.valueOf(run.get("REASON")));
+    assertEquals("CHECK_FAILED", run.get("STOP_CAUSE"));
+    var checks = workflowRuns.workflowChecks(id);
+    assertEquals(2, checks.size());
+    assertEquals(SystemCheckStatus.PASSED, checks.getFirst().status());
+    assertEquals(SystemCheckStatus.FAILED, checks.getLast().status());
+    assertTrue(
+        checks.getLast().summary().contains("目标测试用例被跳过"), checks.getLast().summary());
+    var nodes = plans.find(id);
+    assertEquals(PlanNodeStatus.COMPLETED, nodes.get(0).status());
+    assertEquals(PlanNodeStatus.COMPLETED, nodes.get(2).status());
+    assertEquals(PlanNodeStatus.FAILED, nodes.get(3).status());
+    assertEquals(PlanNodeStatus.SKIPPED, nodes.get(4).status());
+    var delivery = intakes.delivery(id);
+    assertEquals("MATCHED", ((Map<?, ?>) delivery.get("triage")).get("status"));
+    assertEquals("REGRESSION_NOT_PASSED", delivery.get("conclusion"));
+    assertEquals("TARGET_SKIPPED", ((BugIntakeService.Intake) delivery.get("intake")).regressionStatus());
+  }
+
+  private void assertReproductionBlocked(Fixture fixture, String expectedStatus, String evidence)
+      throws Exception {
+    String id = createBugTask(fixture.workspace().id(), true, null);
+    var run = await(id);
+    assertEquals("BLOCKED", run.get("STATUS"), String.valueOf(run.get("REASON")));
+    assertEquals("CHECK_FAILED", run.get("STOP_CAUSE"));
+    var bugChecks = bugs.checksForRun(id);
+    assertEquals(1, bugChecks.size());
+    assertEquals(expectedStatus, bugChecks.getFirst().get("STATUS"));
+    assertTrue(bugChecks.getFirst().get("OUTPUT").toString().contains(evidence));
+    assertEquals("TARGET_MISMATCH", intakes.delivery(id).get("conclusion"));
+    assertTrue(repo.agents(id).isEmpty());
+    assertTrue(repo.models(id).isEmpty());
+    assertTrue(repo.tools(id).isEmpty());
+    var nodes = plans.find(id);
+    assertEquals(PlanNodeStatus.FAILED, nodes.getFirst().status());
+    assertTrue(nodes.stream().skip(1).allMatch(node -> node.status() == PlanNodeStatus.SKIPPED));
+    var view = executionViews.view(id);
+    assertTrue(
+        view.nodes().stream()
+            .filter(node -> "fix".equals(node.key()))
+            .allMatch(node -> "SKIPPED".equals(node.status())));
+  }
+
+  @Test
+  void bugIntakePersistsSourceVersionAndDistinguishesRepeatAndChange() throws Exception {
+    var fixture = failingPythonWorkspace();
+    String first =
+        createBugTaskWithGoal(fixture.workspace().id(), "登录后加法结果错误", true);
+    var firstIntake = intakes.findByRun(first);
+    assertNotNull(firstIntake);
+    assertEquals("MOCK-PY-001", firstIntake.bugId());
+    assertEquals("synthetic-local", firstIntake.source());
+    assertEquals(1, firstIntake.sourceVersion());
+    assertEquals("登录后加法结果错误", firstIntake.originalDescription());
+    assertEquals("test_calc.TestCalc.test_add", firstIntake.expectedTestId());
+    assertTrue(firstIntake.createdAt().matches("\\d{4}-\\d{2}-\\d{2}T.*"));
+    assertEquals(1, firstIntake.submissionSeq());
+    assertNull(firstIntake.duplicateOf());
+    assertNull(firstIntake.previousIntakeId());
+    assertEquals(BugIntakeService.TriageStatus.PENDING, firstIntake.triageStatus());
+
+    String repeated =
+        createBugTaskWithGoal(fixture.workspace().id(), "登录后加法结果错误", true);
+    var repeatedIntake = intakes.findByRun(repeated);
+    assertEquals(2, repeatedIntake.submissionSeq());
+    assertEquals(firstIntake.id(), repeatedIntake.duplicateOf());
+    assertEquals(firstIntake.id(), repeatedIntake.previousIntakeId());
+
+    String changed =
+        createBugTaskWithGoal(fixture.workspace().id(), "登录后结果总是少 1", true);
+    var changedIntake = intakes.findByRun(changed);
+    assertEquals(3, changedIntake.submissionSeq());
+    assertNull(changedIntake.duplicateOf());
+    assertEquals(repeatedIntake.id(), changedIntake.previousIntakeId());
+    assertEquals("登录后结果总是少 1", changedIntake.originalDescription());
+
+    // 同一来源的再次提交不改写历史，只新增可追溯记录。
+    assertEquals(3, intakes.history(fixture.workspace().id()).size());
+  }
+
+  @Test
+  void staleRegressionEvidenceChangesDeliveryAndReport() throws Exception {
+    var fixture = failingPythonWorkspace();
+    stubFileWriter();
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REPRODUCE,
+        BugService.CheckStatus.FAILURES_OBSERVED,
+        "AssertionError: 1 != 3");
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REGRESSION,
+        BugService.CheckStatus.PASSED,
+        "test_add (test_calc.TestCalc.test_add) ... ok");
+    String id = createBugTask(fixture.workspace().id(), true, null);
+    await(id);
+
+    var before = intakes.delivery(id);
+    assertEquals("WAITING_USER_REVIEW", before.get("conclusion"));
+    assertEquals(Boolean.TRUE, before.get("regressionEvidenceCurrent"));
+
+    // 回归通过后修改工作区：历史通过记录保留，但当前版本证据必须标记过期。
+    var current = workspaces.read(fixture.workspace().id(), "calculator.py");
+    workspaces.write(
+        fixture.workspace().id(),
+        "calculator.py",
+        current.sha256(),
+        "def add(a,b):\n    return a-b\n");
+    var after = intakes.delivery(id);
+    assertEquals("EVIDENCE_STALE", after.get("conclusion"));
+    assertEquals("PASSED", ((Map<?, ?>) after.get("regression")).get("STATUS"));
+    assertEquals(Boolean.FALSE, after.get("regressionEvidenceCurrent"));
+    assertNotEquals(after.get("currentFingerprint"), after.get("regressionFingerprint"));
+
+    var report = reports.render(id);
+    assertTrue(report.contains("证据已过期"));
+    assertTrue(report.contains("回归证据对应当前版本：否"));
   }
 
   @Test
@@ -613,6 +804,9 @@ class BugDynamicWorkflowIntegrationTest {
             Map.entry(BugService.CheckStatus.NEEDS_INFO, SystemCheckStatus.BLOCKED),
             Map.entry(BugService.CheckStatus.ERROR, SystemCheckStatus.BLOCKED),
             Map.entry(BugService.CheckStatus.NOT_REPRODUCED, SystemCheckStatus.FAILED),
+            Map.entry(BugService.CheckStatus.TARGET_MISMATCH, SystemCheckStatus.FAILED),
+            Map.entry(BugService.CheckStatus.TARGET_NOT_EXECUTED, SystemCheckStatus.FAILED),
+            Map.entry(BugService.CheckStatus.TARGET_SKIPPED, SystemCheckStatus.FAILED),
             Map.entry(BugService.CheckStatus.STALE, SystemCheckStatus.BLOCKED))) {
       status.set(entry.getKey());
       String id = createBugTask(fixture.workspace().id(), true, null);
@@ -719,7 +913,7 @@ class BugDynamicWorkflowIntegrationTest {
         "FAILURES_OBSERVED",
         "模拟复现输出",
         1,
-        RunRepository.now(),
+        RunRecordService.now(),
         staleFingerprint,
         id);
     db.update(
@@ -727,9 +921,9 @@ class BugDynamicWorkflowIntegrationTest {
             + " WHERE id=?",
         "模拟复现检查通过",
         bugCheckId,
-        RunRepository.now(),
+        RunRecordService.now(),
         claimed.checkId());
-    plans.finishCheckNode(id, nodes.getFirst().id(), PlanNodeStatus.COMPLETED, RunRepository.now());
+    plans.finishCheckNode(id, nodes.getFirst().id(), PlanNodeStatus.COMPLETED, RunRecordService.now());
 
     var check = workflowRuns.workflowChecks(id).getFirst();
     assertEquals(Boolean.FALSE, check.evidenceCurrent());
@@ -846,7 +1040,7 @@ class BugDynamicWorkflowIntegrationTest {
                   status.name(),
                   output,
                   1,
-                  RunRepository.now(),
+                  RunRecordService.now(),
                   fingerprint,
                   runId);
               return new BugService.Check(
@@ -857,7 +1051,7 @@ class BugDynamicWorkflowIntegrationTest {
                   status,
                   output,
                   1,
-                  RunRepository.now(),
+                  RunRecordService.now(),
                   fingerprint,
                   runId);
             })
@@ -868,6 +1062,36 @@ class BugDynamicWorkflowIntegrationTest {
   private String createBugTask(String workspaceId, boolean write, List<String> files)
       throws Exception {
     return createBugTask(workspaceId, write, files, "MOCK-PY-001");
+  }
+
+  private String createBugTaskWithGoal(String workspaceId, String goal, boolean reviewPlan) {
+    return service.create(
+        new CreateTaskRequest(
+            goal,
+            "normal",
+            8,
+            6,
+            90,
+            "mock",
+            workspaceId,
+            null,
+            true,
+            "MOCK-PY-001",
+            false,
+            null,
+            List.of("只修改授权文件"),
+            List.of("回归测试通过"),
+            null,
+            null,
+            TaskEntryKind.BUG,
+            null,
+            null,
+            List.of("calculator.py"),
+            null,
+            null,
+            "bug-fix",
+            reviewPlan,
+            null));
   }
 
   private String createBugTask(
@@ -921,7 +1145,7 @@ class BugDynamicWorkflowIntegrationTest {
         status,
         output,
         1,
-        RunRepository.now(),
+        RunRecordService.now(),
         "a".repeat(64),
         runId);
   }
@@ -1029,7 +1253,70 @@ class BugDynamicWorkflowIntegrationTest {
     return new Fixture(workspaces.create(repo.toString(), "main"));
   }
 
-  private Fixture failingPythonWorkspace() throws Exception {    Path repo = Files.createDirectory(temp.resolve("repo-" + java.util.UUID.randomUUID()));
+  /** 断言前缀：实际是 1 != 30，不能命中预期的 1 != 3。 */
+  private Fixture workspaceWithAssertionPrefix() throws Exception {
+    Path repo = Files.createDirectory(temp.resolve("repo-prefix-" + java.util.UUID.randomUUID()));
+    git(repo, "init", "-b", "main");
+    git(repo, "config", "user.email", "test@example.invalid");
+    git(repo, "config", "user.name", "Test");
+    Files.writeString(repo.resolve("calculator.py"), "def add(a,b):\n    return a-b\n");
+    Files.createDirectory(repo.resolve("tests"));
+    Files.writeString(
+        repo.resolve("tests/test_calc.py"),
+        "import unittest\n"
+            + "from calculator import add\n"
+            + "class TestCalc(unittest.TestCase):\n"
+            + "    def test_add(self):\n"
+            + "        self.assertEqual(add(2,1),30)\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "fixture");
+    return new Fixture(workspaces.create(repo.toString(), "main"));
+  }
+
+  /** 混合失败：目标用例自身断言 1 != 4，1 != 3 来自另一个用例。 */
+  private Fixture workspaceWithMixedTargetFailure() throws Exception {
+    Path repo = Files.createDirectory(temp.resolve("repo-mixed-" + java.util.UUID.randomUUID()));
+    git(repo, "init", "-b", "main");
+    git(repo, "config", "user.email", "test@example.invalid");
+    git(repo, "config", "user.name", "Test");
+    Files.writeString(repo.resolve("calculator.py"), "def add(a,b):\n    return a-b\n");
+    Files.createDirectory(repo.resolve("tests"));
+    Files.writeString(
+        repo.resolve("tests/test_calc.py"),
+        "import unittest\n"
+            + "from calculator import add\n"
+            + "class TestCalc(unittest.TestCase):\n"
+            + "    def test_add(self):\n"
+            + "        self.assertEqual(add(2,1),4)\n"
+            + "    def test_other(self):\n"
+            + "        self.assertEqual(add(2,1),3)\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "fixture");
+    return new Fixture(workspaces.create(repo.toString(), "main"));
+  }
+
+  /** 相似名称：只有 test_add_extra 失败，不能冒充目标 test_add。 */
+  private Fixture workspaceWithSimilarTestName() throws Exception {
+    Path repo = Files.createDirectory(temp.resolve("repo-similar-" + java.util.UUID.randomUUID()));
+    git(repo, "init", "-b", "main");
+    git(repo, "config", "user.email", "test@example.invalid");
+    git(repo, "config", "user.name", "Test");
+    Files.writeString(repo.resolve("calculator.py"), "def add(a,b):\n    return a-b\n");
+    Files.createDirectory(repo.resolve("tests"));
+    Files.writeString(
+        repo.resolve("tests/test_calc.py"),
+        "import unittest\n"
+            + "from calculator import add\n"
+            + "class TestCalc(unittest.TestCase):\n"
+            + "    def test_add_extra(self):\n"
+            + "        self.assertEqual(add(2,1),3)\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "fixture");
+    return new Fixture(workspaces.create(repo.toString(), "main"));
+  }
+
+  private Fixture failingPythonWorkspace() throws Exception {
+    Path repo = Files.createDirectory(temp.resolve("repo-" + java.util.UUID.randomUUID()));
     git(repo, "init", "-b", "main");
     git(repo, "config", "user.email", "test@example.invalid");
     git(repo, "config", "user.name", "Test");

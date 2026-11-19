@@ -9,7 +9,7 @@ import dev.workbench.bug.BugService;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.framework.context.AgentContextAssembler;
 import dev.workbench.infrastructure.agentscope.AgentScopeExecutor;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import org.junit.jupiter.api.Test;
 
@@ -17,20 +17,25 @@ import org.junit.jupiter.api.Test;
 class RunServiceQueueTest {
   @Test
   void rejectedQueueLeavesVisibleFailedRun() {
-    var repository = mock(RunRepository.class);
+    var repository = mock(RunRecordService.class);
+    var creations = mock(TaskCreationService.class);
     var agent = mock(AgentScopeExecutor.class);
     var service =
         new RunService(
             repository,
+            creations,
             agent,
             new ObjectMapper(),
             mock(WorkspaceService.class),
             mock(BugService.class),
+            mock(dev.workbench.bug.BugIntakeService.class),
+            mock(dev.workbench.workspace.RunHandoverService.class),
+            mock(dev.workbench.domain.EntryPolicyService.class),
             mock(AgentContextAssembler.class),
             mock(WorkflowScheduler.class));
     service.shutdown();
     String runId = service.create(new CreateTaskRequest("任务", "normal", 4, 2, 30));
-    verify(repository).createTaskAndFirstRun(any(), any(), any(), anyString());
+    verify(creations).persist(any(), any(), any(), anyString(), any(), anyBoolean(), any());
     verify(repository)
         .finishStoppedRun(
             argThat(
@@ -44,15 +49,20 @@ class RunServiceQueueTest {
 
   @Test
   void rejectedRecoveryCanBeRequestedAgain() {
-    var repository = mock(RunRepository.class);
+    var repository = mock(RunRecordService.class);
+    var creations = mock(TaskCreationService.class);
     var agent = mock(AgentScopeExecutor.class);
     var service =
         new RunService(
             repository,
+            creations,
             agent,
             new ObjectMapper(),
             mock(WorkspaceService.class),
             mock(BugService.class),
+            mock(dev.workbench.bug.BugIntakeService.class),
+            mock(dev.workbench.workspace.RunHandoverService.class),
+            mock(dev.workbench.domain.EntryPolicyService.class),
             mock(AgentContextAssembler.class),
             mock(WorkflowScheduler.class));
     var runId = java.util.UUID.randomUUID();

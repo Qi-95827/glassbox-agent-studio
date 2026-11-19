@@ -8,13 +8,18 @@ import dev.workbench.domain.RunSnapshot;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.tool.ResourceVersion;
+import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNode;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
+import dev.workbench.persistence.repository.WorkflowRecoveryEvidenceRepository;
+import dev.workbench.persistence.entity.WorkflowCheckpointEntity;
+import dev.workbench.persistence.repository.RunRepository;
+import dev.workbench.persistence.repository.WorkflowCheckpointRepository;
 import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.WorkspaceService;
 import java.security.MessageDigest;
@@ -25,49 +30,51 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** 只恢复无工具且停在已结算节点边界的动态流程。 */
-@Repository
-public class WorkflowRecoveryRepository {
-  private final RunRepository runs;
-  private final PlanRepository plans;
-  private final JdbcTemplate db;
+/** 验证纯文本和只读工作区的节点边界并创建恢复运行。*/
+@Service
+public class WorkflowRecoveryService {
+  private final RunRecordService runs;
+  private final PlanService plans;
+  private final WorkflowRecoveryEvidenceRepository evidenceStore;
+  private final WorkflowCheckpointRepository checkpointRepository;
+  private final RunRepository runStore;
   private final TransactionTemplate tx;
   private final ObjectMapper json;
   private final WorkspaceService workspaces;
 
-  public WorkflowRecoveryRepository(
-      RunRepository runs,
-      PlanRepository plans,
-      JdbcTemplate db,
+  public WorkflowRecoveryService(
+      RunRecordService runs,
+      PlanService plans,
+      WorkflowRecoveryEvidenceRepository evidenceStore,
+      WorkflowCheckpointRepository checkpointRepository,
+      RunRepository runStore,
       TransactionTemplate tx,
       ObjectMapper json,
       WorkspaceService workspaces) {
     this.runs = runs;
     this.plans = plans;
-    this.db = db;
+    this.evidenceStore = evidenceStore;
+    this.checkpointRepository = checkpointRepository;
+    this.runStore = runStore;
     this.tx = tx;
     this.json = json;
     this.workspaces = workspaces;
   }
 
-  /** 调用方持有运行行锁，保存边界时与相应节点结算共用事务。 */
+  /** 调用方持有运行行锁，保存边界时与相应节点结算共用事务。*/
+  @Transactional(propagation = Propagation.MANDATORY)
   void saveBoundary(String runId, WorkflowPlan plan, List<PlanNode> nodes, long elapsed) {
     if ((plan.scope() != WorkflowTemplate.Scope.TEXT_ONLY
             && plan.scope() != WorkflowTemplate.Scope.WORKSPACE_READ_ONLY)
         || plan.sourceCheckpointId() != null
         || nodes.stream().allMatch(node -> node.status() == PlanNodeStatus.COMPLETED)) return;
     if (plan.scope() == WorkflowTemplate.Scope.TEXT_ONLY
-        && count(
-                """
-                SELECT COUNT(*) FROM workflow_attempts a JOIN plan_nodes n ON n.id=a.node_id
-                WHERE n.run_id=? AND a.stop_cause='MODEL_RATE_LIMIT'
-                """,
-                runId)
-            > 0) {
+        && evidenceStore.hasRateLimitAttempt(runId)) {
       runs.event(runId, EventType.CHECKPOINT_SKIPPED, "当前恢复策略不覆盖已有重试记录的工作流。");
       return;
     }
@@ -79,73 +86,54 @@ public class WorkflowRecoveryRepository {
       runs.event(runId, EventType.CHECKPOINT_SKIPPED, "当前边界不能安全恢复，已跳过检查点：" + e.getMessage());
       return;
     }
-    db.update(
-        """
-        INSERT INTO workflow_checkpoints(id,plan_id,version,completed_nodes,rounds,tools,
-          tool_calls,elapsed_ms,boundary_sha256,created_at) VALUES(?,?,1,?,?,0,?,?,?,?)
-        """,
-        RunRepository.id(),
-        plan.id().toString(),
-        boundary.completedNodes(),
-        run.rounds(),
-        boundary.tools(),
-        elapsed,
-        boundary.sha256(),
-        RunRepository.now());
+    checkpointRepository.saveAndFlush(
+        new WorkflowCheckpointEntity(
+            plan.id().toString(),
+            boundary.completedNodes(),
+            run.rounds(),
+            boundary.tools(),
+            elapsed,
+            boundary.sha256(),
+            Instant.now().toString()));
     runs.event(runId, EventType.CHECKPOINT_SAVED, "已保存工作流节点边界。");
   }
 
   /**
    * 恢复子运行继承的累计消耗；来源缺失时返回 null，不从当前用量倒推。
    *
-   * <p>历史列 {@code tools} 受纯文本约束恒为 0；只读工作区边界的实际工具次数保存在 {@code tool_calls}。
-   */
+   * <p>历史 {@code tools} 受纯文本约束恒为 0；只读工作区边界的实际工具次数保存在 {@code tool_calls}。   */
   public InheritedConsumption inherited(UUID checkpointId) {
-    var rows =
-        db.query(
-            "SELECT rounds,tool_calls,elapsed_ms FROM workflow_checkpoints WHERE id=?",
-            (row, index) ->
-                new InheritedConsumption(
-                    row.getInt("rounds"), row.getInt("tool_calls"), row.getLong("elapsed_ms")),
-            checkpointId.toString());
-    return rows.isEmpty() ? null : rows.getFirst();
+    return checkpointRepository
+        .findById(checkpointId.toString())
+        .map(
+            row ->
+                new InheritedConsumption(row.getRounds(), row.getToolCalls(), row.getElapsedMs()))
+        .orElse(null);
   }
 
   public record InheritedConsumption(int rounds, int tools, long elapsedMs) {}
 
-  public List<WorkflowCheckpoint> checkpoints(String runId, WorkflowPlan plan) {    if (plan.scope() != WorkflowTemplate.Scope.TEXT_ONLY
+  public List<WorkflowCheckpoint> checkpoints(String runId, WorkflowPlan plan) {
+    if (plan.scope() != WorkflowTemplate.Scope.TEXT_ONLY
         && plan.scope() != WorkflowTemplate.Scope.WORKSPACE_READ_ONLY) return List.of();
     var run = runs.runSnapshot(runId);
     boolean mayRecover =
         run.status() == RunStatus.INTERRUPTED
             && !runs.hasRecovery(runId)
             && plan.sourceCheckpointId() == null;
-    return db
-        .query(
-            "SELECT * FROM workflow_checkpoints WHERE plan_id=? ORDER BY completed_nodes",
-            (row, index) -> {
-              UUID id = UUID.fromString(row.getString("id"));
-              return new WorkflowCheckpoint(
-                  id,
-                  row.getInt("version"),
-                  row.getInt("completed_nodes"),
-                  row.getInt("rounds"),
-                  row.getLong("elapsed_ms"),
-                  Instant.parse(row.getString("created_at")),
-                  false);
-            },
-            plan.id().toString())
-        .stream()
+    return checkpointRepository.findByPlanIdOrderByCompletedNodesAsc(plan.id().toString()).stream()
         .map(
-            checkpoint ->
-                new WorkflowCheckpoint(
-                    checkpoint.id(),
-                    checkpoint.version(),
-                    checkpoint.completedNodes(),
-                    checkpoint.rounds(),
-                    checkpoint.elapsedMs(),
-                    checkpoint.createdAt(),
-                    mayRecover && available(run, plan, checkpoint.id())))
+            checkpoint -> {
+              UUID checkpointId = UUID.fromString(checkpoint.id());
+              return new WorkflowCheckpoint(
+                  checkpointId,
+                  checkpoint.version(),
+                  checkpoint.completedNodes(),
+                  checkpoint.rounds(),
+                  checkpoint.elapsedMs(),
+                  Instant.parse(checkpoint.createdAt()),
+                  mayRecover && available(run, plan, checkpointId));
+            })
         .toList();
   }
 
@@ -161,12 +149,10 @@ public class WorkflowRecoveryRepository {
   public void recover(String runId, UUID checkpointId, UUID nextRunId) {
     tx.executeWithoutResult(
         ignored -> {
-          String status =
-              db.queryForObject(
-                  "SELECT status FROM runs WHERE id=? FOR UPDATE", String.class, runId);
-          if (!RunStatus.INTERRUPTED.name().equals(status) || runs.hasRecovery(runId))
-            throw new IllegalStateException("该运行当前无法申请恢复。");
+          if (!runStore.lockForUpdate(runId)) throw new IllegalArgumentException("运行不存在。");
           var run = runs.runSnapshot(runId);
+          if (run.status() != RunStatus.INTERRUPTED || runs.hasRecovery(runId))
+            throw new IllegalStateException("该运行当前无法申请恢复。");
           var plan = plans.workflowPlan(runId);
           var stored = verifyStoredBoundary(run, plan, checkpointId);
           runs.createWorkflowRecoveryRun(
@@ -179,12 +165,12 @@ public class WorkflowRecoveryRepository {
               stored.elapsedMs());
           var reused = new LinkedHashMap<String, UUID>();
           stored.boundary().sources().forEach((key, source) -> reused.put(key, source.agentId()));
-          plans.attachRecovery(nextRunId.toString(), checkpointId, reused, RunRepository.now());
+          plans.attachRecovery(nextRunId.toString(), checkpointId, reused, RunRecordService.now());
           runs.event(nextRunId.toString(), EventType.RECOVERY_STARTED, "已从动态工作流检查点恢复，保留原运行及累计消耗。");
         });
   }
 
-  /** 子运行恢复的逻辑节点必须持续对应同一父计划的原始实例。 */
+  /** 子运行恢复的逻辑节点必须持续对应同一父计划的原始实例。*/
   void validateReuse(String runId, WorkflowPlan plan, List<PlanNode> nodes) {
     if (plan.sourceCheckpointId() == null) {
       if (nodes.stream().anyMatch(node -> node.status() == PlanNodeStatus.REUSED))
@@ -223,20 +209,11 @@ public class WorkflowRecoveryRepository {
         || run.status() != RunStatus.INTERRUPTED)
       throw new IllegalStateException("当前运行没有可安全恢复的动态检查点。");
     var saved =
-        db
-            .query(
-                "SELECT * FROM workflow_checkpoints WHERE id=? AND plan_id=? AND version=1",
-                (row, index) ->
-                    new CheckpointRow(
-                        row.getInt("completed_nodes"),
-                        row.getInt("rounds"),
-                        row.getInt("tool_calls"),
-                        row.getLong("elapsed_ms"),
-                        row.getString("boundary_sha256")),
+        checkpointRepository
+            .findByIdAndPlanIdAndVersion(
                 checkpoint.toString(),
-                plan.id().toString())
-            .stream()
-            .findFirst()
+                plan.id().toString(),
+                WorkflowCheckpointEntity.CURRENT_FORMAT_VERSION)
             .orElseThrow(() -> new IllegalArgumentException("检查点不属于该动态计划。"));
     var boundary =
         checkedBoundary(
@@ -244,12 +221,12 @@ public class WorkflowRecoveryRepository {
             plan,
             plans.checkedWorkflowNodes(run.id().toString(), plan),
             saved.rounds(),
-            saved.tools(),
+            saved.actualToolCalls(),
             saved.elapsedMs());
     if (saved.completedNodes() != boundary.completedNodes()
-        || !saved.sha256().equals(boundary.sha256()))
+        || !saved.boundarySha256().equals(boundary.sha256()))
       throw new IllegalStateException("检查点后的节点、来源或资源版本已变化，无法安全恢复。");
-    return new StoredBoundary(saved.rounds(), saved.tools(), saved.elapsedMs(), boundary);
+    return new StoredBoundary(saved.rounds(), saved.actualToolCalls(), saved.elapsedMs(), boundary);
   }
 
   private Boundary checkedBoundary(
@@ -292,44 +269,25 @@ public class WorkflowRecoveryRepository {
       throw new UnsafeBoundaryException("当前任务配置不支持纯文本恢复。");
     }
     var sources = new LinkedHashMap<String, Source>();
-    db.query(
-        """
-        SELECT n.node_key,n.id AS node_id,a.id AS attempt_id,i.id AS agent_id,i.result
-        FROM plan_nodes n JOIN workflow_attempts a ON a.node_id=n.id AND a.agent_id=n.agent_id
-        JOIN agent_invocations i ON i.id=a.agent_id AND i.run_id=n.run_id
-        WHERE n.run_id=? AND n.plan_version_id=? AND n.status='COMPLETED' AND i.status='COMPLETED'
-          AND i.definition_id=n.definition_id AND i.definition_version=n.definition_version
-          AND i.definition_sha256=n.definition_sha256 AND i.result IS NOT NULL
-        ORDER BY n.sequence_no
-        """,
-        row -> {
-          sources.put(
-              row.getString("node_key"),
-              new Source(
-                  UUID.fromString(row.getString("node_id")),
-                  UUID.fromString(row.getString("attempt_id")),
-                  UUID.fromString(row.getString("agent_id")),
-                  row.getString("result")));
-        },
-        runId,
-        plan.id().toString());
+    for (var row : evidenceStore.findCompletedSources(runId, plan.id().toString())) {
+      sources.put(
+          row.nodeKey(),
+          new Source(
+              UUID.fromString(row.nodeId()), UUID.fromString(row.attemptId()),
+              UUID.fromString(row.agentId()), row.result()));
+    }
     var usage =
-        db.query(
-            """
-            SELECT m.id,m.agent_id,m.model_name,m.input_tokens,m.output_tokens,m.duration_ms
-            FROM model_invocations m JOIN agent_invocations a ON a.id=m.agent_id
-            WHERE m.run_id=? AND m.run_id=a.run_id AND m.status='COMPLETED' AND a.status='COMPLETED'
-            ORDER BY m.id
-            """,
-            (row, index) ->
-                new Usage(
-                    row.getString("id"),
-                    row.getString("agent_id"),
-                    row.getString("model_name"),
-                    (Integer) row.getObject("input_tokens"),
-                    (Integer) row.getObject("output_tokens"),
-                    (Long) row.getObject("duration_ms")),
-            runId);
+        evidenceStore.findCompletedModelUsage(runId).stream()
+            .map(
+                row ->
+                    new Usage(
+                        row.id(),
+                        row.agentId(),
+                        row.model(),
+                        row.input(),
+                        row.output(),
+                        row.durationMs()))
+            .toList();
     long completedAgents =
         nodes.stream()
             .filter(
@@ -344,8 +302,8 @@ public class WorkflowRecoveryRepository {
                         && node.kind() == PlanNodeKind.SYSTEM_CHECK)
             .count();
     if (completedAgents != sources.size()
-        || count("SELECT COUNT(*) FROM agent_invocations WHERE run_id=?", runId) != sources.size()
-        || count("SELECT COUNT(*) FROM model_invocations WHERE run_id=?", runId) != rounds
+        || evidenceStore.countAgents(runId) != sources.size()
+        || evidenceStore.countModels(runId) != rounds
         || usage.size() != rounds
         || sources.values().stream().anyMatch(source -> source.result().isBlank()))
       throw new UnsafeBoundaryException("检查点后存在未结算调用，或历史节点结果无法验证。");
@@ -354,13 +312,8 @@ public class WorkflowRecoveryRepository {
     List<CheckState> checks = List.of();
     WorkspaceService.Workspace workspaceIdentity = null;
     if (workspace) {
-      if (count(
-              """
-              SELECT COUNT(*) FROM tool_invocations i JOIN agent_invocations a ON a.id=i.agent_id
-              WHERE i.run_id=? AND i.run_id=a.run_id AND i.status='RUNNING'
-              """,
-              runId)
-          > 0) throw new UnsafeBoundaryException("存在未结算的工具调用，不能保存只读工作区边界。");
+      if (evidenceStore.hasRunningToolCall(runId))
+        throw new UnsafeBoundaryException("存在未结算的工具调用，不能保存只读工作区边界。");
       evidence = completedEvidence(runId, sources);
       if (evidence.isEmpty() && !sources.isEmpty())
         throw new UnsafeBoundaryException("没有可核对的只读工具版本，不能复用该分析结果。");
@@ -368,21 +321,15 @@ public class WorkflowRecoveryRepository {
       checks = completedChecks(runId);
       if (checks.size() != completedChecks)
         throw new UnsafeBoundaryException("已完成的系统检查缺少可验证记录，不能保存只读工作区边界。");
-      if (count(
-              """
-              SELECT COUNT(*) FROM workflow_checks c JOIN plan_nodes n ON n.id=c.node_id
-              WHERE n.run_id=? AND c.status='RUNNING'
-              """,
-              runId)
-          > 0) throw new UnsafeBoundaryException("存在未结算的系统检查，不能保存只读工作区边界。");
+      if (evidenceStore.hasRunningCheck(runId))
+        throw new UnsafeBoundaryException("存在未结算的系统检查，不能保存只读工作区边界。");
       try {
         workspaceIdentity = workspaces.get(task.workspaceId());
       } catch (RuntimeException e) {
         throw new UnsafeBoundaryException("无法读取工作区身份，不能保存只读工作区边界。");
       }
     } else {
-      if (count("SELECT COUNT(*) FROM tool_invocations WHERE run_id=?", runId) != 0)
-        throw new UnsafeBoundaryException("纯文本边界不应包含工具调用。");
+      if (evidenceStore.hasToolCalls(runId)) throw new UnsafeBoundaryException("纯文本边界不应包含工具调用。");
     }
 
     int completedNodes =
@@ -430,35 +377,20 @@ public class WorkflowRecoveryRepository {
   /** 已结算 Agent 的只读工具调用及其观察到的文件版本。 */
   private List<Evidence> completedEvidence(String runId, Map<String, Source> sources) {
     var evidence = new java.util.ArrayList<Evidence>();
-    db.query(
-        """
-        SELECT i.id,i.agent_id,g.tool_kind,i.resource_version
-        FROM tool_invocations i JOIN agent_tool_grants g
-          ON g.agent_id=i.agent_id AND g.tool_version=i.tool_version
-        WHERE i.run_id=? AND i.status='COMPLETED'
-          AND g.tool_kind IN ('WORKSPACE_READ','WORKSPACE_SEARCH')
-        ORDER BY i.created_at,i.id
-        """,
-        row -> {
-          String agentId = row.getString("agent_id");
-          boolean reused =
-              sources.values().stream()
-                  .anyMatch(source -> source.agentId().toString().equals(agentId));
-          if (!reused) return;
-          String version = row.getString("resource_version");
-          if (version == null) throw new UnsafeBoundaryException("只读工具调用缺少文件版本证据，不能复用该结果。");
-          evidence.add(
-              new Evidence(
-                  UUID.fromString(row.getString("id")),
-                  UUID.fromString(agentId),
-                  dev.workbench.domain.ToolKind.valueOf(row.getString("tool_kind")),
-                  version));
-        },
-        runId);
+    for (var row : evidenceStore.findCompletedFileEvidence(runId)) {
+      UUID agentId = UUID.fromString(row.agentId());
+      boolean reused =
+          sources.values().stream().anyMatch(source -> source.agentId().equals(agentId));
+      if (!reused) continue;
+      if (row.resourceVersion() == null)
+        throw new UnsafeBoundaryException("只读工具调用缺少文件版本证据，不能复用该结果。");
+      evidence.add(
+          new Evidence(UUID.fromString(row.id()), agentId, row.tool(), row.resourceVersion()));
+    }
     return List.copyOf(evidence);
   }
 
-  /** 恢复前重新读取授权文件，证明分析时的版本与当前内容一致。 */
+  /** 恢复前重新读取授权文件，证明分析时的版本与当前内容一致。*/
   private void verifyCurrentResources(
       dev.workbench.domain.TaskDefinition task, List<Evidence> evidence) {
     var authorized = new AuthorizedFileSet(task.fileScopes());
@@ -488,30 +420,17 @@ public class WorkflowRecoveryRepository {
     }
   }
 
-  /** 已完成系统检查必须全部通过；检查结论作为边界来源的一部分。 */
+  /** 已完成系统检查必须全部通过；检查结论作为边界来源的一部分。*/
   private List<CheckState> completedChecks(String runId) {
-    return db.query(
-        """
-        SELECT n.node_key,c.id AS check_id,c.status,c.inputs_sha256,c.external_evidence_id
-        FROM plan_nodes n JOIN workflow_checks c ON c.node_id=n.id
-          AND c.attempt_no=(SELECT MAX(x.attempt_no) FROM workflow_checks x WHERE x.node_id=n.id)
-        WHERE n.run_id=? AND n.node_kind='SYSTEM_CHECK' AND n.status='COMPLETED'
-        ORDER BY n.sequence_no
-        """,
-        (row, index) -> {
-          if (!"PASSED".equals(row.getString("status")))
-            throw new UnsafeBoundaryException("已完成的系统检查没有通过，不能复用该边界。");
-          return new CheckState(
-              row.getString("node_key"),
-              row.getString("check_id"),
-              row.getString("inputs_sha256"),
-              row.getString("external_evidence_id"));
-        },
-        runId);
-  }
-
-  private int count(String sql, String runId) {
-    return db.queryForObject(sql, Integer.class, runId);
+    return evidenceStore.findLatestCompletedNodeChecks(runId).stream()
+        .map(
+            row -> {
+              if (row.status() != SystemCheckStatus.PASSED)
+                throw new UnsafeBoundaryException("已完成的系统检查没有通过，不能复用该边界。");
+              return new CheckState(
+                  row.nodeKey(), row.id(), row.inputsSha256(), row.externalEvidenceId());
+            })
+        .toList();
   }
 
   private static RunLimits limits(RunSnapshot run) {
@@ -568,10 +487,10 @@ public class WorkflowRecoveryRepository {
 
   private record Source(UUID nodeId, UUID attemptId, UUID agentId, String result) {}
 
-  /** 只读工具调用观察到的版本证据，恢复时必须仍对应当前授权文件。 */
+  /** 只读工具调用观察到的版本证据，恢复时必须仍对应当前授权文件。*/
   private record Evidence(UUID toolId, UUID agentId, ToolKind tool, String resourceVersion) {}
 
-  /** 已完成系统检查的结论引用，不复制结果正文。 */
+  /** 已完成系统检查的结论引用，不复制结果正文。*/
   private record CheckState(
       String nodeKey, String checkId, String inputsSha256, String externalEvidenceId) {}
 
@@ -584,9 +503,6 @@ public class WorkflowRecoveryRepository {
       int completedNodes,
       int tools,
       String sha256) {}
-
-  private record CheckpointRow(
-      int completedNodes, int rounds, int tools, long elapsedMs, String sha256) {}
 
   private record StoredBoundary(int rounds, int tools, long elapsedMs, Boundary boundary) {}
 

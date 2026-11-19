@@ -5,12 +5,15 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.TestJpa;
 import dev.workbench.domain.Scenario;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.tool.AgentToolContext;
 import dev.workbench.framework.tool.AgentToolRegistry;
 import dev.workbench.framework.tool.ToolContracts;
+import dev.workbench.persistence.repository.WorkspaceDeclaredFileRepository;
+import dev.workbench.persistence.repository.WorkspaceRepository;
 import dev.workbench.workspace.WorkspaceService;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolResultState;
@@ -27,7 +30,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 
@@ -50,8 +52,12 @@ class WorkspaceScopedToolsIntegrationTest {
     try (var connection = ds.getConnection()) {
       ScriptUtils.executeSqlScript(connection, new ClassPathResource("schema.sql"));
     }
+    var jpa = new TestJpa(ds);
     var workspace =
-        new WorkspaceService(new JdbcTemplate(ds), temp.resolve("worktrees").toString());
+        new WorkspaceService(
+            jpa.repository(WorkspaceRepository.class),
+            jpa.repository(WorkspaceDeclaredFileRepository.class),
+            temp.resolve("worktrees").toString());
     var created = workspace.create(repo.toString(), "main");
     var runtime = mock(AgentRuntime.class);
     when(runtime.beforeTool(any(), anyInt(), anyString()))

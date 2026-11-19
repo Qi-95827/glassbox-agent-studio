@@ -8,6 +8,7 @@ public record EvaluationComparison(
     EvaluationBatch candidate,
     boolean sameSuite,
     boolean comparableDefinition,
+    String comparabilityReason,
     List<CaseComparison> cases) {
   public EvaluationComparison {
     cases = List.copyOf(cases);

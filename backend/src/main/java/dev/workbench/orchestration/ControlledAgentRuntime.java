@@ -7,7 +7,7 @@ import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.control.RunControl;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -16,12 +16,12 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final String runId;
   private final String agentId;
   private final RunControl control;
-  private final RunRepository repository;
+  private final RunRecordService repository;
   private final RunControl.NodePolicy nodePolicy;
   private AgentAssemblySnapshot.Components assembly;
 
   ControlledAgentRuntime(
-      String runId, String agentId, RunControl control, RunRepository repository) {
+      String runId, String agentId, RunControl control, RunRecordService repository) {
     this(runId, agentId, control, repository, null);
   }
 
@@ -29,7 +29,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
       String runId,
       String agentId,
       RunControl control,
-      RunRepository repository,
+      RunRecordService repository,
       RunControl.NodePolicy nodePolicy) {
     this.runId = Objects.requireNonNull(runId);
     this.agentId = Objects.requireNonNull(agentId);

@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.VersionedState;
@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 class AgentSessionServiceTest {
   @Test
   void distinguishesSavedMissingAndUnavailable() {
-    var runs = mock(RunRepository.class);
+    var runs = mock(RunRecordService.class);
     var states = mock(AgentStateStore.class);
     UUID saved = UUID.randomUUID(), missing = UUID.randomUUID(), failed = UUID.randomUUID();
     when(runs.agents("run"))

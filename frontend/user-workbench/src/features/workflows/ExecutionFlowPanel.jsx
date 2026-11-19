@@ -86,7 +86,7 @@ function nodeClass(node, focusIds, blockedIds) {
 
 export default function ExecutionFlowPanel({
   view, detail, Status, stopCauseLabels, eventNames, api, connected, lastSyncedAt,
-  approving, onApprove, onRecover, onPause, onResume, onCancel, onSwitchRun, onSubmitSupplement
+  approving, onApprove, onRecover, onPause, onResume, onTakeOver, onReturnHandover, onCancel, onSwitchRun, onSubmitSupplement
 }) {
   const [tab, setTab] = useState('flow');
   const [selectedId, setSelectedId] = useState(null);
@@ -153,6 +153,8 @@ export default function ExecutionFlowPanel({
     if (action.actionCode === 'APPROVE_PLAN') onApprove?.(action.runId, action.planVersionId);
     else if (action.actionCode === 'PAUSE') onPause?.();
     else if (action.actionCode === 'RESUME') onResume?.();
+    else if (action.actionCode === 'TAKE_OVER') onTakeOver?.();
+    else if (action.actionCode === 'RETURN_HANDOVER') onReturnHandover?.();
     else if (action.actionCode === 'CANCEL') onCancel?.();
     else if (action.actionCode === 'RECOVER') onRecover?.(action.checkpointId);
   };
@@ -192,6 +194,8 @@ export default function ExecutionFlowPanel({
         <span>检查 {view.counts?.checks ?? 0}</span>
         <span>模型 {view.counts?.modelCalls ?? 0} 次</span>
         <span>工具 {view.counts?.toolCalls ?? 0} 次</span>
+        {view.budget && <span>剩余轮次 {view.budget.remainingRounds} · 工具 {view.budget.remainingTools} · 时间 {Math.ceil((view.budget.remainingMs || 0) / 1000)} 秒</span>}
+        {view.budget?.remainingTokens != null && <span>剩余 Token {view.budget.remainingTokens}</span>}
         {view.counts?.unknownTokenCalls > 0 && <span className="flow-warning">未知用量 {view.counts.unknownTokenCalls} 次</span>}
       </div>
 
@@ -236,6 +240,23 @@ export default function ExecutionFlowPanel({
             </div>}
       </div>}
 
+      {view.handover && <div className="flow-supplement">
+        <div className="flow-supplement-heading">
+          <strong>{view.handover.status === 'ACTIVE' ? '人工接手进行中' : '人工已交还'}</strong>
+          <span>{view.handover.revalidationRequired ? '需重新验证：旧测试与审批失效，当前运行不能直接继续' : view.handover.evidenceInvalidated ? '代码已变化：旧测试与审批失效' : '代码版本未变化'}</span>
+        </div>
+        <p>
+          接手时间：{new Date(view.handover.takenAt).toLocaleString('zh-CN', { hour12: false })}
+          {view.handover.returnedAt ? `；交还时间：${new Date(view.handover.returnedAt).toLocaleString('zh-CN', { hour12: false })}` : ''}
+        </p>
+        {view.handover.note && <p className="hint">{view.handover.note}</p>}
+        <p className="hint">
+          基线摘要：{view.handover.baselineFingerprint?.slice(0, 12) || '未记录'}；
+          当前摘要：{view.handover.currentFingerprint?.slice(0, 12) || '未记录'}。
+          交还后运行仍暂停，请重新验证后再继续。
+        </p>
+      </div>}
+
       <div className="flow-actions">
         {actions.filter(action => action.actionCode !== 'SUBMIT_SUPPLEMENT').length === 0 && <span className="hint">当前没有可用操作。</span>}
         {actions.filter(action => action.actionCode !== 'SUBMIT_SUPPLEMENT').map(action => <Tooltip key={action.actionCode + (action.checkpointId || '')} title={action.disabledReason || ''}>
@@ -247,6 +268,12 @@ export default function ExecutionFlowPanel({
           </Button>
         </Tooltip>)}
       </div>
+
+      {view.recoverySupport && <div className="flow-recovery">
+        <strong>恢复判定</strong>
+        <span>{view.recoverySupport.supported ? '支持恢复' : '不支持自动恢复'}：{view.recoverySupport.reason}</span>
+        {view.budget?.inherited && <span>继承消耗已计入当前剩余预算。</span>}
+      </div>}
 
       {recovery && <div className="flow-recovery">
         <strong>恢复来源</strong>

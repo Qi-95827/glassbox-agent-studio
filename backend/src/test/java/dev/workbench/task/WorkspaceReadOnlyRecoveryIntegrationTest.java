@@ -11,11 +11,13 @@ import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.tool.ResourceVersion;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanRepository;
+import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
 import dev.workbench.framework.workflow.view.ExecutionViewService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
+import dev.workbench.persistence.repository.WorkflowCheckpointData;
+import dev.workbench.persistence.repository.WorkflowCheckpointRepository;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -28,6 +30,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** 只读工作区分析的安全边界：版本证据、复用来源、预算继承与拒绝路径。 */
 @SpringBootTest(
@@ -38,15 +41,50 @@ import org.springframework.jdbc.core.JdbcTemplate;
     })
 class WorkspaceReadOnlyRecoveryIntegrationTest {
   @Autowired RunService service;
-  @Autowired RunRepository repo;
+  @Autowired RunRecordService repo;
   @Autowired WorkspaceService workspaces;
-  @Autowired PlanRepository plans;
-  @Autowired WorkflowExecutionRepository workflowRuns;
-  @Autowired WorkflowRecoveryRepository recovery;
+  @Autowired PlanService plans;
+  @Autowired WorkflowExecutionService workflowRuns;
+  @Autowired WorkflowRecoveryService recovery;
+  @Autowired WorkflowCheckpointRepository checkpointRepository;
   @Autowired ExecutionViewService executionViews;
   @Autowired JdbcTemplate db;
+  @Autowired TransactionTemplate transactions;
   @Autowired io.agentscope.core.state.AgentStateStore agentStates;
   @TempDir Path temp;
+
+  @Test
+  void checkpointAndSavedEventRollBackTogetherAndCanBeRetried() throws Exception {
+    var workspace = workspace();
+    String runId = create(workspace.id());
+    var plan = plans.workflowPlan(runId);
+    workflowRuns.approveWorkflow(runId, plan.id());
+    repo.update(runId, RunStatus.RUNNING, null, null, 0, 0, 0);
+
+    transactions.executeWithoutResult(
+        status -> {
+          workflowRuns.checkpointBeforeFirstNode(runId, plan.id(), 0);
+          assertEquals(1, recovery.checkpoints(runId, plan).size());
+          assertEquals(1, savedCheckpointEvents(runId));
+          status.setRollbackOnly();
+        });
+
+    assertTrue(recovery.checkpoints(runId, plan).isEmpty());
+    assertEquals(0, savedCheckpointEvents(runId));
+    workflowRuns.checkpointBeforeFirstNode(runId, plan.id(), 0);
+    assertEquals(1, recovery.checkpoints(runId, plan).size());
+    assertEquals(1, savedCheckpointEvents(runId));
+  }
+
+  private long savedCheckpointEvents(String runId) {
+    return repo.events(runId).stream()
+        .filter(
+            event ->
+                dev.workbench.domain.EventType.CHECKPOINT_SAVED
+                    .name()
+                    .equals(event.get("EVENT_TYPE")))
+        .count();
+  }
 
   @Test
   void recoversBeforeFirstNodeWithoutReusingAnything() throws Exception {
@@ -135,7 +173,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         ToolKind.WORKSPACE_READ.name(),
         1);
     String sha = workspaces.read(workspace.id(), "authorized.txt").sha256();
-    String toolId = RunRepository.id();
+    String toolId = RunRecordService.id();
     repo.startTool(toolId, id, claim.agentId(), ToolKind.WORKSPACE_READ, 1, "d".repeat(64));
     repo.finishTool(
         toolId,
@@ -144,7 +182,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         null,
         1,
         ResourceVersion.encode(Map.of("authorized.txt", sha)));
-    String modelId = RunRepository.id();
+    String modelId = RunRecordService.id();
     repo.startModel(modelId, id, claim.agentId(), ModelKind.MOCK);
     repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
     repo.update(id, RunStatus.RUNNING, null, null, 1, 1, 20);
@@ -163,6 +201,18 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
 
     var checkpoint = availableCheckpoint(id);
     assertEquals(2, checkpoint.completedNodes());
+    var projected = checkpointRepository.findByPlanIdOrderByCompletedNodesAsc(plan.id().toString());
+    assertEquals(
+        List.of(1, 2), projected.stream().map(WorkflowCheckpointData::completedNodes).toList());
+    assertEquals(checkpoint.id().toString(), projected.getLast().id());
+    assertTrue(checkpointRepository.findById(checkpoint.id().toString()).isPresent());
+    assertTrue(
+        checkpointRepository
+            .findByIdAndPlanIdAndVersion(
+                checkpoint.id().toString(),
+                java.util.UUID.randomUUID().toString(),
+                checkpoint.version())
+            .isEmpty());
     // 恢复视图的继承消耗必须来自检查点实际记录：1 次模型、1 次工具调用（tools 列恒为 0）。
     var inherited = recovery.inherited(checkpoint.id());
     assertEquals(1, inherited.rounds());
@@ -174,6 +224,10 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
     var recoveredView = executionViews.view(recovered);
     assertEquals(1, recoveredView.recovery().inherited().rounds());
     assertEquals(1, recoveredView.recovery().inherited().tools());
+    assertEquals(2, recoveredView.budget().usedRounds());
+    assertTrue(recoveredView.budget().inherited());
+    assertTrue(recoveredView.budget().remainingRounds() >= 0);
+    assertTrue(recoveredView.budget().remainingTools() >= 0);
     var child = plans.find(recovered);
     assertEquals(PlanNodeStatus.REUSED, child.getFirst().status());
     assertEquals(PlanNodeStatus.COMPLETED, child.get(1).status());
@@ -201,7 +255,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         ToolKind.WORKSPACE_READ.name(),
         1);
     String sha = workspaces.read(workspace.id(), "authorized.txt").sha256();
-    String toolId = RunRepository.id();
+    String toolId = RunRecordService.id();
     repo.startTool(toolId, id, claim.agentId(), ToolKind.WORKSPACE_READ, 1, "c".repeat(64));
     repo.finishTool(
         toolId,
@@ -210,7 +264,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         null,
         1,
         ResourceVersion.encode(Map.of("authorized.txt", sha)));
-    String modelId = RunRepository.id();
+    String modelId = RunRecordService.id();
     repo.startModel(modelId, id, claim.agentId(), ModelKind.MOCK);
     repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
     repo.update(id, RunStatus.RUNNING, null, null, 1, 1, 20);
@@ -275,6 +329,46 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         IllegalStateException.class, () -> service.recover(prepared.runId, prepared.checkpointId));
   }
 
+  @Test
+  void writeTaskShowsUnsupportedRecoveryReasonAndRemainingBudget() throws Exception {
+    var workspace = workspace();
+    String id =
+        service.create(
+            new CreateTaskRequest(
+                "写入任务恢复边界",
+                "normal",
+                6,
+                4,
+                60,
+                "mock",
+                workspace.id(),
+                null,
+                true,
+                null,
+                false,
+                null,
+                List.of("只修改授权文件"),
+                List.of("人工核对"),
+                null,
+                null,
+                TaskEntryKind.CODE,
+                null,
+                null,
+                List.of("authorized.txt"),
+                null,
+                null,
+                "workspace-change",
+                true,
+                null));
+    repo.update(id, RunStatus.INTERRUPTED, null, null, 1, 1, 10);
+    var view = executionViews.view(id);
+    assertNotNull(view.recoverySupport());
+    assertFalse(view.recoverySupport().supported());
+    assertTrue(view.recoverySupport().reason().contains("写入"));
+    assertEquals(1, view.budget().usedRounds());
+    assertTrue(view.budget().remainingRounds() >= 0);
+  }
+
   private boolean available(String runId) {
     return recovery.checkpoints(runId, plans.workflowPlan(runId)).stream()
         .anyMatch(WorkflowCheckpoint::available);
@@ -318,7 +412,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         ToolKind.WORKSPACE_READ.name(),
         1);
     String sha = workspaces.read(workspace.id(), "authorized.txt").sha256();
-    String toolId = RunRepository.id();
+    String toolId = RunRecordService.id();
     repo.startTool(toolId, id, claim.agentId(), ToolKind.WORKSPACE_READ, 1, "b".repeat(64));
     repo.finishTool(
         toolId,
@@ -327,7 +421,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         null,
         1,
         ResourceVersion.encode(Map.of("authorized.txt", sha)));
-    String modelId = RunRepository.id();
+    String modelId = RunRecordService.id();
     repo.startModel(modelId, id, claim.agentId(), ModelKind.MOCK);
     repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
     repo.update(id, RunStatus.RUNNING, null, null, 1, 1, 20);

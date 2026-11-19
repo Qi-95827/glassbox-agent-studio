@@ -1,9 +1,10 @@
 package dev.workbench.evaluation;
 
+import dev.workbench.audit.AuditService;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRepository;
+import dev.workbench.task.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -21,9 +22,12 @@ import org.springframework.stereotype.Service;
 public class EvaluationService {
   private final EvaluationRepository evaluations;
   private final RunService runs;
-  private final RunRepository records;
+  private final RunRecordService records;
   private final SeedCaseEvaluator evaluator;
   private final WorkspaceService workspaces;
+  private final EvaluationSuiteService suites;
+  private final com.fasterxml.jackson.databind.ObjectMapper json;
+  private final AuditService audit;
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private final AtomicBoolean active = new AtomicBoolean();
   private String activeBatch;
@@ -33,14 +37,20 @@ public class EvaluationService {
   public EvaluationService(
       EvaluationRepository evaluations,
       RunService runs,
-      RunRepository records,
+      RunRecordService records,
       SeedCaseEvaluator evaluator,
-      WorkspaceService workspaces) {
+      WorkspaceService workspaces,
+      EvaluationSuiteService suites,
+      com.fasterxml.jackson.databind.ObjectMapper json,
+      AuditService audit) {
     this.evaluations = evaluations;
     this.runs = runs;
     this.records = records;
     this.evaluator = evaluator;
     this.workspaces = workspaces;
+    this.suites = suites;
+    this.json = json;
+    this.audit = audit;
   }
 
   @PostConstruct
@@ -58,17 +68,49 @@ public class EvaluationService {
     return start(SeedSuite.Variant.LOCAL_AGENT_V2);
   }
 
-  public synchronized String start(SeedSuite.Variant suite) {
-    java.util.Objects.requireNonNull(suite);
+  public String start(SeedSuite.Variant suite) {
+    return start(
+        new EvaluationConfig(suite.name(), null, null, null, null, AuditService.LOCAL_ACTOR));
+  }
+
+  /** 指定套件版本与预算上限；预算只能收紧样本默认值。 */
+  public synchronized String start(EvaluationConfig config) {
+    java.util.Objects.requireNonNull(config);
+    SeedSuite.Variant suite;
+    try {
+      suite = SeedSuite.Variant.valueOf(config.suite());
+    } catch (RuntimeException e) {
+      throw new IllegalArgumentException("未知评测套件。");
+    }
+    var version = suites.resolve(suite, config.version());
     if (!active.compareAndSet(false, true)) throw new IllegalStateException("已有评测正在运行。");
-    String id = RunRepository.id();
+    String id = RunRecordService.id();
     boolean created = false;
     try {
-      evaluations.create(id, suite);
+      String configJson;
+      try {
+        configJson = json.writeValueAsString(config);
+      } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+        throw new IllegalStateException("评测配置无法保存。", e);
+      }
+      evaluations.create(
+          id,
+          suite,
+          version.version(),
+          version.definitionJson(),
+          version.definitionSha256(),
+          configJson,
+          config.requestedBy() == null ? AuditService.LOCAL_ACTOR : config.requestedBy());
       created = true;
       activeBatch = id;
       cancellationRequested = false;
-      executor.submit(() -> execute(id, suite));
+      executor.submit(() -> execute(id, suite, config));
+      audit.record(
+          "EVALUATION_START",
+          "EVALUATION_BATCH",
+          id,
+          "RUNNING",
+          suite.name() + " v" + version.version());
       return id;
     } catch (RuntimeException e) {
       if (created) evaluations.finishBatch(id, EvaluationStatus.FAILED);
@@ -91,9 +133,10 @@ public class EvaluationService {
         // 运行可能在发送取消的瞬间已结束，后续按实际终态判断。
       }
     }
+    audit.record("EVALUATION_CANCEL", "EVALUATION_BATCH", id, "CANCELLING", "用户请求取消评测");
   }
 
-  private void execute(String batchId, SeedSuite.Variant suite) {
+  private void execute(String batchId, SeedSuite.Variant suite, EvaluationConfig config) {
     EvaluationStatus finalStatus = EvaluationStatus.COMPLETED;
     try {
       for (SeedCase sample : suite.cases()) {
@@ -101,7 +144,7 @@ public class EvaluationService {
         synchronized (this) {
           if (cancellationRequested) break;
           evaluations.startCase(batchId, sample);
-          runId = runs.create(request(sample, batchId));
+          runId = runs.create(request(sample, batchId, config));
           evaluations.attachRun(batchId, sample, runId);
           currentRun = runId;
         }
@@ -141,16 +184,22 @@ public class EvaluationService {
    *
    * <p>临时仓库保留在系统临时目录，便于复核；批量评测不自动清理。
    */
-  private CreateTaskRequest request(SeedCase sample, String batchId) {
+  private CreateTaskRequest request(SeedCase sample, String batchId, EvaluationConfig config) {
     var fixture = createFixture(sample, batchId);
     String workspaceId = fixture == null ? null : fixture.id();
     List<String> files = fixture == null ? null : List.of(sample.workspaceFixtureFile());
+    int rounds =
+        config.maxRounds() == null ? sample.maxRounds() : Math.min(sample.maxRounds(), config.maxRounds());
+    int tools =
+        config.maxTools() == null ? sample.maxTools() : Math.min(sample.maxTools(), config.maxTools());
+    int seconds =
+        config.maxSeconds() == null ? SeedSuite.MAX_SECONDS : config.maxSeconds();
     return new CreateTaskRequest(
         "评测：" + sample.title(),
         sample.scenario(),
-        sample.maxRounds(),
-        sample.maxTools(),
-        SeedSuite.MAX_SECONDS,
+        rounds,
+        tools,
+        seconds,
         "mock",
         workspaceId,
         null,

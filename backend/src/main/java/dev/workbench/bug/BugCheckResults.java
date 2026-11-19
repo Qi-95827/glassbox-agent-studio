@@ -29,6 +29,18 @@ final class BugCheckResults {
               evidence(check),
               check.id(),
               "REPRODUCTION_TARGET_MISMATCH");
+      case TARGET_NOT_EXECUTED ->
+          SystemCheckResult.failed(
+              summary(check, "没有找到并执行目标测试用例；相似名称或其他失败不能替代目标用例。"),
+              evidence(check),
+              check.id(),
+              "REPRODUCTION_TARGET_NOT_EXECUTED");
+      case TARGET_SKIPPED ->
+          SystemCheckResult.failed(
+              summary(check, "目标测试用例被跳过，未实际执行，不能作为该 Bug 的复现证据。"),
+              evidence(check),
+              check.id(),
+              "REPRODUCTION_TARGET_SKIPPED");
       case NEEDS_INFO ->
           SystemCheckResult.blocked(
               summary(check, "缺少可执行测试或验证条件，请补充信息。"),
@@ -82,6 +94,18 @@ final class BugCheckResults {
               summary(check, "回归测试仍失败或未通过，不得报告 Bug 已修复。"),
               evidence(check),
               check.id());
+      case TARGET_NOT_EXECUTED ->
+          SystemCheckResult.failed(
+              summary(check, "目标测试用例未实际执行，不能报告 Bug 已修复。"),
+              evidence(check),
+              check.id(),
+              "REGRESSION_TARGET_NOT_EXECUTED");
+      case TARGET_SKIPPED ->
+          SystemCheckResult.failed(
+              summary(check, "目标测试用例被跳过，不能报告 Bug 已修复。"),
+              evidence(check),
+              check.id(),
+              "REGRESSION_TARGET_SKIPPED");
       case NEEDS_INFO ->
           SystemCheckResult.blocked(
               summary(check, "回归检查缺少可执行测试或验证条件。"),
