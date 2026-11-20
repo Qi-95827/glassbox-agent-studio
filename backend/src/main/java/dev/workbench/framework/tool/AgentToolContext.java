@@ -14,7 +14,19 @@ public record AgentToolContext(
     List<String> authorizedPaths,
     Scenario scenario,
     AgentRuntime runtime,
-    AtomicReference<RuntimeException> failure) {
+    AtomicReference<RuntimeException> failure,
+    List<String> writePaths) {
+  /** 旧调用没有节点级写范围时，写工具沿用整个授权文件集合。 */
+  public AgentToolContext(
+      ObjectMapper json,
+      String workspaceId,
+      List<String> authorizedPaths,
+      Scenario scenario,
+      AgentRuntime runtime,
+      AtomicReference<RuntimeException> failure) {
+    this(json, workspaceId, authorizedPaths, scenario, runtime, failure, authorizedPaths);
+  }
+
   public AgentToolContext {
     Objects.requireNonNull(json, "工具 JSON 处理器不能为空");
     Objects.requireNonNull(scenario, "运行场景不能为空");
@@ -26,5 +38,8 @@ public record AgentToolContext(
       throw new IllegalArgumentException("工具上下文的工作区授权范围无效。");
     }
     authorizedPaths = List.copyOf(authorizedPaths);
+    writePaths = writePaths == null ? List.of() : List.copyOf(writePaths);
+    if (!authorizedPaths.containsAll(writePaths))
+      throw new IllegalArgumentException("工具写入范围必须属于读取范围。");
   }
 }

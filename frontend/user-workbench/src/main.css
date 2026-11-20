@@ -24,3 +24,7 @@
 .flow-supplement p{margin:8px 0 0;font-size:12.5px;color:#63522c;line-height:1.7;overflow-wrap:anywhere}
 .flow-supplement-form{display:grid;gap:9px;margin-top:10px}
 .flow-supplement-form .ant-input{background:#fff}
+
+/* Ant Design 浮层必须高于 MUI Dialog，否则下拉选项被模态层遮挡。 */
+.ant-select-dropdown,.ant-dropdown,.ant-picker-dropdown,.ant-cascader-dropdown{z-index:3000!important}
+.ant-tooltip,.ant-message,.ant-notification{z-index:3100!important}

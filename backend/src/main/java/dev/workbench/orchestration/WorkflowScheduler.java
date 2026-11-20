@@ -46,6 +46,8 @@ class WorkflowScheduler {
   private final dev.workbench.task.CostService costs;
   private final SourceArtifactService sourceArtifacts;
   private final WorkspaceAuthorizationService workspaceAuthorization;
+  private final dev.workbench.ownership.OwnershipService ownership;
+  private final dev.workbench.privateagent.PrivateAgentCatalog privateAgents;
 
   WorkflowScheduler(
       RunRecordService repository,
@@ -58,7 +60,9 @@ class WorkflowScheduler {
       SystemCheckRegistry checks,
       dev.workbench.task.CostService costs,
       SourceArtifactService sourceArtifacts,
-      WorkspaceAuthorizationService workspaceAuthorization) {
+      WorkspaceAuthorizationService workspaceAuthorization,
+      dev.workbench.ownership.OwnershipService ownership,
+      dev.workbench.privateagent.PrivateAgentCatalog privateAgents) {
     this.repository = repository;
     this.plans = plans;
     this.workflowRuns = workflowRuns;
@@ -72,6 +76,8 @@ class WorkflowScheduler {
     this.costs = costs;
     this.sourceArtifacts = sourceArtifacts;
     this.workspaceAuthorization = workspaceAuthorization;
+    this.ownership = ownership;
+    this.privateAgents = privateAgents;
   }
 
   WorkflowTemplate template(String id) {
@@ -98,6 +104,15 @@ class WorkflowScheduler {
     UUID activeAgent = null;
     try {
       plan.requireTaskAuthorization(task);
+      // 执行前复核私有 Agent 归属、版本和归档状态；模型建议不能替代这一步。
+      String ownerScope =
+          ownership
+              .owner(dev.workbench.ownership.OwnershipService.TASK, task.id().toString())
+              .orElse(null);
+      for (var node : plans.find(runId))
+        if (node.definitionRef() != null
+            && dev.workbench.privateagent.PrivateAgentCatalog.isPrivate(node.definitionRef()))
+          privateAgents.requireRunUse(ownerScope, node.definitionRef());
       workspaceAuthorization.requireCurrent(task.id().toString());
       sourceArtifacts.requireCurrent(task.id().toString());
       repository.event(runId, EventType.RUN_STARTED, "已保存的工作流开始执行。");
@@ -223,7 +238,15 @@ class WorkflowScheduler {
       RunControl.NodePolicy nodePolicy)
       throws InterruptedException, com.fasterxml.jackson.core.JsonProcessingException {
     var node = attempt.node();
-    var files = node.workspaceRead() ? task.fileScopes() : List.<String>of();
+    // 候选计划使用节点规格的读写子集；历史模板继续使用任务级文件范围。
+    var spec = plans.requireNodeSpec(runId, node.id(), task);
+    var files =
+        spec != null
+            ? spec.readFiles()
+            : node.workspaceRead() ? task.fileScopes() : List.<String>of();
+    var writeFiles =
+        spec != null ? spec.writeFiles() : node.workspaceWrite() ? files : List.<String>of();
+    String nodeWorkspaceId = files.isEmpty() ? null : task.workspaceId();
     var input =
         new StepInput(
             task.goal(),
@@ -240,16 +263,18 @@ class WorkflowScheduler {
             node.role(),
             id,
             stepInput(task, attempt, json.writeValueAsString(input)),
-            node.workspaceRead() ? task.workspaceId() : null,
+            nodeWorkspaceId,
             files,
-            node.workspaceWrite(),
+            !writeFiles.isEmpty(),
             task.scenario(),
             task.modelMode(),
             CheckpointStage.BEFORE_TOOL,
             null,
-            new ControlledAgentRuntime(runId, id, control, repository, nodePolicy, costs, workspaceAuthorization),
+            new ControlledAgentRuntime(
+                runId, id, control, repository, nodePolicy, costs, workspaceAuthorization),
             node.definitionRef(),
-            node.definitionSha256());
+            node.definitionSha256(),
+            writeFiles);
     return limited(agent.execute(request), 1900);
   }
 

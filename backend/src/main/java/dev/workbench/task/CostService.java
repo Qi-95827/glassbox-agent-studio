@@ -2,8 +2,8 @@ package dev.workbench.task;
 
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ModelMode;
-import dev.workbench.framework.control.StopExecution;
 import dev.workbench.domain.StopCause;
+import dev.workbench.framework.control.StopExecution;
 import dev.workbench.persistence.entity.CostReservationEntity;
 import dev.workbench.persistence.entity.ProviderPriceVersionEntity;
 import dev.workbench.persistence.entity.RunCostLimitEntity;
@@ -53,8 +53,7 @@ public class CostService {
   @PostConstruct
   void ensureMockPrice() {
     if (prices
-        .findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(
-            PROVIDER, ModelKind.MOCK.code())
+        .findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(PROVIDER, ModelKind.MOCK.code())
         .isEmpty()) {
       publish(PROVIDER, ModelKind.MOCK.code(), "CNY", 0, 0, 4096, 4096, "system");
     }
@@ -81,8 +80,7 @@ public class CostService {
         || inputTokenUpperBound < 1
         || outputTokenUpperBound < 1
         || inputTokenUpperBound > 1_000_000
-        || outputTokenUpperBound > 1_000_000)
-      throw new IllegalArgumentException("价格或单次上界无效。");
+        || outputTokenUpperBound > 1_000_000) throw new IllegalArgumentException("价格或单次上界无效。");
     for (var active : prices.findByProviderAndModelAndActiveTrue(provider, model))
       active.deactivate();
     int version =
@@ -122,7 +120,7 @@ public class CostService {
             .orElseThrow(() -> new IllegalArgumentException("该模型没有生效价格版本，不能启用费用硬预算。"));
     if (limits.existsById(runId)) throw new IllegalStateException("运行已绑定费用预算。");
     String time = Instant.now().toString();
-    limits.save(new RunCostLimitEntity(runId, maxCostMicros, price.getId(), time, time));
+    limits.saveAndFlush(new RunCostLimitEntity(runId, maxCostMicros, price.getId(), time, time));
   }
 
   /** 恢复子运行沿用父运行价格版本，并把已结算和未结算预留从可用额度中扣除。 */
@@ -133,24 +131,17 @@ public class CostService {
     if (parent == null || limits.existsById(childRunId)) return;
     long remaining =
         Math.max(
-            0,
-            parent.getMaxCostMicros()
-                - parent.getSettledMicros()
-                - parent.getReservedMicros());
+            0, parent.getMaxCostMicros() - parent.getSettledMicros() - parent.getReservedMicros());
     String time = Instant.now().toString();
     limits.save(
-        new RunCostLimitEntity(
-            childRunId, remaining, parent.getPriceVersionId(), time, time));
+        new RunCostLimitEntity(childRunId, remaining, parent.getPriceVersionId(), time, time));
   }
 
   /** 派发前预留可计价上界；额度不足时抛出受控停止，不启动模型调用。 */
   public Reservation reserve(String runId, ModelKind model) {
     return tx.execute(
         ignored -> {
-          RunCostLimitEntity limit =
-              limits
-                  .lockByRunId(runId)
-                  .orElse(null);
+          RunCostLimitEntity limit = limits.lockByRunId(runId).orElse(null);
           if (limit == null) return Reservation.NONE;
           ProviderPriceVersionEntity price =
               prices
@@ -176,12 +167,7 @@ public class CostService {
           var row =
               reservations.save(
                   new CostReservationEntity(
-                      RunRecordService.id(),
-                      runId,
-                      estimate,
-                      "RESERVED",
-                      time,
-                      time));
+                      RunRecordService.id(), runId, estimate, "RESERVED", time, time));
           limit.reserve(estimate, time);
           limits.save(limit);
           return new Reservation(
@@ -213,8 +199,7 @@ public class CostService {
                       .findById(limit.getPriceVersionId())
                       .orElseThrow(() -> new IllegalStateException("价格版本缺失。"));
               boolean unknown = input == null || output == null;
-              Long actual =
-                  unknown ? null : price.cost(Math.max(0, input), Math.max(0, output));
+              Long actual = unknown ? null : price.cost(Math.max(0, input), Math.max(0, output));
               String time = Instant.now().toString();
               limit.settle(row.getReservedMicros(), actual == null ? 0 : actual, unknown, time);
               limits.save(limit);
@@ -266,12 +251,15 @@ public class CostService {
     result.put("PRICE_MODEL", price == null ? null : price.getModel());
     result.put("PRICE_VERSION", price == null ? null : price.getVersion());
     result.put("INPUT_MICROS_PER_MILLION", price == null ? null : price.getInputMicrosPerMillion());
-    result.put("OUTPUT_MICROS_PER_MILLION", price == null ? null : price.getOutputMicrosPerMillion());
+    result.put(
+        "OUTPUT_MICROS_PER_MILLION", price == null ? null : price.getOutputMicrosPerMillion());
     result.put("PER_CALL_UPPER_BOUND_MICROS", price == null ? null : price.upperBoundMicros());
     result.put("INPUT_TOKEN_UPPER_BOUND", price == null ? null : price.getInputTokenUpperBound());
     result.put("OUTPUT_TOKEN_UPPER_BOUND", price == null ? null : price.getOutputTokenUpperBound());
     result.put("REMAINING_MICROS", limit.getMaxCostMicros() - limit.getSettledMicros());
-    result.put("RESERVATIONS", reservations.findByRunIdOrderByCreatedAtAsc(runId).stream().map(this::map).toList());
+    result.put(
+        "RESERVATIONS",
+        reservations.findByRunIdOrderByCreatedAtAsc(runId).stream().map(this::map).toList());
     return result;
   }
 

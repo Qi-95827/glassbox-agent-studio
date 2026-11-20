@@ -9,9 +9,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class EventController {
   private final EventQueryService events;
+  private final dev.workbench.ownership.OwnershipService ownership;
 
-  public EventController(EventQueryService events) {
+  public EventController(
+      EventQueryService events, dev.workbench.ownership.OwnershipService ownership) {
     this.events = events;
+    this.ownership = ownership;
   }
 
   @GetMapping("/api/runs/{id}/events")
@@ -19,6 +22,7 @@ public class EventController {
       @PathVariable String id,
       @RequestParam(defaultValue = "0") long after,
       @RequestParam(defaultValue = "100") int limit) {
+    ownership.requireRun(id);
     return events.page(id, after, limit);
   }
 }

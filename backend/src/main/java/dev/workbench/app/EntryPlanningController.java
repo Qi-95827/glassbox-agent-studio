@@ -9,7 +9,6 @@ import dev.workbench.task.RunSnapshotService;
 import dev.workbench.task.SourceArtifactService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.List;
-import java.util.Map;
 import org.springframework.web.bind.annotation.*;
 
 /** 任务 8：规则路由、候选计划、既有成果、目录授权和周期快照的入口。 */
@@ -23,6 +22,7 @@ public class EntryPlanningController {
   private final RunSnapshotService snapshots;
   private final RecoveryLeaseService leases;
   private final RunRecordService runs;
+  private final dev.workbench.ownership.OwnershipService ownership;
 
   public EntryPlanningController(
       EntryRouteService routes,
@@ -31,7 +31,8 @@ public class EntryPlanningController {
       WorkspaceAuthorizationService authorization,
       RunSnapshotService snapshots,
       RecoveryLeaseService leases,
-      RunRecordService runs) {
+      RunRecordService runs,
+      dev.workbench.ownership.OwnershipService ownership) {
     this.routes = routes;
     this.proposals = proposals;
     this.sources = sources;
@@ -39,6 +40,7 @@ public class EntryPlanningController {
     this.snapshots = snapshots;
     this.leases = leases;
     this.runs = runs;
+    this.ownership = ownership;
   }
 
   public record RouteRequest(
@@ -67,32 +69,42 @@ public class EntryPlanningController {
 
   @GetMapping("/runs/{runId}/plan-proposals")
   Object planProposals(@PathVariable String runId) {
+    ownership.requireRun(runId);
     return proposals.list(runId);
   }
 
-  public record ProposeRequest(List<PlanProposalService.NodeChange> changes, String expectedBaseSha256) {}
+  public record ProposeRequest(
+      List<PlanProposalService.NodeChange> changes, String expectedBaseSha256) {}
 
   @PostMapping("/runs/{runId}/plan-proposals")
   Object propose(@PathVariable String runId, @RequestBody ProposeRequest request) {
+    ownership.requireRun(runId);
     return proposals.propose(runId, request.changes(), request.expectedBaseSha256());
   }
 
   @PostMapping("/runs/{runId}/plan-proposals/{id}/apply")
   Object applyProposal(@PathVariable String runId, @PathVariable String id) {
+    ownership.requireRun(runId);
     return proposals.apply(runId, id);
   }
 
   @GetMapping("/runs/{runId}/source-artifacts")
   Object sourceArtifacts(@PathVariable String runId) {
+    ownership.requireRun(runId);
     String taskId = runs.runSnapshot(runId).taskId().toString();
     return sources.find(taskId);
   }
 
   public record AttachSource(
-      String sourceRunId, SourceArtifactService.Kind kind, Integer expectedTargetTaskVersion, Integer expectedSourceTaskVersion) {}
+      String sourceRunId,
+      SourceArtifactService.Kind kind,
+      Integer expectedTargetTaskVersion,
+      Integer expectedSourceTaskVersion) {}
 
   @PostMapping("/runs/{runId}/source-artifacts")
   Object attachSource(@PathVariable String runId, @RequestBody AttachSource request) {
+    ownership.requireRun(runId);
+    ownership.requireRun(request.sourceRunId());
     if (request.expectedTargetTaskVersion() == null || request.expectedSourceTaskVersion() == null)
       throw new IllegalArgumentException("请携带读取页面时的目标任务和来源任务版本。");
     int targetVersion = runs.taskVersion(runs.runSnapshot(runId).taskId().toString());
@@ -109,6 +121,7 @@ public class EntryPlanningController {
 
   @GetMapping("/runs/{runId}/workspace-scope")
   Object workspaceScope(@PathVariable String runId) {
+    ownership.requireRun(runId);
     return authorization.find(runs.runSnapshot(runId).taskId().toString());
   }
 
@@ -116,16 +129,19 @@ public class EntryPlanningController {
 
   @PostMapping("/runs/{runId}/workspace-scope/revoke")
   Object revoke(@PathVariable String runId, @RequestBody Revoke request) {
+    ownership.requireRun(runId);
     return authorization.revoke(runs.runSnapshot(runId).taskId().toString(), request.directory());
   }
 
   @GetMapping("/runs/{runId}/snapshots")
   Object snapshots(@PathVariable String runId) {
+    ownership.requireRun(runId);
     return snapshots.find(runId);
   }
 
   @GetMapping("/runs/{runId}/recovery-lease")
   Object lease(@PathVariable String runId) {
+    ownership.requireRun(runId);
     return leases.find(runId);
   }
 }

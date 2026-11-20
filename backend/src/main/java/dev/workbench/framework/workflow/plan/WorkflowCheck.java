@@ -38,7 +38,8 @@ public record WorkflowCheck(
       UUID sourceAttemptId,
       UUID sourceCheckId,
       UUID sourceRunId,
-      String resultSha256) {
+      String resultSha256,
+      String sourceResult) {
     public Input {
       if ((sourceAttemptId == null) == (sourceCheckId == null))
         throw new IllegalArgumentException("检查输入必须指向一次尝试或一次检查。");

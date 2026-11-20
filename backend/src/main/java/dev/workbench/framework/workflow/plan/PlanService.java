@@ -1,51 +1,91 @@
 package dev.workbench.framework.workflow.plan;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.definition.AgentDefinition;
+import dev.workbench.framework.agent.definition.AgentDefinitionCatalog;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.agent.definition.AgentDefinitionRegistry;
 import dev.workbench.framework.workflow.check.SystemCheckRef;
 import dev.workbench.framework.workflow.check.SystemCheckRegistry;
-import dev.workbench.persistence.repository.PlanGraphRepository;
-import dev.workbench.persistence.repository.PlanStateRepository;
+import dev.workbench.persistence.entity.PlanNodeAgentBindingEntity;
 import dev.workbench.persistence.entity.PlanNodeEntity;
+import dev.workbench.persistence.entity.PlanNodeSpecEntity;
+import dev.workbench.persistence.repository.PlanGraphRepository;
+import dev.workbench.persistence.repository.PlanNodeAgentBindingRepository;
+import dev.workbench.persistence.repository.PlanNodeSpecRepository;
+import dev.workbench.persistence.repository.PlanStateRepository;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-/** 保存兼容计划与版本化工作流，节点状态使用同一套条件更新。*/
+/** 保存兼容计划与版本化工作流，节点状态使用同一套条件更新。 */
 @Service
 public class PlanService {
   private final PlanStateRepository states;
   private final PlanFactory factory;
-  private final AgentDefinitionRegistry definitions;
+  private final AgentDefinitionCatalog definitions;
   private final SystemCheckRegistry checks;
   private final PlanGraphRepository graphStore;
+  private final PlanNodeSpecRepository specStore;
+  private final PlanNodeAgentBindingRepository bindings;
+  private final ObjectMapper json;
 
+  @Autowired
   public PlanService(
       PlanStateRepository states,
       PlanFactory factory,
-      AgentDefinitionRegistry definitions,
+      AgentDefinitionCatalog definitions,
       SystemCheckRegistry checks,
-      PlanGraphRepository graphStore) {
+      PlanGraphRepository graphStore,
+      PlanNodeSpecRepository specStore,
+      PlanNodeAgentBindingRepository bindings,
+      ObjectMapper json) {
     this.states = states;
     this.factory = factory;
     this.definitions = java.util.Objects.requireNonNull(definitions, "Agent 定义目录不能为空");
     this.checks = java.util.Objects.requireNonNull(checks, "系统检查目录不能为。");
     this.graphStore = java.util.Objects.requireNonNull(graphStore, "计划存储不能为空");
+    this.specStore = java.util.Objects.requireNonNull(specStore, "节点规格存储不能为空");
+    this.bindings = bindings;
+    this.json = java.util.Objects.requireNonNull(json, "计划 JSON 处理器不能为空");
   }
 
-  /** 节点与依赖必须在同一事务写入；当前只创建服务端支持的固定计划。*/
+  /** 兼容旧单元验证：只有内置定义，没有节点 Agent 绑定存储。 */
+  public PlanService(
+      PlanStateRepository states,
+      PlanFactory factory,
+      AgentDefinitionRegistry definitions,
+      SystemCheckRegistry checks,
+      PlanGraphRepository graphStore,
+      PlanNodeSpecRepository specStore,
+      ObjectMapper json) {
+    this(
+        states,
+        factory,
+        new AgentDefinitionCatalog(definitions),
+        checks,
+        graphStore,
+        specStore,
+        null,
+        json);
+  }
+
+  /** 节点与依赖必须在同一事务写入；当前只创建服务端支持的固定计划。 */
   @org.springframework.transaction.annotation.Transactional
   public void initialize(String runId, boolean includeCoder) {
     var plan = factory.create(includeCoder);
@@ -72,7 +112,7 @@ public class PlanService {
     saveEdges(runId, workflow, ids);
   }
 
-  /** 由创建运行事务调用，先保存计划和节点，再保存引用这些节点的边。*/
+  /** 由创建运行事务调用，先保存计划和节点，再保存引用这些节点的边。 */
   @org.springframework.transaction.annotation.Transactional
   public void initializeWorkflow(
       String runId,
@@ -88,7 +128,7 @@ public class PlanService {
     if (hasSystemCheck && scope == WorkflowTemplate.Scope.TEXT_ONLY)
       throw new IllegalArgumentException("系统检查节点只能用于工作区范围的模板。");
     // 先核对全部受信引用，再写入任何计划记录，避免留下半成品计划。
-boolean hasWorkspaceReader = false;
+    boolean hasWorkspaceReader = false;
     for (var step : template.steps()) {
       if (step.kind() == PlanNodeKind.SYSTEM_CHECK) {
         checks.resolve(step.check());
@@ -118,7 +158,7 @@ boolean hasWorkspaceReader = false;
         authorization,
         template.maxAttempts());
     // 节点外键引用计划头，先让同一事务中的后续读取看到计划行。
-graphStore.flush();
+    graphStore.flush();
     int sequence = 0;
     for (var step : template.steps()) {
       String nodeId = UUID.randomUUID().toString();
@@ -168,6 +208,137 @@ graphStore.flush();
     graphStore.flush();
   }
 
+  /**
+   * 把已确认的候选计划物化为运行计划、节点规格和依赖。
+   *
+   * <p>节点文件范围、产出契约和候选摘要一起保存；确认事务提交后运行才能派发。图摘要使用 v6 协议，额外绑定每个节点的规格摘要，防止持久化规格被静默替换。
+   */
+  @org.springframework.transaction.annotation.Transactional
+  public void initializeFromCandidate(
+      String runId, CandidateRunPlan candidatePlan, TaskDefinition task, String time) {
+    var scope =
+        task.writeEnabled()
+            ? WorkflowTemplate.Scope.WORKSPACE_WRITE_AUTHORIZED
+            : WorkflowTemplate.Scope.WORKSPACE_READ_ONLY;
+    String authorization = scope.authorizationDigest(task);
+    String versionId = UUID.randomUUID().toString();
+    var definitionsByKey = new java.util.LinkedHashMap<String, AgentDefinition>();
+    for (var node : candidatePlan.nodes()) {
+      var definition = definitions.resolve(node.definition());
+      validateDefinition(scope, definition);
+      if (!node.readFiles().isEmpty() && definition.tools().isEmpty())
+        throw new IllegalArgumentException("读取工作区的节点缺少受信工具定义。");
+      if (!node.writeFiles().isEmpty() && !definition.tools().contains(ToolKind.WORKSPACE_WRITE))
+        throw new IllegalArgumentException("写入节点缺少受信写入工具。");
+      definitionsByKey.put(node.key(), definition);
+    }
+    graphStore.savePlan(
+        versionId, runId, "plan-candidate", 1, false, time, scope.name(), authorization, 2);
+    graphStore.flush();
+    var ids = new java.util.LinkedHashMap<String, String>();
+    int sequence = 0;
+    for (var node : candidatePlan.nodes()) {
+      var definition = definitionsByKey.get(node.key());
+      String nodeId = UUID.randomUUID().toString();
+      ids.put(node.key(), nodeId);
+      var saved = new PlanNodeEntity(nodeId, runId, ++sequence, PlanNodeStatus.PENDING);
+      saved.setPlanVersionId(versionId);
+      saved.setNodeKey(node.key());
+      saved.setNodeLabel(node.title());
+      saved.setPhaseKey(node.phase());
+      saved.setDefinition(
+          node.definition().id(),
+          node.definition().version(),
+          definitions.fingerprint(node.definition()));
+      saved.setPermissionRole(definition.permissionProfile().name());
+      saved.setWorkspaceRead(!node.readFiles().isEmpty());
+      saved.setWorkspaceWrite(!node.writeFiles().isEmpty());
+      saved.setNodeKind(PlanNodeKind.AGENT);
+      graphStore.saveNode(saved);
+      saveBinding(saved, runId, node, definition, time);
+      String specSha =
+          PlanNodeSpec.digest(
+              candidatePlan.candidateSha256(),
+              node.key(),
+              node.readFiles(),
+              node.writeFiles(),
+              node.outputs(),
+              node.acceptanceCriteria());
+      specStore.save(
+          new PlanNodeSpecEntity(
+              nodeId,
+              runId,
+              node.key(),
+              candidatePlan.candidateSha256(),
+              writeJson(node.readFiles()),
+              writeJson(node.writeFiles()),
+              writeJson(node.outputs()),
+              writeJson(node.acceptanceCriteria()),
+              specSha));
+    }
+    for (var node : candidatePlan.nodes())
+      for (String dependency : node.dependsOn())
+        graphStore.saveEdge(runId, ids.get(node.key()), ids.get(dependency));
+    graphStore.flush();
+    var nodes = find(runId);
+    if (scope.allowsWrite()) requireIndependentReview(nodes);
+    graphStore.updateGraphSha256(
+        versionId,
+        graphFingerprint(
+            nodes, scope, authorization, 2, specsByNode(runId), bindingsByNode(runId)));
+    graphStore.flush();
+  }
+
+  /** 持久化节点选择的内置/私有定义版本、理由和组件快照；内置也记录来源以便页面解释。 */
+  private void saveBinding(
+      PlanNodeEntity node,
+      String runId,
+      CandidateRunPlan.Node planned,
+      AgentDefinition definition,
+      String time) {
+    if (bindings == null) return;
+    var binding = planned.binding();
+    String components =
+        binding == null
+            ? null
+            : writeJson(
+                Map.of(
+                    "skills", binding.skills(),
+                    "tools", binding.tools()));
+    bindings.save(
+        new PlanNodeAgentBindingEntity(
+            node.getId(),
+            runId,
+            definitions.isPrivate(planned.definition()) ? "PRIVATE" : "BUILTIN",
+            planned.definition().id(),
+            planned.definition().version(),
+            binding == null ? definitions.fingerprint(planned.definition()) : binding.specSha256(),
+            binding == null ? "BUILTIN" : binding.source(),
+            binding == null ? "未指定私有 Agent，沿用角色对应的内置定义。" : binding.reason(),
+            binding == null ? definition.name() : binding.name(),
+            components,
+            time));
+  }
+
+  private Map<UUID, String> bindingsByNode(String runId) {
+    if (bindings == null) return Map.of();
+    var result = new LinkedHashMap<UUID, String>();
+    for (var row : bindings.findByRunIdOrderByNodeId(runId))
+      result.put(
+          UUID.fromString(row.getNodeId()),
+          AgentAssemblySnapshot.sha256(
+              String.join(
+                  "\n",
+                  row.getAgentKind(),
+                  row.getDefinitionId(),
+                  Integer.toString(row.getDefinitionVersion()),
+                  java.util.Objects.toString(row.getSpecSha256(), ""),
+                  row.getSource(),
+                  row.getReason(),
+                  row.getDisplayName())));
+    return result;
+  }
+
   private void saveEdges(
       String runId, WorkflowDefinition workflow, java.util.Map<String, String> ids) {
     for (var node : workflow.nodes()) {
@@ -181,19 +352,93 @@ graphStore.flush();
     return graphStore.findPlan(runId);
   }
 
+  /**
+   * 执行节点前读取规格，并按任务当前授权复核读写范围。
+   *
+   * <p>历史模板计划没有规格时返回 {@code null}，继续使用任务级文件范围。
+   */
+  public PlanNodeSpec requireNodeSpec(String runId, UUID nodeId, TaskDefinition task) {
+    var specs = specsByNode(runId);
+    if (specs.isEmpty()) return null;
+    var spec = specs.get(nodeId);
+    if (spec == null) throw new IllegalStateException("计划节点缺少文件范围规格。");
+    if (!task.fileScopes().containsAll(spec.readFiles()))
+      throw new IllegalStateException("节点读取范围超出任务当前授权文件。");
+    if (!spec.readFiles().containsAll(spec.writeFiles()))
+      throw new IllegalStateException("节点写入范围超出读取范围。");
+    return spec;
+  }
+
+  public java.util.Map<UUID, PlanNodeSpec> specsByNode(String runId) {
+    var result = new java.util.LinkedHashMap<UUID, PlanNodeSpec>();
+    for (var row : specStore.findByRunId(runId)) {
+      var spec =
+          new PlanNodeSpec(
+              UUID.fromString(row.getPlanNodeId()),
+              row.getCandidateSha256(),
+              row.getNodeKey(),
+              readList(row.getReadFilesJson()),
+              readList(row.getWriteFilesJson()),
+              readOutputs(row.getOutputsJson()),
+              readList(row.getAcceptanceJson()),
+              row.getSpecSha256());
+      result.put(spec.nodeId(), spec);
+    }
+    return result;
+  }
+
+  private String writeJson(Object value) {
+    try {
+      return json.writeValueAsString(value);
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("节点规格无法编码。", e);
+    }
+  }
+
+  private List<String> readList(String value) {
+    try {
+      return json.readValue(
+          value, json.getTypeFactory().constructCollectionType(List.class, String.class));
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("节点规格文件范围无法读取。", e);
+    }
+  }
+
+  private List<PlanNodeSpec.Output> readOutputs(String value) {
+    try {
+      return json.readValue(
+          value,
+          json.getTypeFactory().constructCollectionType(List.class, PlanNodeSpec.Output.class));
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("节点规格产出无法读取。", e);
+    }
+  }
+
   /** 服务端重新计算调整后的图摘要，并继续执行写作节点的独立审查约束。 */
   public String adjustedGraphFingerprint(WorkflowPlan plan, List<PlanNode> nodes) {
     if (plan.scope().allowsWrite()) requireIndependentReview(nodes);
-    return graphFingerprint(
-        nodes, plan.scope(), plan.authorizationSha256(), plan.maxAttempts());
+    return graphFingerprint(nodes, plan.scope(), plan.authorizationSha256(), plan.maxAttempts());
   }
 
-  /** 固定计划的摘要不含状态与时间，用于发现图或装配引用发生意外变化。*/
+  /** 固定计划的摘要不含状态与时间，用于发现图、规格或装配引用发生意外变化。 */
   public List<PlanNode> checkedWorkflowNodes(String runId, WorkflowPlan plan) {
     var nodes = find(runId);
+    var specs = specsByNode(runId);
+    var nodeBindings = bindingsByNode(runId);
+    long agentNodes = nodes.stream().filter(node -> !node.systemCheck()).count();
+    if (bindings != null && !nodeBindings.isEmpty() && nodeBindings.size() != agentNodes)
+      throw new IllegalStateException("计划节点的 Agent 选择记录不完整，不能执行。");
+    if (!specs.isEmpty() && specs.size() != agentNodes)
+      throw new IllegalStateException("计划节点规格不完整，不能执行。");
     if (nodes.isEmpty()
         || nodes.stream().anyMatch(node -> !plan.id().equals(node.planVersionId()))
-        || !graphFingerprint(nodes, plan.scope(), plan.authorizationSha256(), plan.maxAttempts())
+        || !graphFingerprint(
+                nodes,
+                plan.scope(),
+                plan.authorizationSha256(),
+                plan.maxAttempts(),
+                specs,
+                nodeBindings)
             .equals(plan.graphSha256())) throw new IllegalStateException("保存的工作流图与计划版本摘要不一致。");
     for (var node : nodes) {
       if (node.systemCheck()) {
@@ -205,10 +450,28 @@ graphStore.flush();
       var definition = definitions.resolve(node.definitionRef());
       validateDefinition(plan.scope(), definition);
       if (definition.permissionProfile() != node.role()
-          || node.workspaceRead() != !definition.tools().isEmpty()
-          || node.workspaceWrite() != definition.tools().contains(ToolKind.WORKSPACE_WRITE)
           || !definitions.fingerprint(node.definitionRef()).equals(node.definitionSha256()))
         throw new IllegalStateException("工作流引用的定义版本或只读权限与保存的计划不一致。");
+      if (specs.isEmpty()) {
+        if (node.workspaceRead() != !definition.tools().isEmpty()
+            || node.workspaceWrite() != definition.tools().contains(ToolKind.WORKSPACE_WRITE))
+          throw new IllegalStateException("工作流引用的定义版本或只读权限与保存的计划不一致。");
+        continue;
+      }
+      var spec = specs.get(node.id());
+      if (spec == null) throw new IllegalStateException("计划节点缺少文件范围规格。");
+      String recomputed =
+          PlanNodeSpec.digest(
+              spec.candidateSha256(),
+              spec.key(),
+              spec.readFiles(),
+              spec.writeFiles(),
+              spec.outputs(),
+              spec.acceptanceCriteria());
+      if (!recomputed.equals(spec.sha256())
+          || node.workspaceRead() != !spec.readFiles().isEmpty()
+          || node.workspaceWrite() != !spec.writeFiles().isEmpty())
+        throw new IllegalStateException("计划节点的文件范围规格与保存摘要不一致。");
     }
     return nodes;
   }
@@ -216,9 +479,8 @@ graphStore.flush();
   private static void validateDefinition(WorkflowTemplate.Scope scope, AgentDefinition definition) {
     boolean profileAllowed =
         definition.permissionProfile() == AgentRole.ANALYST
-            || (scope.allowsWrite()
-                && (definition.permissionProfile() == AgentRole.CODER
-                    || definition.permissionProfile() == AgentRole.REVIEWER));
+            || definition.permissionProfile() == AgentRole.REVIEWER
+            || (scope.allowsWrite() && definition.permissionProfile() == AgentRole.CODER);
     if (!profileAllowed || definition.tools().stream().anyMatch(tool -> !scope.permits(tool)))
       throw new IllegalArgumentException("工作流的 Agent 定义超出模板的权限上限。");
   }
@@ -240,7 +502,7 @@ graphStore.flush();
       throw new IllegalArgumentException("每个写入节点都必须有独立的直接审查节点。");
   }
 
-  /** 恢复副本留存原计划来源；已核验结果只关联历史实例。*/
+  /** 恢复副本留存原计划来源；已核验结果只关联历史实例。 */
   public void attachRecovery(
       String runId, UUID checkpointId, java.util.Map<String, UUID> reused, String time) {
     if (graphStore.attachRecovery(runId, checkpointId, time) != 1)
@@ -253,28 +515,63 @@ graphStore.flush();
 
   private static String graphFingerprint(
       List<PlanNode> nodes, WorkflowTemplate.Scope scope, String authorization, int maxAttempts) {
+    return graphFingerprint(nodes, scope, authorization, maxAttempts, java.util.Map.of());
+  }
+
+  /**
+   * 候选计划使用 v6：在 v5 的节点字段后绑定每个节点的规格摘要。
+   *
+   * <p>规格包含读写文件、产出和验收条件，任何持久化改写都会使图摘要与计划不一致。
+   */
+  private static String graphFingerprint(
+      List<PlanNode> nodes,
+      WorkflowTemplate.Scope scope,
+      String authorization,
+      int maxAttempts,
+      Map<UUID, PlanNodeSpec> specs) {
+    return graphFingerprint(nodes, scope, authorization, maxAttempts, specs, Map.of());
+  }
+
+  /**
+   * 候选计划使用 v6/v7：v6 绑定节点规格，v7 额外绑定每个节点的 Agent 选择版本、来源和理由。
+   *
+   * <p>旧计划没有绑定记录时保持 v6 摘要，避免历史数据被重新解释。
+   */
+  private static String graphFingerprint(
+      List<PlanNode> nodes,
+      WorkflowTemplate.Scope scope,
+      String authorization,
+      int maxAttempts,
+      Map<UUID, PlanNodeSpec> specs,
+      Map<UUID, String> bindings) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       boolean workspaceGraph = scope.hasWorkspace();
       boolean hasBudgets = nodes.stream().anyMatch(node -> node.budget() != null);
       boolean hasChecks = nodes.stream().anyMatch(PlanNode::systemCheck);
+      boolean hasSpecs = !specs.isEmpty();
+      boolean hasBindings = !bindings.isEmpty();
       addFingerprintField(
           digest,
-          hasChecks
-              ? "workflow-graph-v5"
-              : hasBudgets
-                  ? "workflow-graph-v4"
-                  : scope.allowsWrite()
-                      ? "workflow-graph-v3"
-                      : workspaceGraph ? "workflow-graph-v2" : "workflow-graph-v1");
+          hasBindings
+              ? "workflow-graph-v7"
+              : hasSpecs
+                  ? "workflow-graph-v6"
+                  : hasChecks
+                      ? "workflow-graph-v5"
+                      : hasBudgets
+                          ? "workflow-graph-v4"
+                          : scope.allowsWrite()
+                              ? "workflow-graph-v3"
+                              : workspaceGraph ? "workflow-graph-v2" : "workflow-graph-v1");
       if (workspaceGraph) {
         addFingerprintField(digest, scope.name());
         addFingerprintField(digest, authorization);
       }
       for (var node : nodes) {
-        if (hasChecks) {
+        if (hasChecks || hasSpecs) {
           // v5 在保留原字段顺序的基础上加入节点类型和执行器引用，历史 Agent-only 摘要不变。
-for (String field :
+          for (String field :
               List.of(
                   node.id().toString(),
                   Integer.toString(node.sequence()),
@@ -319,6 +616,11 @@ for (String field :
           addFingerprintField(
               digest, limit == null ? "" : java.util.Objects.toString(limit.maxToolCalls(), ""));
         }
+        if (hasSpecs) {
+          var spec = specs.get(node.id());
+          addFingerprintField(digest, spec == null ? "" : spec.sha256());
+        }
+        if (hasBindings) addFingerprintField(digest, bindings.getOrDefault(node.id(), ""));
         for (UUID prerequisite : node.dependencyIds().stream().sorted().toList())
           addFingerprintField(digest, prerequisite.toString());
       }
@@ -338,7 +640,7 @@ for (String field :
     digest.update(bytes);
   }
 
-  /** 使用条件更新阻止重复启动或跳过尚未完成的前置步骤。*/
+  /** 使用条件更新阻止重复启动或跳过尚未完成的前置步骤。 */
   public void start(String runId, String agentId, AgentRole role, String time) {
     var matching =
         find(runId).stream()
@@ -368,7 +670,7 @@ for (String field :
       throw new IllegalStateException("检查节点不存在、已启动或前置步骤尚未完成。");
   }
 
-  /** 结算已认领的系统检查节点；失败状态与阻塞原因由调用方在同一事务中保存。*/
+  /** 结算已认领的系统检查节点；失败状态与阻塞原因由调用方在同一事务中保存。 */
   public void finishCheckNode(String runId, UUID nodeId, PlanNodeStatus status, String time) {
     if (status != PlanNodeStatus.COMPLETED && status != PlanNodeStatus.FAILED)
       throw new IllegalArgumentException("系统检查节点只能结算为完成或失败。");
@@ -376,7 +678,7 @@ for (String field :
       throw new IllegalStateException("没有可结算的系统检查节点。");
   }
 
-  /** 旧角色用于定位接收节点；实际来源必须是图中已完成的直接前置节点。*/
+  /** 旧角色用于定位接收节点；实际来源必须是图中已完成的直接前置节点。 */
   public void requireDirectDependencySender(String runId, AgentRole receiver, UUID senderId) {
     java.util.Objects.requireNonNull(receiver, "接收角色不能为空");
     java.util.Objects.requireNonNull(senderId, "发送实例标识不能为。");
@@ -398,7 +700,7 @@ for (String field :
     if (!matches) throw new IllegalStateException("交接发送实例不是已完成的直接前置节点。");
   }
 
-  /** 按节点标识认领；调用方应将其与实例和交接写入放在同一事务中。*/
+  /** 按节点标识认领；调用方应将其与实例和交接写入放在同一事务中。 */
   public void startNode(String runId, UUID nodeId, String agentId, String time) {
     java.util.Objects.requireNonNull(nodeId, "节点标识不能为空");
     var saved = find(runId);
@@ -411,11 +713,11 @@ for (String field :
     if (!ready(saved).contains(target.id().toString()))
       throw new IllegalStateException("步骤不存在、已启动或前置步骤尚未完成。");
     // 持久化层在认领时重验目标状态和依赖。
-if (!states.claimAgent(runId, target.id().toString(), agentId, time))
+    if (!states.claimAgent(runId, target.id().toString(), agentId, time))
       throw new IllegalStateException("步骤不存在、已启动或前置步骤尚未完成。");
   }
 
-  /** 从保存的图和节点状态取得第一个就绪节点；调用方仍需事务认领。*/
+  /** 从保存的图和节点状态取得第一个就绪节点；调用方仍需事务认领。 */
   public PlanNode nextReady(List<PlanNode> nodes) {
     var ready = ready(nodes);
     return nodes.stream()
@@ -441,7 +743,7 @@ if (!states.claimAgent(runId, target.id().toString(), agentId, time))
             .toList());
   }
 
-  /** 复用已校验的历史分析，不伪造本运行中的 Agent 调用。*/
+  /** 复用已校验的历史分析，不伪造本运行中的 Agent 调用。 */
   public void reuseAnalysis(String runId, String sourceAgentId, String time) {
     if (!states.reuseAnalysis(runId, sourceAgentId, time))
       throw new IllegalStateException("分析步骤不能复用。");
@@ -454,22 +756,26 @@ if (!states.claimAgent(runId, target.id().toString(), agentId, time))
       throw new IllegalStateException("步骤不存在或已经结束。");
   }
 
-  /** 只重置当前节点指针；失败实例、尝试和交接仍可追溯。*/
+  /** 只重置当前节点指针；失败实例、尝试和交接仍可追溯。 */
   public void requeueFailedNode(String runId, UUID nodeId, String failedAgentId) {
     if (!states.requeueFailed(runId, nodeId.toString(), failedAgentId))
       throw new IllegalStateException("无法重新排队已失败的节点。");
   }
 
-  /** 终止运行时保留已结束步骤；在途步骤结果未知，未启动的步骤标记跳过。*/
+  /** 终止运行时保留已结束步骤；在途步骤结果未知，未启动的步骤标记跳过。 */
   public void settle(String runId, String time) {
     states.settle(runId, time);
   }
 
-  /** 返回计划与真实保存的所有前置节点；异常关系不能被当作无依赖。*/
+  /** 返回计划与真实保存的所有前置节点；异常关系不能被当作无依赖。 */
   public List<PlanNode> find(String runId) {
     List<PlanNode> rows = states.findNodes(runId).stream().map(PlanService::readNode).toList();
 
     if (rows.isEmpty()) return List.of();
+    var bindingRows = new LinkedHashMap<UUID, PlanNodeAgentBindingEntity>();
+    if (bindings != null)
+      for (var row : bindings.findByRunIdOrderByNodeId(runId))
+        bindingRows.put(UUID.fromString(row.getNodeId()), row);
     var byId = new java.util.LinkedHashMap<UUID, PlanNode>();
     var byRole = new java.util.EnumMap<AgentRole, UUID>(AgentRole.class);
     var dependencies = new java.util.LinkedHashMap<UUID, java.util.List<UUID>>();
@@ -528,7 +834,8 @@ if (!states.claimAgent(runId, target.id().toString(), agentId, time))
               row.workspaceWrite(),
               row.budget(),
               row.kind(),
-              row.checkRef()));
+              row.checkRef(),
+              bindingInfo(bindingRows.get(row.id()))));
     }
     graph(result);
     return List.copyOf(result);
@@ -580,6 +887,17 @@ if (!states.claimAgent(runId, target.id().toString(), agentId, time))
 
   private static UUID parseUuid(String value) {
     return value == null ? null : UUID.fromString(value);
+  }
+
+  private static AgentBindingInfo bindingInfo(PlanNodeAgentBindingEntity row) {
+    if (row == null) return null;
+    return new AgentBindingInfo(
+        row.getAgentKind(),
+        row.getSource(),
+        row.getReason(),
+        row.getDisplayName(),
+        row.getSpecSha256(),
+        row.getComponentsJson());
   }
 
   private record Dependency(String runId, UUID nodeId, UUID prerequisiteId) {}

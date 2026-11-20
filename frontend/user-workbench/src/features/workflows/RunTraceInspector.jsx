@@ -31,9 +31,9 @@ function parseJson(value) {
   }
 }
 
-export function TraceSection({ title, subtitle, children, expanded, onChange }) {
+export function TraceSection({ title, subtitle, children, expanded, defaultExpanded, onChange }) {
   const id = useId();
-  return <Accordion disableGutters elevation={0} square expanded={expanded} onChange={onChange}
+  return <Accordion disableGutters elevation={0} square expanded={expanded} defaultExpanded={defaultExpanded} onChange={onChange}
     sx={{ borderTop: 1, borderColor: 'divider', '&::before': { display: 'none' } }}>
     <AccordionSummary id={`${id}-label`} aria-controls={`${id}-content`} expandIcon={<ExpandMoreRounded />}>
       <Stack spacing={0.25} sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
@@ -67,10 +67,11 @@ function HandoffRecord({ record, detail, parentRunId, api, initiallyExpanded }) 
   const [pending, setPending] = useState(false);
   const { senderNodeId, senderAttemptId, senderAgentId } = record;
   const runId = detail.runId;
+  const hasPersistedBodyProjection = Object.hasOwn(record, 'sourceResult');
   const localAttempt = detail.attempts?.find(attempt => attempt.id === senderAttemptId && attempt.agentId === senderAgentId);
 
   useEffect(() => {
-    if (!expanded || localAttempt || !senderNodeId || !senderAttemptId) return undefined;
+    if (!expanded || hasPersistedBodyProjection || localAttempt || !senderNodeId || !senderAttemptId) return undefined;
     let active = true;
     setPending(true);
     (async () => {
@@ -95,9 +96,11 @@ function HandoffRecord({ record, detail, parentRunId, api, initiallyExpanded }) 
       }
     })();
     return () => { active = false; };
-  }, [expanded, localAttempt?.id, senderNodeId, senderAttemptId, senderAgentId, runId, parentRunId, api]);
+  }, [expanded, hasPersistedBodyProjection, localAttempt?.id, senderNodeId, senderAttemptId, senderAgentId, runId, parentRunId, api]);
 
   const attempt = localAttempt || sender?.attempt;
+  const body = hasPersistedBodyProjection ? record.sourceResult : attempt?.result;
+  const sourceRunId = record.sourceRunId || sender?.runId;
   const senderLabel = record.dependencyNodeLabel || record.senderNodeLabel || '来源节点未记录';
   const receiverLabel = record.receiverNodeLabel || '接收节点未记录';
   return <TraceSection title={`${senderLabel} → ${receiverLabel}`}
@@ -109,16 +112,17 @@ function HandoffRecord({ record, detail, parentRunId, api, initiallyExpanded }) 
         接收实例 #{short(record.receiverAgentId)} · 尝试 #{short(record.receiverAttemptId)}
       </Typography>
       <Typography variant="subtitle2">交接正文</Typography>
-      {pending ? <LinearProgress aria-label="读取交接正文" /> : attempt?.result
-        ? <Readout>{attempt.result}</Readout>
+      {pending ? <LinearProgress aria-label="读取交接正文" /> : body
+        ? <Readout>{body}</Readout>
         : <Typography variant="body2" color="text.secondary">此交接的发送尝试正文未记录或无法读取。</Typography>}
-      {sender?.runId && sender.runId !== runId && <Typography variant="caption" color="text.secondary">
-        来源为父运行 #{short(sender.runId)}
+      {sourceRunId && sourceRunId !== runId && <Typography variant="caption" color="text.secondary">
+        来源为父运行 #{short(sourceRunId)}
       </Typography>}
       <Typography variant="subtitle2">随交接附上的工具证据</Typography>
       {record.toolEvidence?.length
         ? record.toolEvidence.map(row => <Evidence key={row.toolCallId} row={row} />)
         : <Typography variant="body2" color="text.secondary">没有附带工具证据。</Typography>}
+      <TraceSection title="交接原记录"><Readout mono>{JSON.stringify(record, null, 2)}</Readout></TraceSection>
     </Stack>}
   </TraceSection>;
 }
@@ -135,28 +139,40 @@ function Handoffs({ detail, parentRunId, selectedEdge, api, byId }) {
     : records;
   const checkInputs = (detail.checks ?? []).flatMap(check => (check.inputs ?? []).map(input => ({ check, input })))
     .filter(({ input }) => !selectedEdge || input.dependencyNodeId === selectedEdge.fromNodeId);
+  const checkReceipts = (detail.checkReceipts ?? []).filter(record => !selectedEdge
+    || record.dependencyNodeId === selectedEdge.fromNodeId && record.receiverNodeId === selectedEdge.toNodeId);
 
   return <Stack spacing={1}>
-    {selectedEdge && !selected.length && <Typography variant="subtitle2">
+    {selectedEdge && !selected.length && !checkReceipts.length && <Typography variant="subtitle2">
       {traceNodeLabel(byId.get(selectedEdge.fromNodeId))} → {traceNodeLabel(byId.get(selectedEdge.toNodeId))}
     </Typography>}
     {!selectedEdge && <Typography variant="caption" color="text.secondary">
-      已接收 {incoming.length} 条 · 已发出 {outgoing.length} 条
+      Agent 交接 · 已接收 {incoming.length} 条 · 已发出 {outgoing.length} 条
     </Typography>}
-    {selected.length === 0 && checkInputs.length === 0 && <Alert severity="info">
+    {selected.length === 0 && checkInputs.length === 0 && checkReceipts.length === 0 && <Alert severity="info">
       {selectedEdge ? '这条连线是计划依赖，当前未查到实际接收记录。' : '此节点当前没有结构化交接记录。'}
     </Alert>}
     {selected.map(record => <HandoffRecord key={receiptKey(record)} record={record}
       detail={detail} parentRunId={parentRunId} api={api} initiallyExpanded={Boolean(selectedEdge)} />)}
     {checkInputs.map(({ check, input }) => <TraceSection
       key={`${check.id}:${input.dependencyNodeId}:${input.sourceAttemptId || input.sourceCheckId}`}
-      title={`接收检查输入 · ${traceNodeLabel(byId.get(input.dependencyNodeId))}`}>
+      title={`送入系统检查 · ${traceNodeLabel(byId.get(input.dependencyNodeId))}`} defaultExpanded={Boolean(selectedEdge)}>
+      <Stack spacing={0.75}>
+        <Readout>{input.sourceResult ?? '输入正文未记录，或当前保存的结果与检查时的版本不一致。'}</Readout>
+        <TraceSection title="检查输入原记录"><Readout mono>{JSON.stringify(input, null, 2)}</Readout></TraceSection>
+      </Stack>
+    </TraceSection>)}
+    {checkReceipts.map(record => <TraceSection
+      key={`${record.receiverAttemptId}:${record.checkId}`}
+      title={`${record.dependencyNodeLabel || '系统检查'} → ${record.receiverNodeLabel || '接收节点'}`}
+      subtitle={`已接收检查结果 · ${time(record.acceptedAt)}`} defaultExpanded={Boolean(selectedEdge)}>
       <Stack spacing={0.75}>
         <Typography variant="body2">
-          {input.sourceKind === 'SYSTEM_CHECK' ? '来源检查' : '来源尝试'} #{short(input.sourceAttemptId || input.sourceCheckId)}
-          {input.sourceRunId && ` · 运行 #${short(input.sourceRunId)}`}
+          检查结论
         </Typography>
-        {input.resultSha256 && <Readout mono>{input.resultSha256}</Readout>}
+        <Readout>{record.summary ?? '未记录'}</Readout>
+        {record.evidence && <Readout>{record.evidence}</Readout>}
+        <TraceSection title="检查接收原记录"><Readout mono>{JSON.stringify(record, null, 2)}</Readout></TraceSection>
       </Stack>
     </TraceSection>)}
   </Stack>;
@@ -261,7 +277,30 @@ function Events({ events, eventNames }) {
 }
 
 function NodeCalls({ detail, eventNames, stopCauseLabels }) {
+  const node = detail.node ?? {};
+  const sourceLabels = { BUILTIN: '内置', MANUAL: '手动指定', RECOMMENDED: '规划器推荐' };
   return <Stack spacing={1}>
+    {(node.agentName || node.agentKind) && <TraceSection title="声明的 Agent 与来源" defaultExpanded
+      subtitle={`${node.agentKind === 'PRIVATE' ? '私有' : '内置'} · ${node.agentName || node.definitionId} v${node.definitionVersion ?? '—'}`}>
+      <Stack spacing={0.75}>
+        <Typography variant="body2">{sourceLabels[node.agentSource] || node.agentSource || '未记录'} · {node.agentReason || '未记录选择理由'}</Typography>
+        {node.agentSpecSha256 && <Typography variant="caption" color="text.secondary" title={node.agentSpecSha256}>
+          定义摘要 {node.agentSpecSha256.slice(0, 12)}…
+        </Typography>}
+        <Typography variant="caption" color="text.secondary">固定 Skill</Typography>
+        {node.agentSkills?.length
+          ? node.agentSkills.map(item => <Typography variant="body2" key={`s:${item.id}`}>
+            {item.name} v{item.version} · {item.sha256?.slice(0, 12)}…
+          </Typography>)
+          : <Typography variant="body2" color="text.secondary">无</Typography>}
+        <Typography variant="caption" color="text.secondary">固定工具</Typography>
+        {node.agentTools?.length
+          ? node.agentTools.map(item => <Typography variant="body2" key={`t:${item.id}`}>
+            {item.name} v{item.version} · {item.kind} · {item.sha256?.slice(0, 12)}…
+          </Typography>)
+          : <Typography variant="body2" color="text.secondary">无</Typography>}
+      </Stack>
+    </TraceSection>}
     {(detail.attempts ?? []).map(attempt => <TraceSection key={attempt.id}
       title={`尝试 ${attempt.number} · 实例 #${short(attempt.agentId)}`}
       subtitle={`模型 ${attempt.models?.length ?? 0} 次 · 工具 ${attempt.tools?.length ?? 0} 次`}>
@@ -273,6 +312,16 @@ function NodeCalls({ detail, eventNames, stopCauseLabels }) {
         {attempt.stopCause && <Alert severity="warning">
           {stopCauseLabels[attempt.stopCause] || attempt.stopCause}
         </Alert>}
+        {attempt.assembly && <TraceSection title="实际装配快照" subtitle={
+          `定义 ${attempt.assembly.components?.definition?.id} v${attempt.assembly.components?.definition?.version}`
+        }>
+          <Stack spacing={0.5}>
+            <Typography variant="body2">模型 {attempt.assembly.components?.model?.name} · 授权文件 {attempt.assembly.components?.authorization?.fileCount} 个 · {attempt.assembly.components?.authorization?.writeAuthorized ? '允许写入' : '无写授权'}</Typography>
+            {attempt.assembly.components?.privateTools?.length > 0 && attempt.assembly.components.privateTools.map(tool =>
+              <Typography variant="body2" key={`pt:${tool.id}`}>私有工具 {tool.name} v{tool.version} · 调用名 {tool.toolName} · 扩展名 {tool.fileExtensions?.join(', ')}</Typography>)}
+            <Readout mono>{JSON.stringify(attempt.assembly, null, 2)}</Readout>
+          </Stack>
+        </TraceSection>}
         {attempt.models?.map(call => <Stack key={call.id} spacing={0.35}>
           <Typography variant="body2">{call.name === 'mock' ? '模拟模型' : call.name} · #{short(call.id)}</Typography>
           <Typography variant="caption" color="text.secondary">
@@ -303,9 +352,9 @@ function NodeCalls({ detail, eventNames, stopCauseLabels }) {
 
 export default function RunTraceInspector({
   detail, selectedNode, selectedEdge, view, runDetail, api, byId, loading, error,
-  eventNames = {}, stopCauseLabels = {}
+  eventNames = {}, stopCauseLabels = {}, defaultTab = 'handoffs'
 }) {
-  const [tab, setTab] = useState('handoffs');
+  const [tab, setTab] = useState(defaultTab);
   const id = useId();
   const tabs = [
     ['handoffs', '交接'],

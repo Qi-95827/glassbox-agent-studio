@@ -7,10 +7,6 @@ import dev.workbench.external.ExternalActionService;
 import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.RunMetricsService;
-import dev.workbench.task.CostService;
-import dev.workbench.task.PlanProposalService;
-import dev.workbench.task.RunSnapshotService;
-import dev.workbench.task.SourceArtifactService;
 import dev.workbench.workspace.RunHandoverService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.LinkedHashMap;
@@ -39,6 +35,7 @@ public class WorkbenchTaskService {
   private final dev.workbench.task.RecoveryLeaseService leases;
   private final CostService costs;
   private final ExternalActionService externalActions;
+  private final dev.workbench.ownership.OwnershipService ownership;
 
   public WorkbenchTaskService(
       RunRecordService repo,
@@ -57,7 +54,8 @@ public class WorkbenchTaskService {
       RunSnapshotService snapshots,
       dev.workbench.task.RecoveryLeaseService leases,
       CostService costs,
-      ExternalActionService externalActions) {
+      ExternalActionService externalActions,
+      dev.workbench.ownership.OwnershipService ownership) {
     this.repo = repo;
     this.plans = plans;
     this.workflowRuns = workflowRuns;
@@ -75,14 +73,22 @@ public class WorkbenchTaskService {
     this.leases = leases;
     this.costs = costs;
     this.externalActions = externalActions;
+    this.ownership = ownership;
   }
 
   public List<Map<String, Object>> tasks() {
-    return repo.tasks();
+    return repo.tasks().stream()
+        .filter(
+            row -> {
+              Object id = row.get("ID");
+              return id instanceof String taskId && ownership.canReadTask(taskId);
+            })
+        .toList();
   }
 
   @Transactional
   public void archive(String taskId, boolean archived) {
+    ownership.requireTask(taskId);
     repo.setTaskArchived(taskId, archived);
     audit.record(
         "TASK_ARCHIVE",
@@ -93,6 +99,7 @@ public class WorkbenchTaskService {
   }
 
   public Map<String, Object> run(String id, boolean includeEvents) {
+    ownership.requireRun(id);
     var run = repo.run(id);
     String taskId = run.get("TASK_ID").toString();
     Map<String, Object> detail = new LinkedHashMap<>();
@@ -102,7 +109,8 @@ public class WorkbenchTaskService {
     detail.put("entryRoute", entryRoutes.find(taskId));
     detail.put("sourceArtifacts", sourceArtifacts.find(taskId));
     detail.put("workspaceScope", workspaceAuthorization.find(taskId));
-    detail.put("planProposals", plans.workflowPlan(id) == null ? List.of() : planProposals.list(id));
+    detail.put(
+        "planProposals", plans.workflowPlan(id) == null ? List.of() : planProposals.list(id));
     detail.put("snapshots", snapshots.find(id));
     detail.put("recoveryLease", leases.find(id));
     detail.put("costEstimate", costs.estimate(id));
@@ -131,26 +139,30 @@ public class WorkbenchTaskService {
   }
 
   public Object skills(String id) {
+    ownership.requireRun(id);
     repo.runSnapshot(id);
     return repo.skills(id);
   }
 
   public Object memoryLoad(String id) {
+    ownership.requireRun(id);
     repo.runSnapshot(id);
     return memories.loadForRun(id);
   }
 
   public Object toolGrants(String id) {
+    ownership.requireRun(id);
     repo.runSnapshot(id);
     return repo.agentToolGrants(id);
   }
 
   public Object handover(String id) {
+    ownership.requireRun(id);
     repo.runSnapshot(id);
     return handovers.findByRun(id);
   }
 
   public Map<String, Object> overview() {
-    return repo.overview();
+    return repo.overview(ownership.readableTaskIds());
   }
 }

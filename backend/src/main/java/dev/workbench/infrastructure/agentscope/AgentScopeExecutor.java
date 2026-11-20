@@ -28,7 +28,6 @@ import org.springframework.stereotype.Component;
 /** 使用 AgentScope 的 ReActAgent 运行已选角色，项目控制器负责限额与记录。 */
 @Component
 public class AgentScopeExecutor implements AgentExecutor {
-  private static final int MAX_ITERATIONS = 20;
   private static final int MAX_FRAMEWORK_RETRIES = 1;
   private final ObjectMapper json;
   private final AgentStateStore stateStore;
@@ -57,14 +56,16 @@ public class AgentScopeExecutor implements AgentExecutor {
     var goal = request.input();
     var workspaceId = request.workspaceId();
     var fileScopes = request.fileScopes();
+    var writeFiles = request.writeFiles();
     var scenario = request.scenario();
-    var mode = request.modelMode();
     var stage = request.stage();
     var runtime = request.runtime();
     if (stage != CheckpointStage.BEFORE_TOOL)
       throw new IllegalArgumentException("当前仅支持从 Agent 启动前恢复。");
     var scopedFiles =
         workspaceId == null ? List.<String>of() : new AuthorizedFileSet(fileScopes).paths();
+    var scopedWrites =
+        writeFiles.isEmpty() ? List.<String>of() : new AuthorizedFileSet(writeFiles).paths();
     var assembly =
         assemblyPlanner.plan(
             role,
@@ -72,21 +73,37 @@ public class AgentScopeExecutor implements AgentExecutor {
             request.expectedDefinitionSha256(),
             workspaceId != null,
             fileScopes.size(),
+            writeFiles.size(),
             request.writeEnabled());
+    var effectiveMode =
+        assembly.modelOverride() == null ? request.modelMode() : assembly.modelOverride();
+    var effectiveRequest = request.withModelMode(effectiveMode);
     AtomicReference<RuntimeException> failure = new AtomicReference<>();
     AgentDefinition definition = assembly.definition();
     var selectedSkills = assembly.skills();
     String skillGuidance =
-        selectedSkills.stream()
-            .map(skill -> "【" + skill.name() + "】" + skill.guidance())
+        java.util.stream.Stream.concat(
+                selectedSkills.stream().map(skill -> "【" + skill.name() + "】" + skill.guidance()),
+                assembly.privateSkills().stream()
+                    .map(
+                        skill ->
+                            "【" + skill.name() + " v" + skill.version() + "】" + skill.guidance()))
             .collect(java.util.stream.Collectors.joining("\n"));
     var toolContext =
-        new AgentToolContext(json, workspaceId, scopedFiles, scenario, runtime, failure);
-    Toolkit toolkit = tools.assemble(assembly.toolVersions(), toolContext);
-    var selectedModel = models.select(request);
+        new AgentToolContext(
+            json, workspaceId, scopedFiles, scenario, runtime, failure, scopedWrites);
+    Toolkit toolkit =
+        assembly.privateTools().isEmpty()
+            ? tools.assemble(assembly.toolVersions(), toolContext)
+            : tools.assemblePrivate(assembly.privateTools(), toolContext);
+    var selectedModel = models.select(effectiveRequest);
     Model controlled =
         new ControlledModel(
-            selectedModel.model(), mode, runtime, failure, selectedModel.rateLimitRejection());
+            selectedModel.model(),
+            effectiveMode,
+            runtime,
+            failure,
+            selectedModel.rateLimitRejection());
     var authorization =
         new AgentAssemblySnapshot.Authorization(
             1,
@@ -101,13 +118,23 @@ public class AgentScopeExecutor implements AgentExecutor {
             definition.ref(),
             assembly.definitionSha256(),
             selectedModel.reference(),
-            MAX_ITERATIONS,
+            null,
             MAX_FRAMEWORK_RETRIES,
             selectedSkills.stream().map(skill -> skill.reference()).toList(),
             assembly.toolVersions(),
             authorization,
             new AgentAssemblySnapshot.Input(
-                AgentAssemblySnapshot.sha256(goal), request.context().sources()));
+                AgentAssemblySnapshot.sha256(goal), request.context().sources()),
+            assembly.privateTools().stream()
+                .map(
+                    tool ->
+                        new AgentAssemblySnapshot.PrivateTool(
+                            tool.id(),
+                            tool.version(),
+                            tool.name(),
+                            tool.toolName(),
+                            tool.fileExtensions()))
+                .toList());
     try (ReActAgent agent =
         ReActAgent.builder()
             .name(definition.name())
@@ -117,7 +144,8 @@ public class AgentScopeExecutor implements AgentExecutor {
             .defaultSessionId(agentId)
             .conflictPolicy(ConflictPolicy.FAIL)
             .toolkit(toolkit)
-            .maxIters(MAX_ITERATIONS)
+            // SDK 要求正整数且自身默认 10 次；实际用户限额统一由 RunControl 检查。
+            .maxIters(Integer.MAX_VALUE)
             .maxRetries(MAX_FRAMEWORK_RETRIES)
             .build()) {
       runtime.assemblyResolved(components);

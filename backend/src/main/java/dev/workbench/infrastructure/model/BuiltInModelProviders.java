@@ -2,7 +2,7 @@ package dev.workbench.infrastructure.model;
 
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ModelMode;
-import dev.workbench.framework.agent.definition.AgentDefinitionRegistry;
+import dev.workbench.framework.agent.definition.AgentDefinitionCatalog;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.context.AgentInput;
 import dev.workbench.framework.model.AgentModelProvider;
@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 class BuiltInModelProviders {
   @Bean
-  AgentModelProvider mockAgentModelProvider(AgentDefinitionRegistry definitions) {
+  AgentModelProvider mockAgentModelProvider(AgentDefinitionCatalog definitions) {
     return new AgentModelProvider() {
       public ModelMode mode() {
         return ModelMode.MOCK;

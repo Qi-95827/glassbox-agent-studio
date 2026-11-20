@@ -24,7 +24,40 @@ public record AgentExecutionRequest(
     String previous,
     AgentRuntime runtime,
     AgentDefinitionRef definitionRef,
-    String expectedDefinitionSha256) {
+    String expectedDefinitionSha256,
+    List<String> writeFiles) {
+  /** 旧调用没有节点级写范围时，写入授权覆盖整个读取范围。 */
+  public AgentExecutionRequest(
+      AgentRole role,
+      String agentId,
+      AgentInput context,
+      String workspaceId,
+      List<String> fileScopes,
+      boolean writeEnabled,
+      Scenario scenario,
+      ModelMode modelMode,
+      CheckpointStage stage,
+      String previous,
+      AgentRuntime runtime,
+      AgentDefinitionRef definitionRef,
+      String expectedDefinitionSha256) {
+    this(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeEnabled ? fileScopes : List.of());
+  }
+
   public AgentExecutionRequest(
       AgentRole role,
       String agentId,
@@ -117,6 +150,24 @@ public record AgentExecutionRequest(
         null);
   }
 
+  public AgentExecutionRequest withModelMode(ModelMode modelMode) {
+    return new AgentExecutionRequest(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeFiles);
+  }
+
   public AgentExecutionRequest {
     Objects.requireNonNull(role, "角色不能为空");
     UUID.fromString(agentId);
@@ -129,6 +180,9 @@ public record AgentExecutionRequest(
       throw new IllegalArgumentException("工作区授权文件范围无效。");
     }
     fileScopes = List.copyOf(fileScopes);
+    writeFiles = writeFiles == null ? List.of() : List.copyOf(writeFiles);
+    if (!fileScopes.containsAll(writeFiles) || writeEnabled != !writeFiles.isEmpty())
+      throw new IllegalArgumentException("节点写入范围必须属于读取范围并显式授权。");
     Objects.requireNonNull(scenario, "场景不能为空");
     Objects.requireNonNull(modelMode, "模型模式不能为空");
     Objects.requireNonNull(stage, "检查点阶段不能为空");

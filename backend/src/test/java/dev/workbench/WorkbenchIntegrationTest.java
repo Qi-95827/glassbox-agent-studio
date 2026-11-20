@@ -109,6 +109,22 @@ class WorkbenchIntegrationTest {
   @MockitoSpyBean WorkspaceService workspaces;
 
   @Test
+  void omittedRunLimitsRemainUnsetThroughExecutionAndProjection() throws Exception {
+    String id = service.create(new CreateTaskRequest("整理结果", "normal", null, null, null));
+    assertEquals("COMPLETED", await(id).get("STATUS"));
+    var snapshot = repo.runSnapshot(id);
+    assertNull(snapshot.maxRounds());
+    assertNull(snapshot.maxTools());
+    assertNull(snapshot.maxPerTool());
+    assertNull(snapshot.maxSeconds());
+    var budget = executionViews.view(id).budget();
+    assertNull(budget.remainingRounds());
+    assertNull(budget.remainingTools());
+    assertNull(budget.remainingMs());
+    assertTrue(snapshot.rounds() > 0);
+  }
+
+  @Test
   void reviewedWorkflowRunsIndependentInstancesAndJoinsBothInputs() throws Exception {
     String id =
         createDynamicWorkflow(
@@ -221,8 +237,7 @@ class WorkbenchIntegrationTest {
     assertTrue(plannedDetail.checks().isEmpty());
     assertEquals(2, plannedDetail.dependencies().size());
 
-    mvc.perform(
-            get("/api/runs/{id}/execution-view", id))
+    mvc.perform(get("/api/runs/{id}/execution-view", id))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.nodes.length()").value(3))
         .andExpect(jsonPath("$.edges.length()").value(2))
@@ -239,8 +254,7 @@ class WorkbenchIntegrationTest {
     assertEquals("COMPLETED", completed.runStatus());
     assertTrue(completed.nodes().stream().allMatch(node -> "COMPLETED".equals(node.status())));
     assertEquals(3, completed.counts().modelCalls());
-    assertEquals(
-        3, completed.nodes().stream().mapToInt(node -> node.attemptCount()).sum());
+    assertEquals(3, completed.nodes().stream().mapToInt(node -> node.attemptCount()).sum());
     assertTrue(completed.focus().active().isEmpty());
     assertTrue(completed.blocking().isEmpty());
 
@@ -248,6 +262,18 @@ class WorkbenchIntegrationTest {
     assertEquals(1, mergeDetail.attempts().size());
     assertEquals(1, mergeDetail.attempts().getFirst().models().size());
     assertEquals(2, mergeDetail.inboundHandoffs().size());
+    for (var handoff : mergeDetail.inboundHandoffs()) {
+      var senderDetail = executionViews.detail(id, handoff.senderNodeId());
+      assertEquals(id, handoff.sourceRunId());
+      assertNotNull(handoff.sourceResult());
+      assertEquals(
+          senderDetail.attempts().stream()
+              .filter(attempt -> attempt.id().equals(handoff.senderAttemptId()))
+              .findFirst()
+              .orElseThrow()
+              .result(),
+          handoff.sourceResult());
+    }
     assertNotNull(mergeDetail.result());
     assertTrue(
         mergeDetail.nodeEvents().stream()
@@ -255,8 +281,7 @@ class WorkbenchIntegrationTest {
                 event -> "MODEL_STARTED".equals(event.type()) && event.modelCallId() != null));
     assertTrue(
         mergeDetail.nodeEvents().stream()
-            .anyMatch(
-                event -> "AGENT_STARTED".equals(event.type()) && event.attemptId() != null));
+            .anyMatch(event -> "AGENT_STARTED".equals(event.type()) && event.attemptId() != null));
 
     var page = eventQuery.page(id, 0, 200);
     assertTrue(
@@ -332,6 +357,7 @@ class WorkbenchIntegrationTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.anyBoolean(),
+            org.mockito.ArgumentMatchers.anyInt(),
             org.mockito.ArgumentMatchers.anyInt(),
             org.mockito.ArgumentMatchers.anyBoolean());
     String id = createDynamicWorkflow(false, 3);
@@ -1203,10 +1229,7 @@ class WorkbenchIntegrationTest {
     assertNotNull(recoveredView.recovery().inherited());
     assertEquals(2, recoveredView.recovery().newModelCalls());
     assertEquals(
-        1,
-        recoveredView.nodes().stream()
-            .filter(node -> "REUSED".equals(node.status()))
-            .count());
+        1, recoveredView.nodes().stream().filter(node -> "REUSED".equals(node.status())).count());
   }
 
   @Test
@@ -2130,14 +2153,10 @@ class WorkbenchIntegrationTest {
     var page = eventQuery.page(id, 0, 200);
     var messages = page.events().stream().map(event -> event.message()).toList();
     assertTrue(
-        messages.indexOf("先分配、晚提交的事件") < messages.indexOf("等待锁后提交的事件"),
-        String.join("|", messages));
+        messages.indexOf("先分配、晚提交的事件") < messages.indexOf("等待锁后提交的事件"), String.join("|", messages));
     var tail = eventQuery.page(id, firstSeq.get(), 200);
-    assertTrue(
-        tail.events().stream().anyMatch(event -> event.message().equals("等待锁后提交的事件")));
-    assertTrue(
-        tail.events().stream()
-            .noneMatch(event -> event.message().equals("先分配、晚提交的事件")));
+    assertTrue(tail.events().stream().anyMatch(event -> event.message().equals("等待锁后提交的事件")));
+    assertTrue(tail.events().stream().noneMatch(event -> event.message().equals("先分配、晚提交的事件")));
   }
 
   @Test
@@ -2162,8 +2181,7 @@ class WorkbenchIntegrationTest {
     }
     assertEquals(repo.events(id).size(), ids.size());
     assertEquals(ids.size(), new java.util.HashSet<>(ids).size());
-    for (int i = 1; i < seqs.size(); i++)
-      assertTrue(seqs.get(i) > seqs.get(i - 1), "事件序号未严格递增。");
+    for (int i = 1; i < seqs.size(); i++) assertTrue(seqs.get(i) > seqs.get(i - 1), "事件序号未严格递增。");
     assertTrue(pages >= 3, "积压未按多页读取。");
     assertEquals(200, eventQuery.page(id, 0, 200).events().size());
   }
@@ -4439,7 +4457,8 @@ class WorkbenchIntegrationTest {
     assertEquals("COMPLETED", successView.runStatus());
     assertTrue(
         successView.nodes().stream()
-            .anyMatch(node -> "SYSTEM_CHECK".equals(node.kind()) && "COMPLETED".equals(node.status())));
+            .anyMatch(
+                node -> "SYSTEM_CHECK".equals(node.kind()) && "COMPLETED".equals(node.status())));
     var blockedView = executionViews.view(blockedRun);
     assertEquals("BLOCKED", blockedView.runStatus());
     assertTrue(

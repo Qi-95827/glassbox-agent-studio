@@ -21,6 +21,13 @@ import java.util.UUID;
 public record AgentAssemblySnapshot(int version, Components components, AgentBudgetPolicy budget) {
   public static final int VERSION = 1;
 
+  public record PrivateTool(
+      String id, int version, String name, String toolName, List<String> fileExtensions) {
+    public PrivateTool {
+      fileExtensions = fileExtensions == null ? List.of() : List.copyOf(fileExtensions);
+    }
+  }
+
   public AgentAssemblySnapshot {
     if (version != VERSION) throw new IllegalArgumentException("不支持的装配快照版本。");
     Objects.requireNonNull(components);
@@ -31,21 +38,48 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
       AgentDefinitionRef definition,
       String definitionSha256,
       ModelReference model,
-      int maxIterations,
+      Integer maxIterations,
       int maxFrameworkRetries,
       List<SkillRef> skills,
       Map<ToolKind, Integer> tools,
       Authorization authorization,
-      Input input) {
+      Input input,
+      List<PrivateTool> privateTools) {
     public Components {
       Objects.requireNonNull(definition);
       Objects.requireNonNull(model);
       Objects.requireNonNull(authorization);
       Objects.requireNonNull(input);
-      if (!validDigest(definitionSha256) || maxIterations < 1 || maxFrameworkRetries < 0)
-        throw new IllegalArgumentException("装配定义摘要或执行器配置无效。");
+      if (!validDigest(definitionSha256)
+          || (maxIterations != null && maxIterations < 1)
+          || maxFrameworkRetries < 0) throw new IllegalArgumentException("装配定义摘要或执行器配置无效。");
       skills = List.copyOf(skills);
       tools = Map.copyOf(tools);
+      privateTools = privateTools == null ? List.of() : List.copyOf(privateTools);
+    }
+
+    /** 兼容没有私有工具记录的历史装配。 */
+    public Components(
+        AgentDefinitionRef definition,
+        String definitionSha256,
+        ModelReference model,
+        Integer maxIterations,
+        int maxFrameworkRetries,
+        List<SkillRef> skills,
+        Map<ToolKind, Integer> tools,
+        Authorization authorization,
+        Input input) {
+      this(
+          definition,
+          definitionSha256,
+          model,
+          maxIterations,
+          maxFrameworkRetries,
+          skills,
+          tools,
+          authorization,
+          input,
+          List.of());
     }
   }
 

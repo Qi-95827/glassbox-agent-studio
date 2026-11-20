@@ -96,10 +96,25 @@ public final class DemoModel implements Model {
     int callIndex = calls.getAndIncrement();
     if (callIndex == 0
         || (scenario == Scenario.REPEAT && role == AgentRole.ANALYST && callIndex < 4)) {
-      Map<String, Object> input =
-          workspaceAvailable && fileScopes.size() > 1
-              ? Map.of("path", fileScopes.getFirst())
-              : Map.of();
+      String privateSearch =
+          tools.stream()
+              .map(schema -> schema.getName())
+              .filter(name -> name != null && name.startsWith("search_private_"))
+              .findFirst()
+              .orElse(null);
+      Map<String, Object> input;
+      String toolName;
+      if (privateSearch != null) {
+        // 私有搜索工具使用固定查询参数；实际范围仍由服务端授权集合与扩展名过滤决定。
+        toolName = privateSearch;
+        input = Map.of("query", fileScopes.isEmpty() ? "a" : "a");
+      } else {
+        input =
+            workspaceAvailable && fileScopes.size() > 1
+                ? Map.of("path", fileScopes.getFirst())
+                : Map.of();
+        toolName = workspaceAvailable ? "read_authorized_file" : "inspect_simulated_issue";
+      }
       String content;
       try {
         // AgentScope 按原始 JSON 验证有参数的工具调用，模拟消息也必须提供一致的内容。
@@ -113,10 +128,7 @@ public final class DemoModel implements Model {
                   List.of(
                       ToolUseBlock.builder()
                           .id("mock-tool-" + (callIndex + 1))
-                          .name(
-                              workspaceAvailable
-                                  ? "read_authorized_file"
-                                  : "inspect_simulated_issue")
+                          .name(toolName)
                           .input(input)
                           .content(content)
                           .build()))

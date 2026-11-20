@@ -63,14 +63,18 @@ public class RunSnapshotService {
       }
     }
     int completed =
-        (int)
-            nodes.stream()
-                .filter(node -> node.status() == PlanNodeStatus.COMPLETED)
-                .count();
+        (int) nodes.stream().filter(node -> node.status() == PlanNodeStatus.COMPLETED).count();
     String budget = budgetSha(run);
     String boundary =
         boundary(
-            plan, eventSeq, completed, run.rounds(), run.tools(), elapsed, workspaceFingerprint, budget);
+            plan,
+            eventSeq,
+            completed,
+            run.rounds(),
+            run.tools(),
+            elapsed,
+            workspaceFingerprint,
+            budget);
     String time = Instant.now().toString();
     return snapshots.saveAndFlush(
         new RunSnapshotEntity(
@@ -134,7 +138,8 @@ public class RunSnapshotService {
                     "ROUNDS", row.getRounds(),
                     "TOOLS", row.getTools(),
                     "ELAPSED_MS", row.getElapsedMs(),
-                    "WORKSPACE_FINGERPRINT", row.getWorkspaceFingerprint() == null ? "" : row.getWorkspaceFingerprint(),
+                    "WORKSPACE_FINGERPRINT",
+                        row.getWorkspaceFingerprint() == null ? "" : row.getWorkspaceFingerprint(),
                     "CREATED_AT", row.getCreatedAt()))
         .toList();
   }
@@ -143,12 +148,12 @@ public class RunSnapshotService {
     return sha(
         String.join(
             "|",
-            Integer.toString(run.maxRounds()),
-            Integer.toString(run.maxTools()),
-            Integer.toString(run.maxPerTool()),
+            String.valueOf(run.maxRounds()),
+            String.valueOf(run.maxTools()),
+            String.valueOf(run.maxPerTool()),
             String.valueOf(run.maxReportedTokens()),
             String.valueOf(run.maxIdenticalTools()),
-            Integer.toString(run.maxSeconds()),
+            String.valueOf(run.maxSeconds()),
             String.valueOf(run.maxAgentRounds()),
             String.valueOf(run.maxAgentTools())));
   }

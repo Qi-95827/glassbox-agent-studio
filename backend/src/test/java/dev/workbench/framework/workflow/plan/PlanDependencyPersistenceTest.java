@@ -74,6 +74,10 @@ class PlanDependencyPersistenceTest {
                         AgentRole.ANALYST,
                         List.of(dev.workbench.domain.ToolKind.WORKSPACE_READ),
                         List.of())));
+    var specStore =
+        org.mockito.Mockito.mock(dev.workbench.persistence.repository.PlanNodeSpecRepository.class);
+    org.mockito.Mockito.when(specStore.findByRunId(org.mockito.ArgumentMatchers.anyString()))
+        .thenReturn(List.of());
     var custom =
         new PlanService(
             states,
@@ -81,7 +85,9 @@ class PlanDependencyPersistenceTest {
             definitions,
             new dev.workbench.framework.workflow.check.SystemCheckRegistry(
                 List.of(new dev.workbench.framework.workflow.check.AuthorizedReadEvidenceCheck())),
-            graphStore);
+            graphStore,
+            specStore,
+            new com.fasterxml.jackson.databind.ObjectMapper());
     var template =
         new WorkflowTemplate(
             "bad-check",

@@ -18,6 +18,12 @@ INSERT INTO task_tool_budgets_v2(task_id,tool_kind,policy_version,max_calls) SEL
 INSERT INTO workbench_schema_migrations(migration_id) SELECT 'tool_budgets_v2' WHERE NOT EXISTS (SELECT 1 FROM workbench_schema_migrations WHERE migration_id='tool_budgets_v2');
 CREATE TABLE IF NOT EXISTS runs (id VARCHAR(36) PRIMARY KEY, task_id VARCHAR(36) NOT NULL, parent_id VARCHAR(36), status VARCHAR(30) NOT NULL, reason VARCHAR(1000), result VARCHAR(2000), rounds INT NOT NULL, tools INT NOT NULL, max_rounds INT NOT NULL, max_tools INT NOT NULL, max_seconds INT NOT NULL, elapsed_ms BIGINT NOT NULL, created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL);
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS max_per_tool INT DEFAULT 20 NOT NULL;
+-- 旧运行保留已保存的预算。新运行未配置的上限保存为 NULL。
+ALTER TABLE runs ALTER COLUMN max_rounds DROP NOT NULL;
+ALTER TABLE runs ALTER COLUMN max_tools DROP NOT NULL;
+ALTER TABLE runs ALTER COLUMN max_seconds DROP NOT NULL;
+ALTER TABLE runs ALTER COLUMN max_per_tool DROP NOT NULL;
+ALTER TABLE runs ALTER COLUMN max_per_tool DROP DEFAULT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS max_reported_tokens BIGINT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS max_identical_tools INT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS max_agent_rounds INT;
@@ -279,6 +285,62 @@ CREATE TABLE IF NOT EXISTS plan_adjustments (
   applied_at VARCHAR(40),
   UNIQUE(run_id, version)
 );
+-- 运行创建前的规划候选；保存输入快照、归一化图、验证结论和独立的模型用量。
+CREATE TABLE IF NOT EXISTS plan_candidates (
+  id VARCHAR(36) PRIMARY KEY,
+  owner_scope_key VARCHAR(80) NOT NULL,
+  actor_key VARCHAR(80) NOT NULL,
+  group_id VARCHAR(64) NOT NULL,
+  input_version INT NOT NULL,
+  request_id VARCHAR(80) NOT NULL,
+  source_candidate_id VARCHAR(36),
+  schema_version INT NOT NULL,
+  input_sha256 VARCHAR(64) NOT NULL,
+  input_json CLOB NOT NULL,
+  workspace_fingerprint VARCHAR(64),
+  file_versions_json CLOB,
+  candidate_sha256 VARCHAR(64),
+  candidate_json CLOB,
+  status VARCHAR(20) NOT NULL,
+  errors_json CLOB,
+  model_name VARCHAR(80),
+  input_tokens INT,
+  output_tokens INT,
+  prepared_workspace_id VARCHAR(36),
+  preparation_status VARCHAR(20),
+  workspace_operation_id VARCHAR(36),
+  preparation_id VARCHAR(36),
+  preparation_started_at VARCHAR(40),
+  run_id VARCHAR(36),
+  created_at VARCHAR(40) NOT NULL,
+  settled_at VARCHAR(40),
+  UNIQUE(owner_scope_key, request_id),
+  CHECK(schema_version=1)
+);
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS workspace_fingerprint VARCHAR(64);
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS file_versions_json CLOB;
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS prepared_workspace_id VARCHAR(36);
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS preparation_status VARCHAR(20);
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS preparation_id VARCHAR(36);
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS workspace_operation_id VARCHAR(36);
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS preparation_started_at VARCHAR(40);
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS agent_bindings_json CLOB;
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS agent_aliases_json CLOB;
+ALTER TABLE plan_candidates ADD COLUMN IF NOT EXISTS run_id VARCHAR(36);
+CREATE INDEX IF NOT EXISTS plan_candidates_group ON plan_candidates(group_id, input_version);
+-- 候选计划物化后的节点级文件范围与产出契约；执行器不得超出该范围申请工具。
+CREATE TABLE IF NOT EXISTS plan_node_specs (
+  plan_node_id VARCHAR(36) PRIMARY KEY REFERENCES plan_nodes(id),
+  run_id VARCHAR(36) NOT NULL,
+  node_key VARCHAR(64) NOT NULL,
+  candidate_sha256 VARCHAR(64) NOT NULL,
+  read_files_json CLOB NOT NULL,
+  write_files_json CLOB NOT NULL,
+  outputs_json CLOB NOT NULL,
+  acceptance_json CLOB NOT NULL,
+  spec_sha256 VARCHAR(64) NOT NULL,
+  UNIQUE(run_id, node_key)
+);
 -- 可管理评测数据集：草稿样本可编辑，发布版本不可变；批次绑定样本版本、配置和预算。
 CREATE TABLE IF NOT EXISTS evaluation_dataset_samples (
   id VARCHAR(36) PRIMARY KEY,
@@ -420,3 +482,146 @@ CREATE TABLE IF NOT EXISTS external_action_checks (
   checked_at VARCHAR(40) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_external_action_checks_action ON external_action_checks(action_id);
+
+-- 本地账号与私有资源。owner_scope_key 由服务端会话解析，客户端提交的字段只作为普通输入。
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(36) PRIMARY KEY,
+  username VARCHAR(32) NOT NULL UNIQUE,
+  display_name VARCHAR(120) NOT NULL,
+  password_hash VARCHAR(300) NOT NULL,
+  role VARCHAR(20) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  legacy_claimed BOOLEAN DEFAULT FALSE NOT NULL,
+  created_at VARCHAR(40) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS resource_ownership (
+  id VARCHAR(120) PRIMARY KEY,
+  resource_type VARCHAR(30) NOT NULL,
+  resource_id VARCHAR(36) NOT NULL,
+  owner_scope_key VARCHAR(80) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  UNIQUE(resource_type, resource_id)
+);
+
+CREATE TABLE IF NOT EXISTS private_skills (
+  id VARCHAR(36) PRIMARY KEY,
+  owner_scope_key VARCHAR(80) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  summary VARCHAR(300) NOT NULL,
+  usage_notes VARCHAR(2000),
+  input_contract VARCHAR(1000),
+  output_contract VARCHAR(1000),
+  content_md CLOB NOT NULL,
+  draft_sha256 VARCHAR(64) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  current_version INT DEFAULT 0 NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  archived_at VARCHAR(40)
+);
+CREATE INDEX IF NOT EXISTS idx_private_skills_owner ON private_skills(owner_scope_key);
+CREATE TABLE IF NOT EXISTS private_skill_versions (
+  skill_id VARCHAR(36) NOT NULL,
+  version INT NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  summary VARCHAR(300) NOT NULL,
+  usage_notes VARCHAR(2000),
+  input_contract VARCHAR(1000),
+  output_contract VARCHAR(1000),
+  content_md CLOB NOT NULL,
+  content_sha256 VARCHAR(64) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  PRIMARY KEY(skill_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS private_tools (
+  id VARCHAR(36) PRIMARY KEY,
+  owner_scope_key VARCHAR(80) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(300) NOT NULL,
+  executor_kind VARCHAR(20) NOT NULL,
+  file_extensions_json VARCHAR(2000) NOT NULL,
+  draft_sha256 VARCHAR(64) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  current_version INT DEFAULT 0 NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  archived_at VARCHAR(40)
+);
+CREATE INDEX IF NOT EXISTS idx_private_tools_owner ON private_tools(owner_scope_key);
+CREATE TABLE IF NOT EXISTS private_tool_versions (
+  tool_id VARCHAR(36) NOT NULL,
+  version INT NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(300) NOT NULL,
+  executor_kind VARCHAR(20) NOT NULL,
+  file_extensions_json VARCHAR(2000) NOT NULL,
+  spec_sha256 VARCHAR(64) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  PRIMARY KEY(tool_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS private_agents (
+  id VARCHAR(36) PRIMARY KEY,
+  owner_scope_key VARCHAR(80) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(300) NOT NULL,
+  responsibility CLOB NOT NULL,
+  output_requirements VARCHAR(2000),
+  permission_role VARCHAR(20) NOT NULL,
+  recommendable BOOLEAN DEFAULT FALSE NOT NULL,
+  model_mode VARCHAR(20) DEFAULT 'mock' NOT NULL,
+  skill_refs_json VARCHAR(4000) NOT NULL,
+  tool_refs_json VARCHAR(4000) NOT NULL,
+  draft_sha256 VARCHAR(64) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  current_version INT DEFAULT 0 NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  archived_at VARCHAR(40)
+);
+CREATE INDEX IF NOT EXISTS idx_private_agents_owner ON private_agents(owner_scope_key);
+CREATE TABLE IF NOT EXISTS private_agent_versions (
+  agent_id VARCHAR(36) NOT NULL,
+  version INT NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(300) NOT NULL,
+  responsibility CLOB NOT NULL,
+  output_requirements VARCHAR(2000),
+  permission_role VARCHAR(20) NOT NULL,
+  recommendable BOOLEAN NOT NULL,
+  model_mode VARCHAR(20) NOT NULL,
+  components_json CLOB NOT NULL,
+  spec_sha256 VARCHAR(64) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  PRIMARY KEY(agent_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS plan_node_agent_bindings (
+  node_id VARCHAR(36) PRIMARY KEY,
+  run_id VARCHAR(36) NOT NULL,
+  agent_kind VARCHAR(20) NOT NULL,
+  definition_id VARCHAR(64) NOT NULL,
+  definition_version INT NOT NULL,
+  spec_sha256 VARCHAR(64),
+  source VARCHAR(20) NOT NULL,
+  reason VARCHAR(1000) NOT NULL,
+  display_name VARCHAR(120) NOT NULL,
+  components_json CLOB,
+  created_at VARCHAR(40) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plan_node_binding_run ON plan_node_agent_bindings(run_id);
+
+CREATE TABLE IF NOT EXISTS repository_authorizations (
+  id VARCHAR(36) PRIMARY KEY,
+  owner_scope_key VARCHAR(80) NOT NULL,
+  repository_root VARCHAR(2000) NOT NULL,
+  repository_key VARCHAR(64) NOT NULL,
+  granted_by VARCHAR(36) NOT NULL,
+  created_at VARCHAR(40) NOT NULL,
+  UNIQUE(owner_scope_key, repository_key)
+);
+CREATE INDEX IF NOT EXISTS idx_repository_auth_owner ON repository_authorizations(owner_scope_key);
+
+ALTER TABLE private_agents ADD COLUMN IF NOT EXISTS model_strategy VARCHAR(20) DEFAULT 'INHERIT_TASK' NOT NULL;
+ALTER TABLE private_agent_versions ADD COLUMN IF NOT EXISTS model_strategy VARCHAR(20) DEFAULT 'INHERIT_TASK' NOT NULL;

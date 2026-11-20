@@ -1,7 +1,5 @@
 package dev.workbench.persistence.repository;
 
-import jakarta.persistence.EntityManager;
-
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
@@ -18,6 +16,7 @@ import dev.workbench.persistence.entity.WorkflowHandoffCheckEntity;
 import dev.workbench.persistence.entity.WorkflowHandoffEntity;
 import dev.workbench.persistence.entity.WorkflowHandoffReadEvidenceEntity;
 import dev.workbench.persistence.entity.WorkflowHandoffWriteEvidenceEntity;
+import jakarta.persistence.EntityManager;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -27,7 +26,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 动态尝试、系统检查、依赖结果和接收证据的数据库操作。*/
+/** 动态尝试、系统检查、依赖结果和接收证据的数据库操作。 */
 @Repository
 @Transactional(readOnly = true)
 public class WorkflowExecutionRepository {
@@ -137,7 +136,9 @@ public class WorkflowExecutionRepository {
             CheckSettlement.class)
         .setParameter("id", checkId)
         .setParameter("runId", runId)
-        .getResultList().stream().findFirst();
+        .getResultList()
+        .stream()
+        .findFirst();
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
@@ -169,7 +170,7 @@ public class WorkflowExecutionRepository {
         .getSingleResult();
   }
 
-  /** 没有其他失败或未结算模型调用时，只允许一次明确的限流拒绝。*/
+  /** 没有其他失败或未结算模型调用时，只允许一次明确的限流拒绝。 */
   public boolean canRetryRateLimit(String runId, String agentId, String safeMessage) {
     var info =
         sessions
@@ -210,7 +211,9 @@ public class WorkflowExecutionRepository {
             """,
             ExternalEvidence.class)
         .setParameter("id", externalId)
-        .getResultList().stream().findFirst();
+        .getResultList()
+        .stream()
+        .findFirst();
   }
 
   public List<AgentResult> findAgentResults(String runId, String recipient) {
@@ -345,13 +348,50 @@ public class WorkflowExecutionRepository {
         .createQuery(
             """
             select i.id.checkId, i.id.dependencyNodeId, i.sourceKind, i.sourceAttemptId,
-              i.sourceCheckId, i.sourceRunId, i.resultSha256
+              i.sourceCheckId, i.sourceRunId, i.resultSha256, a.result, sourceCheck.summary
             from WorkflowCheckInputEntity i join WorkflowCheckEntity c on c.id = i.id.checkId
-            join PlanNodeEntity n on n.id = c.nodeId join PlanNodeEntity d on d.id = i.id.dependencyNodeId
+            join PlanNodeEntity n on n.id = c.nodeId
+            join PlanNodeEntity d on d.id = i.id.dependencyNodeId
+              and d.runId = n.runId and d.planVersionId = n.planVersionId
+            join PlanNodeDependencyEntity edge on edge.id.runId = n.runId
+              and edge.id.nodeId = n.id and edge.id.prerequisiteId = d.id
+            join RunEntity currentRun on currentRun.id = n.runId
+            left join WorkflowAttemptEntity attempt on attempt.id = i.sourceAttemptId
+            left join PlanNodeEntity sourceNode on sourceNode.id = attempt.nodeId
+              and sourceNode.runId = i.sourceRunId
+            left join AgentInvocationEntity a on a.id = attempt.agentId and a.runId = sourceNode.runId
+              and ((sourceNode.id = d.id and sourceNode.runId = n.runId)
+                or (sourceNode.runId = currentRun.parentId and d.sourceAgentId = a.id
+                  and sourceNode.nodeKey = d.nodeKey))
+            left join WorkflowCheckEntity sourceCheck on sourceCheck.id = i.sourceCheckId
+              and sourceCheck.nodeId = d.id and d.runId = i.sourceRunId
             where n.runId = :runId order by i.id.checkId, d.sequenceNo
             """,
             CheckInputView.class)
         .setParameter("runId", runId)
+        .getResultList();
+  }
+
+  public List<CheckReceipt> findCheckReceipts(String runId, String nodeId) {
+    return sessions
+        .createQuery(
+            """
+            select c.id, source.id, source.nodeLabel, n.id, n.nodeLabel, a.id,
+              h.acceptedAt, c.summary, c.evidence
+            from WorkflowHandoffCheckEntity h
+            join WorkflowAttemptEntity a on a.id = h.id.receiverAttemptId
+            join PlanNodeEntity n on n.id = a.nodeId
+            join WorkflowCheckEntity c on c.id = h.checkId
+            join PlanNodeEntity source on source.id = c.nodeId and source.id = h.id.dependencyNodeId
+              and source.runId = n.runId and source.planVersionId = n.planVersionId
+            join PlanNodeDependencyEntity d on d.id.runId = n.runId and d.id.nodeId = n.id
+              and d.id.prerequisiteId = source.id
+            where n.runId = :runId and (n.id = :nodeId or source.id = :nodeId)
+            order by n.sequenceNo, a.attemptNo, source.sequenceNo
+            """,
+            CheckReceipt.class)
+        .setParameter("runId", runId)
+        .setParameter("nodeId", nodeId)
         .getResultList();
   }
 
@@ -376,13 +416,18 @@ public class WorkflowExecutionRepository {
         .createQuery(
             """
             select h.schemaVersion, h.acceptedAt, s.id, s.nodeId, s.agentId,
-              h.id.dependencyNodeId, r.id, r.nodeId, r.agentId
+              h.id.dependencyNodeId, r.id, r.nodeId, r.agentId, i.runId, i.result
             from WorkflowHandoffEntity h join WorkflowAttemptEntity r on r.id = h.id.receiverAttemptId
             join WorkflowAttemptEntity s on s.id = h.senderAttemptId
             join PlanNodeEntity n on n.id = r.nodeId join PlanNodeEntity p on p.id = s.nodeId
             join PlanNodeEntity d on d.id = h.id.dependencyNodeId and d.runId = n.runId
             join PlanNodeDependencyEntity e on e.id.runId = n.runId and e.id.nodeId = n.id
               and e.id.prerequisiteId = d.id
+            join RunEntity currentRun on currentRun.id = n.runId
+            left join AgentInvocationEntity i on i.id = s.agentId and i.runId = p.runId
+              and ((p.runId = n.runId and p.id = d.id)
+                or (p.runId = currentRun.parentId and d.sourceAgentId = s.agentId
+                  and d.nodeKey = p.nodeKey))
             where n.runId = :runId and d.planVersionId = n.planVersionId
             order by n.sequenceNo, r.attemptNo, p.sequenceNo, s.attemptNo
             """,
@@ -404,7 +449,10 @@ public class WorkflowExecutionRepository {
             .setParameter("runId", runId)
             .setParameter("agentId", agentId)
             .setParameter("running", PlanNodeStatus.RUNNING)
-            .getResultList().stream().findFirst().orElse(null)
+            .getResultList()
+            .stream()
+            .findFirst()
+            .orElse(null)
         != null;
   }
 
@@ -502,7 +550,20 @@ public class WorkflowExecutionRepository {
       String sourceAttempt,
       String sourceCheck,
       String sourceRun,
-      String sha256) {}
+      String sha256,
+      String agentResult,
+      String checkSummary) {}
+
+  public record CheckReceipt(
+      String checkId,
+      String dependencyNodeId,
+      String dependencyNodeLabel,
+      String receiverNodeId,
+      String receiverNodeLabel,
+      String receiverAttemptId,
+      String acceptedAt,
+      String summary,
+      String evidence) {}
 
   public record CheckView(
       String id,
@@ -529,5 +590,7 @@ public class WorkflowExecutionRepository {
       String dependencyId,
       String receiverAttempt,
       String receiverNode,
-      String receiverAgent) {}
+      String receiverAgent,
+      String sourceRunId,
+      String sourceResult) {}
 }

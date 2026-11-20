@@ -1,5 +1,6 @@
+import WorkbenchDialog from '../../layout/WorkbenchDialog.jsx';
 import React, { useEffect, useState } from 'react';
-import { Alert, Modal, Spin } from 'antd';
+import { Alert, Spin } from 'antd';
 
 const toolLabels = {
   SIMULATED_INSPECTION: '模拟检查工具',
@@ -25,7 +26,7 @@ export default function AgentCatalogDialog({ open, onClose, api }) {
   }, [open, api]);
 
   return (
-    <Modal title="内置 Agent 角色" open={open} onCancel={onClose} footer={null} width={760}>
+    <WorkbenchDialog title="内置 Agent 角色" open={open} onCancel={onClose} footer={null} width={760}>
       <Alert
         type="info"
         showIcon
@@ -47,6 +48,6 @@ export default function AgentCatalogDialog({ open, onClose, api }) {
           ))}
         </details>
       ))}
-    </Modal>
+    </WorkbenchDialog>
   );
 }

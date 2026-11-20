@@ -21,6 +21,7 @@ public class WorkbenchController {
   private final AgentSessionService sessions;
   private final RunHandoverService handovers;
   private final EntryPolicyService entryPolicies;
+  private final dev.workbench.ownership.OwnershipService ownership;
 
   public WorkbenchController(
       WorkbenchTaskService taskService,
@@ -28,13 +29,15 @@ public class WorkbenchController {
       TaskSupplementService supplements,
       AgentSessionService sessions,
       RunHandoverService handovers,
-      EntryPolicyService entryPolicies) {
+      EntryPolicyService entryPolicies,
+      dev.workbench.ownership.OwnershipService ownership) {
     this.taskService = taskService;
     this.service = service;
     this.supplements = supplements;
     this.sessions = sessions;
     this.handovers = handovers;
     this.entryPolicies = entryPolicies;
+    this.ownership = ownership;
   }
 
   @GetMapping("/tasks")
@@ -57,6 +60,7 @@ public class WorkbenchController {
 
   @PostMapping("/tasks")
   Object create(@RequestBody CreateTaskRequest request) {
+    if (request.workspaceId() != null) ownership.requireWorkspace(request.workspaceId());
     return Map.of("runId", service.create(request));
   }
 
@@ -67,12 +71,14 @@ public class WorkbenchController {
 
   @PostMapping("/runs/{id}/plans/{planVersionId}/approve")
   Object approvePlan(@PathVariable String id, @PathVariable java.util.UUID planVersionId) {
+    ownership.requireRun(id);
     service.approvePlan(id, planVersionId);
     return Map.of("accepted", true);
   }
 
   @PostMapping("/runs/{id}/cancel")
   Object cancel(@PathVariable String id) {
+    ownership.requireRun(id);
     service.cancel(id);
     return Map.of("accepted", true);
   }
@@ -89,6 +95,7 @@ public class WorkbenchController {
 
   @GetMapping("/runs/{id}/agent-sessions")
   Object agentSessions(@PathVariable String id) {
+    ownership.requireRun(id);
     return sessions.forRun(id);
   }
 
@@ -99,12 +106,14 @@ public class WorkbenchController {
 
   @PostMapping("/runs/{id}/pause")
   Object pause(@PathVariable String id) {
+    ownership.requireRun(id);
     service.pause(id);
     return Map.of("accepted", true);
   }
 
   @PostMapping("/runs/{id}/resume")
   Object resume(@PathVariable String id) {
+    ownership.requireRun(id);
     service.resume(id);
     return Map.of("accepted", true);
   }
@@ -119,17 +128,20 @@ public class WorkbenchController {
   @PostMapping("/runs/{id}/handover")
   Object takeHandover(
       @PathVariable String id, @RequestBody(required = false) HandoverRequest request) {
+    ownership.requireRun(id);
     return handovers.take(id, request == null ? null : request.note());
   }
 
   @PostMapping("/runs/{id}/handover/return")
   Object returnHandover(
       @PathVariable String id, @RequestBody(required = false) HandoverRequest request) {
+    ownership.requireRun(id);
     return handovers.returnControl(id, request == null ? null : request.note());
   }
 
   @PostMapping("/runs/{id}/recover/{checkpoint}")
   Object recover(@PathVariable String id, @PathVariable String checkpoint) {
+    ownership.requireRun(id);
     return Map.of("runId", service.recover(id, checkpoint));
   }
 
@@ -139,6 +151,7 @@ public class WorkbenchController {
       @PathVariable String id,
       @PathVariable String requestId,
       @RequestBody SupplementSubmission request) {
+    ownership.requireRun(id);
     if (request.expectedTaskVersion() == null) throw new IllegalArgumentException("请携带读取页面时的任务版本。");
     var applied =
         supplements.apply(

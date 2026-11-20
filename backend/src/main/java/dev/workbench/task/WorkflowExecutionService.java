@@ -8,6 +8,7 @@ import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.model.ModelRateLimitException;
+import dev.workbench.framework.tool.ResourceVersion;
 import dev.workbench.framework.workflow.check.StaleEvidenceException;
 import dev.workbench.framework.workflow.check.SystemCheckInput;
 import dev.workbench.framework.workflow.check.SystemCheckRef;
@@ -23,9 +24,9 @@ import dev.workbench.framework.workflow.plan.WorkflowHandoff;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff.ToolEvidence;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.persistence.repository.PlanGraphRepository;
+import dev.workbench.persistence.repository.RunRepository;
 import dev.workbench.persistence.repository.SupplementRepository;
 import dev.workbench.persistence.repository.WorkflowExecutionRepository;
-import dev.workbench.persistence.repository.RunRepository;
 import dev.workbench.workspace.WorkspaceService;
 import java.time.Instant;
 import java.util.List;
@@ -34,7 +35,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** 维护动态计划的尝试与交接，复用运行仓库的实例与终态事务。*/
+/** 维护动态计划的尝试与交接，复用运行仓库的实例与终态事务。 */
 @Service
 public class WorkflowExecutionService {
   private final RunRecordService runs;
@@ -68,7 +69,7 @@ public class WorkflowExecutionService {
     this.supplements = supplements;
   }
 
-  /** 固定图上的认领、尝试、实例和多来源交接一起提交。*/
+  /** 固定图上的认领、尝试、实例和多来源交接一起提交。 */
   public ClaimedNode claimWorkflowNode(String runId, UUID version, UUID nodeId, String goal) {
     return tx.execute(
         ignored -> {
@@ -133,7 +134,8 @@ public class WorkflowExecutionService {
   /**
    * 认领系统检查节点：节点、检查记录和输入引用在同一事务提交。
    *
-   * <p>不创建 Agent 实例或尝试，因此模型和工具调用为零；依赖结果仍从原权威表读取，检查冻结本次判定所见的来源版本。   */
+   * <p>不创建 Agent 实例或尝试，因此模型和工具调用为零；依赖结果仍从原权威表读取，检查冻结本次判定所见的来源版本。
+   */
   public ClaimedCheck claimWorkflowCheck(String runId, UUID version, UUID nodeId) {
     return tx.execute(
         ignored -> {
@@ -187,7 +189,7 @@ public class WorkflowExecutionService {
         });
   }
 
-  /** 输入摘要只包含来源标识与结果摘要，用于发现检查后来源被改写。*/
+  /** 输入摘要只包含来源标识与结果摘要，用于发现检查后来源被改写。 */
   private static String inputsFingerprint(PlanNode node, List<WorkflowInput> inputs) {
     var fields = new StringBuilder("workflow-check-inputs-v1|").append(node.id());
     for (var input :
@@ -313,7 +315,7 @@ public class WorkflowExecutionService {
         EventRef.empty().withPlan(node.planVersionId()).withNode(node.id()));
   }
 
-  /** 仅接受已结算的限流拒绝；带有工具调用历史的尝试原样结束。*/
+  /** 仅接受已结算的限流拒绝；带有工具调用历史的尝试原样结束。 */
   public boolean requeueAfterRateLimit(String runId, UUID version, String agentId) {
     return Boolean.TRUE.equals(
         tx.execute(
@@ -350,7 +352,7 @@ public class WorkflowExecutionService {
             }));
   }
 
-  /** 转移已授权的直接依赖结果及来源，可追溯到安全恢复中复用的实例。*/
+  /** 转移已授权的直接依赖结果及来源，可追溯到安全恢复中复用的实例。 */
   public record WorkflowInput(
       PlanNodeKind kind,
       String key,
@@ -373,7 +375,7 @@ public class WorkflowExecutionService {
         throw new IllegalArgumentException("系统检查交接缺少检查标识或混入 Agent 尝试。");
     }
 
-    /** 检查输入需要区分来源类型，Agent 结果沿用原有字段。*/
+    /** 检查输入需要区分来源类型，Agent 结果沿用原有字段。 */
     public SystemCheckInput toCheckInput() {
       return new SystemCheckInput(
           dependencyNodeId,
@@ -392,7 +394,8 @@ public class WorkflowExecutionService {
   /**
    * 消费系统检查结果前再次核对当前工作区版本。
    *
-   * <p>只复核直接依赖中的检查证据。Bug 复现检查在写节点前仍应保持一致；回归检查在审查前必须对应当前代码。证据缺失、归属不符或工作区变化时拒绝启动下游节点，并保留原检查记录。 */
+   * <p>只复核直接依赖中的检查证据。Bug 复现检查在写节点前仍应保持一致；回归检查在审查前必须对应当前代码。证据缺失、归属不符或工作区变化时拒绝启动下游节点，并保留原检查记录。
+   */
   private void requireCurrentCheckEvidence(String runId, List<WorkflowInput> upstream) {
     if (upstream.stream().noneMatch(input -> input.kind() == PlanNodeKind.SYSTEM_CHECK)) return;
     var task = runs.taskDefinition(runs.runSnapshot(runId).taskId().toString());
@@ -441,7 +444,7 @@ public class WorkflowExecutionService {
         });
   }
 
-  /** 结算节点与后续安全边界；最后一个节点与运行终态一起提交。*/
+  /** 结算节点与后续安全边界；最后一个节点与运行终态一起提交。 */
   public boolean finishWorkflowNode(
       String runId,
       UUID version,
@@ -460,6 +463,33 @@ public class WorkflowExecutionService {
                           node.status() == PlanNodeStatus.RUNNING
                               && UUID.fromString(agentId).equals(node.agentId())))
                 throw new IllegalStateException("运行中没有可结算的该节点实例。");
+              var running =
+                  nodes.stream()
+                      .filter(node -> UUID.fromString(agentId).equals(node.agentId()))
+                      .findFirst()
+                      .orElseThrow();
+              // P07：开发节点没有写出全部必需文件时不能把节点算作完成，也不能放行依赖它的审查。
+              var missing = missingRequiredFiles(runId, running.id(), agentId);
+              if (!missing.isEmpty()) {
+                runs.finishAgent(agentId, InvocationStatus.FAILED, result);
+                recordAttemptStop(agentId, StopCause.OUTPUT_MISSING);
+                String reason =
+                    running.label()
+                        + " 缺少必需产出："
+                        + String.join("、", missing)
+                        + "；已保存的变更和证据保留，等待人工核对。";
+                runs.update(
+                    runId,
+                    RunStatus.BLOCKED,
+                    reason,
+                    result,
+                    rounds,
+                    tools,
+                    elapsed,
+                    StopCause.OUTPUT_MISSING);
+                runs.event(runId, EventType.BLOCKED, reason);
+                return true;
+              }
               runs.finishAgent(agentId, InvocationStatus.COMPLETED, result);
               var updated = plans.find(runId);
               if (updated.stream()
@@ -473,6 +503,26 @@ public class WorkflowExecutionService {
               recovery.saveBoundary(runId, plans.workflowPlan(runId), updated, elapsed);
               return false;
             }));
+  }
+
+  /**
+   * 对比节点规格的必需文件与该实例成功写入回执的路径。
+   *
+   * <p>只认已完成的 WORKSPACE_WRITE 调用；缺失时节点失败、运行阻塞，已写入的文件和回执保留。
+   */
+  private List<String> missingRequiredFiles(String runId, UUID nodeId, String agentId) {
+    var spec = plans.specsByNode(runId).get(nodeId);
+    if (spec == null || spec.requiredFiles().isEmpty()) return List.of();
+    var produced = new java.util.HashSet<String>();
+    for (var tool : runs.tools(runId)) {
+      if (!agentId.equals(String.valueOf(tool.get("AGENT_ID")))
+          || !"COMPLETED".equals(String.valueOf(tool.get("STATUS")))
+          || !ToolKind.WORKSPACE_WRITE.recordName().equals(String.valueOf(tool.get("TOOL_NAME")))
+          || tool.get("RESOURCE_VERSION") == null) continue;
+      produced.addAll(
+          ResourceVersion.decode(String.valueOf(tool.get("RESOURCE_VERSION"))).keySet());
+    }
+    return spec.requiredFiles().stream().filter(path -> !produced.contains(path)).toList();
   }
 
   private void completeRun(String runId, int nodeCount, int rounds, int tools, long elapsed) {
@@ -588,10 +638,7 @@ public class WorkflowExecutionService {
     int changed = planRows.approveIfPending(version.toString(), runId, RunRecordService.now());
     if (changed != 1) throw new IllegalStateException("当前运行没有待确认的该计划版本。");
     runs.event(
-        runId,
-        EventType.PLAN_APPROVED,
-        "用户确认了工作流计划 " + version + "。",
-        EventRef.plan(version));
+        runId, EventType.PLAN_APPROVED, "用户确认了工作流计划 " + version + "。", EventRef.plan(version));
   }
 
   public List<WorkflowAttempt> workflowAttempts(String runId) {
@@ -610,17 +657,25 @@ public class WorkflowExecutionService {
         .toList();
   }
 
-  /** 按计划顺序返回系统检查尝试。*/
+  /** 按计划顺序返回系统检查尝试。 */
   public List<WorkflowCheck> workflowChecks(String runId) {
     var inputsByCheck = new java.util.LinkedHashMap<UUID, List<WorkflowCheck.Input>>();
     for (var row : records.findCheckInputs(runId)) {
+      var kind = PlanNodeKind.valueOf(row.kind());
+      String body = kind == PlanNodeKind.SYSTEM_CHECK ? row.checkSummary() : row.agentResult();
+      boolean sourceMatches =
+          body != null && AgentAssemblySnapshot.sha256(body).equals(row.sha256());
       inputsByCheck
           .computeIfAbsent(UUID.fromString(row.checkId()), key -> new java.util.ArrayList<>())
           .add(
               new WorkflowCheck.Input(
-                  UUID.fromString(row.dependencyId()), PlanNodeKind.valueOf(row.kind()),
-                  nullableUuid(row.sourceAttempt()), nullableUuid(row.sourceCheck()),
-                  UUID.fromString(row.sourceRun()), row.sha256()));
+                  UUID.fromString(row.dependencyId()),
+                  kind,
+                  nullableUuid(row.sourceAttempt()),
+                  nullableUuid(row.sourceCheck()),
+                  UUID.fromString(row.sourceRun()),
+                  row.sha256(),
+                  sourceMatches ? body : null));
     }
     var task = runs.taskDefinition(runs.runSnapshot(runId).taskId().toString());
     String fingerprint = currentWorkspaceFingerprint(task.workspaceId());
@@ -650,6 +705,11 @@ public class WorkflowExecutionService {
         .toList();
   }
 
+  public List<WorkflowExecutionRepository.CheckReceipt> workflowCheckReceipts(
+      String runId, UUID nodeId) {
+    return records.findCheckReceipts(runId, nodeId.toString());
+  }
+
   private String currentWorkspaceFingerprint(String workspaceId) {
     if (workspaceId == null) return null;
     try {
@@ -677,11 +737,13 @@ public class WorkflowExecutionService {
                     UUID.fromString(row.receiverNode()),
                     UUID.fromString(row.receiverAgent()),
                     Instant.parse(row.acceptedAt()),
+                    row.sourceRunId() == null ? null : UUID.fromString(row.sourceRunId()),
+                    row.sourceResult(),
                     records.findAcceptedToolEvidence(row.receiverAttempt(), row.dependencyId())))
         .toList();
   }
 
-  /** 动态工作流的停止事实来自尝试终态和事件，无需构造旧版角色交接。*/
+  /** 动态工作流的停止事实来自尝试终态和事件，无需构造旧版角色交接。 */
   public void finishWorkflowStoppedRun(
       String runId,
       UUID agentId,
@@ -701,7 +763,7 @@ public class WorkflowExecutionService {
             recordAttemptStop(agentId.toString(), cause);
           }
           // 停止发生在检查结算前时，保留检查记录并标明结果未知，不能当作通过。
-records.interruptChecks(runId, RunRecordService.now());
+          records.interruptChecks(runId, RunRecordService.now());
 
           runs.settleStoppedRun(runId, cause, reason, rounds, tools, elapsed);
         });

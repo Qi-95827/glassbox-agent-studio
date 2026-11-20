@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, App as AntApp, Button, ConfigProvider, Empty, Input, InputNumber, Modal, Select, Spin, Tag, Tooltip, Checkbox } from 'antd';
+import { Alert, App as AntApp, Button, ConfigProvider, Empty, Input, InputNumber, Select, Spin, Tag, Tooltip, Checkbox } from 'antd';
 import { AppstoreOutlined, ApartmentOutlined, ArrowRightOutlined, CheckCircleFilled, ClockCircleOutlined, CodeOutlined, ControlOutlined, DownOutlined, ExperimentOutlined, FileTextOutlined, LoadingOutlined, PlusOutlined, SafetyCertificateOutlined, StopOutlined, ThunderboltFilled } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import './main.css';
@@ -13,16 +13,24 @@ import RoleBudgetEditor from './features/agents/RoleBudgetEditor.jsx';
 import ToolBudgetEditor from './features/tools/ToolBudgetEditor.jsx';
 import NodeBudgetEditor from './features/workflows/NodeBudgetEditor.jsx';
 import ExecutionFlowPanel from './features/workflows/ExecutionFlowPanel.jsx';
-import { Button as MaterialButton, Stack, Typography } from '@mui/material';
+import { Box, Chip, CssBaseline, Paper, Stack, Typography } from '@mui/material';
+import { ThemeProvider } from '@mui/material/styles';
+import WorkbenchShell, { workbenchTheme } from './layout/WorkbenchShell.jsx';
+import WorkbenchDialog from './layout/WorkbenchDialog.jsx';
+import TaskNavigator, { WorkbenchOverview } from './layout/TaskNavigator.jsx';
 import { TraceSection } from './features/workflows/RunTraceInspector.jsx';
 import EntryRoutePreview from './features/workflows/EntryRoutePreview.jsx';
+import TaskIdeaDialog from './features/workflows/TaskIdeaDialog.jsx';
+import PlanCandidateDialog from './features/workflows/PlanCandidateDialog.jsx';
+import MyAgentsPage from './features/agents/MyAgentsPage.jsx';
+import AuthGate, { useAuth } from './features/auth/AuthGate.jsx';
 import DatasetManager from './features/evaluation/DatasetManager.jsx';
 import AuthorizedFilePicker from './features/workspaces/AuthorizedFilePicker.jsx';
 import WorkspaceDeliveryPanel from './features/workspaces/WorkspaceDeliveryPanel.jsx';
 import { bugQuickEntryDefaults, workflowCompatible } from './features/bug/bugEntryDefaults.js';
 
 const states = { PENDING:'排队中', RUNNING:'运行中', CANCELLING:'正在取消', PAUSED:'已暂停', COMPLETED:'已完成', REUSED:'复用历史结果', PASSED:'已通过', FAILED:'失败', CANCELLED:'已取消', LIMITED:'已超限', BLOCKED:'待处理', INTERRUPTED:'已中断', SKIPPED:'未执行' };
-const stopCauses = { USER_CANCELLED:'用户取消', INTERRUPTED:'执行中断', TIME_LIMIT:'运行时间上限', MODEL_ROUND_LIMIT:'模型调用总轮次上限', AGENT_MODEL_LIMIT:'单 Agent 模型调用上限', ROLE_MODEL_LIMIT:'角色模型调用上限', NODE_MODEL_LIMIT:'节点模型调用上限', MODEL_RATE_LIMIT:'模型服务限流', TOKEN_USAGE_UNKNOWN:'Token 用量未知', TOKEN_LIMIT:'已报告 Token 上限', COST_LIMIT:'费用硬预算不足', TOOL_CALL_LIMIT:'工具调用总次数上限', AGENT_TOOL_LIMIT:'单 Agent 工具调用上限', ROLE_TOOL_LIMIT:'角色工具调用上限', NODE_TOOL_LIMIT:'节点工具调用上限', PER_TOOL_LIMIT:'单工具调用上限', SPECIFIC_TOOL_LIMIT:'指定工具调用上限', REPEATED_TOOL_LIMIT:'重复工具调用上限', TOOL_EFFECT_UNKNOWN:'工具写入结果未知', RECOVERY_PRECONDITION_FAILED:'恢复前置条件不满足', UNCLASSIFIED_FAILURE:'未分类执行失败' };
+const stopCauses = { USER_CANCELLED:'用户取消', INTERRUPTED:'执行中断', TIME_LIMIT:'运行时间上限', MODEL_ROUND_LIMIT:'模型调用总轮次上限', AGENT_MODEL_LIMIT:'单 Agent 模型调用上限', ROLE_MODEL_LIMIT:'角色模型调用上限', NODE_MODEL_LIMIT:'节点模型调用上限', MODEL_RATE_LIMIT:'模型服务限流', TOKEN_USAGE_UNKNOWN:'Token 用量未知', TOKEN_LIMIT:'已报告 Token 上限', COST_LIMIT:'费用硬预算不足', TOOL_CALL_LIMIT:'工具调用总次数上限', AGENT_TOOL_LIMIT:'单 Agent 工具调用上限', ROLE_TOOL_LIMIT:'角色工具调用上限', NODE_TOOL_LIMIT:'节点工具调用上限', PER_TOOL_LIMIT:'单工具调用上限', SPECIFIC_TOOL_LIMIT:'指定工具调用上限', REPEATED_TOOL_LIMIT:'重复工具调用上限', TOOL_EFFECT_UNKNOWN:'工具写入结果未知', CHECK_FAILED:'系统检查未通过', OUTPUT_MISSING:'缺少必需产出', RECOVERY_PRECONDITION_FAILED:'恢复前置条件不满足', UNCLASSIFIED_FAILURE:'未分类执行失败' };
 const entryNames = { GENERAL:'通用目标', REQUIREMENT:'需求', DESIGN:'概要设计', CODE:'代码', TEST:'测试', BUG:'Bug' };
 const planRoles = { ANALYST:'分析 Agent', CODER:'开发 Agent', REVIEWER:'审查 Agent' };
 const skillNames = { ANALYZE_EVIDENCE:'问题分析', AUTHORIZED_EDIT:'受限代码修改', REVIEW_EVIDENCE:'证据审查' };
@@ -32,16 +40,22 @@ const comparisonNames = { UNCHANGED_PASS:'均通过', UNCHANGED_FAIL:'均失败'
 const eventNames = { TASK_CREATED:'创建任务', PLAN_APPROVED:'确认计划', RUN_STARTED:'开始运行', DELEGATED:'分配子任务', AGENT_STARTED:'启动 Agent', NODE_RETRY_SCHEDULED:'安排节点重试', MODEL_STARTED:'模型调用', MODEL_FINISHED:'模型返回', TOOL_STARTED:'调用工具', TOOL_FINISHED:'工具返回', TOOL_REJECTED:'工具输入被拒绝', HANDOFF:'结果交接', HANDOFF_ACCEPTED:'接收实例启动', CHECK_STARTED:'开始系统检查', CHECK_FINISHED:'系统检查结果', CHECKPOINT_SAVED:'保存检查点', CHECKPOINT_SKIPPED:'未生成分析后检查点', RUN_COMPLETED:'运行完成', CANCEL_REQUESTED:'请求取消', PAUSE_REQUESTED:'请求暂停', PAUSED:'已暂停', RESUMED:'继续执行', CANCELLED:'运行取消', FAILED:'执行失败', LIMITED:'达到限制', INTERRUPTED:'运行中断', SUPPLEMENT_REQUESTED:'等待补充信息', SUPPLEMENT_APPLIED:'补充已应用', SUPPLEMENT_REJECTED:'补充被拒绝', CONTINUED_AFTER_SUPPLEMENT:'补充后继续', RECOVERY_STARTED:'恢复运行', MEMORY_LOADED:'装配项目背景', TEST_STARTED:'开始测试', TEST_FINISHED:'测试结果', BLOCKED:'等待处理' };
 const dateTime = s => s ? new Date(s).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
 const clock = s => s ? new Date(s).toLocaleTimeString('zh-CN',{ hour12:false }) : '—';
-async function api(url, options = {}) { const r = await fetch('/api'+url, { headers:{'Content-Type':'application/json'}, ...options }); const body = await r.json(); if (!r.ok) throw new Error(body.message || '请求失败'); return body; }
+async function ensureCsrf(){ if(globalThis.__workbenchCsrf) return; const r = await fetch('/api/auth/csrf'); if(!r.ok) throw new Error('无法初始化 CSRF token'); const body = await r.json(); globalThis.__workbenchCsrf = body.token; }
+async function api(url, options = {}) { const method=(options.method || 'GET').toUpperCase(); const mutating=!['GET','HEAD'].includes(method); const headers={...(options.headers||{})}; if(options.body!=null) headers['Content-Type']='application/json'; if(mutating){ await ensureCsrf(); if(globalThis.__workbenchCsrf) headers['X-XSRF-TOKEN']=globalThis.__workbenchCsrf; } let r = await fetch('/api'+url, { ...options, headers }); let body = await r.json().catch(()=>({})); if(mutating && r.status===403 && String(body.message||'').includes('请求校验失败')){ globalThis.__workbenchCsrf=null; await ensureCsrf(); headers['X-XSRF-TOKEN']=globalThis.__workbenchCsrf; r = await fetch('/api'+url, { ...options, headers }); body = await r.json().catch(()=>({})); } if (!r.ok) throw new Error(body.message || '请求失败'); return body; }
 function Status({ value, label }) { return <span className={'status status-'+(value || 'NONE').toLowerCase()}><i />{label || states[value] || value || '未开始'}</span>; }
 function taskScopes(task) { if(!task)return []; try {const parsed=JSON.parse(task.FILE_SCOPES_JSON||'[]');if(!Array.isArray(parsed)||parsed.some(p=>typeof p!=='string'))return null;return parsed.length?parsed:(task.FILE_SCOPE?[task.FILE_SCOPE]:[])}catch{return null} }
 function resourcesText(r) { if(!r)return '没有关联运行'; if(!r.available)return '关联运行数据不可用'; return `记录耗时 ${r.recordedDurationMs==null?'未知':`${r.recordedDurationMs} 毫秒`}；模型 ${r.modelCalls} 次，工具 ${r.toolCalls} 次；输入 Token 已知 ${r.knownInputTokens??'无记录'}、未知 ${r.unknownInputCalls} 次；输出 Token 已知 ${r.knownOutputTokens??'无记录'}、未知 ${r.unknownOutputCalls} 次`; }
 
 function Workspace() {
   const { message } = AntApp.useApp();
+  const { user, logout } = useAuth();
+  const [section, setSection] = useState('workspace');
+  const [ideaOpen, setIdeaOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [planReadOnly, setPlanReadOnly] = useState(false);
   const [tasks,setTasks]=useState([]), [current,setCurrent]=useState(null), [detail,setDetail]=useState(null), [overview,setOverview]=useState(null), [modal,setModal]=useState(false), [sending,setSending]=useState(false), [connected,setConnected]=useState(true), [showArchived,setShowArchived]=useState(false);
   const [executionView,setExecutionView]=useState(null), [lastSyncedAt,setLastSyncedAt]=useState(null);
-  const [goal,setGoal]=useState('分析模拟问题并整理下一步建议'), [model,setModel]=useState('mock'), [scenario,setScenario]=useState('normal'), [rounds,setRounds]=useState(8), [tools,setTools]=useState(5), [seconds,setSeconds]=useState(30), [perTool,setPerTool]=useState(2), [tokenLimit,setTokenLimit]=useState(null), [identicalLimit,setIdenticalLimit]=useState(null);
+  const [goal,setGoal]=useState('分析模拟问题并整理下一步建议'), [model,setModel]=useState('mock'), [scenario,setScenario]=useState('normal'), [rounds,setRounds]=useState(null), [tools,setTools]=useState(null), [seconds,setSeconds]=useState(null), [perTool,setPerTool]=useState(null), [tokenLimit,setTokenLimit]=useState(null), [identicalLimit,setIdenticalLimit]=useState(null);
   const [entryKind,setEntryKind]=useState('GENERAL');
   const [entryPolicies,setEntryPolicies]=useState([]);
   const [workflowTemplate,setWorkflowTemplate]=useState(null), [reviewPlan,setReviewPlan]=useState(false), [approvingPlan,setApprovingPlan]=useState(false);
@@ -94,7 +108,7 @@ function Workspace() {
             next.events.forEach(event=>{
               if(known.has(event.id))return;
               known.add(event.id);
-              events.push({ID:event.id,RUN_SEQ:event.runSeq,EVENT_TYPE:event.type,MESSAGE:event.message,CREATED_AT:event.occurredAt,NODE_ID:event.nodeId,ATTEMPT_ID:event.attemptId,MODEL_CALL_ID:event.modelCallId,TOOL_CALL_ID:event.toolCallId,REASON_CODE:event.reasonCode});
+              events.push({ID:event.id,RUN_SEQ:event.runSeq,EVENT_TYPE:event.type,MESSAGE:event.message,CREATED_AT:event.occurredAt,PLAN_VERSION_ID:event.planVersionId,NODE_ID:event.nodeId,ATTEMPT_ID:event.attemptId,AGENT_ID:event.agentId,CHECK_ID:event.checkId,MODEL_CALL_ID:event.modelCallId,TOOL_CALL_ID:event.toolCallId,REASON_CODE:event.reasonCode});
             });
             return next.nextCursor;
           };
@@ -108,7 +122,7 @@ function Workspace() {
           }
         }
         setTasks(ts);setOverview(ov);setMetrics(stats);setSkillBindings(bindings);setMemoryLoad(loadedMemory);setToolGrants(grants);setAgentSessions(sessions);setRunChecks(checks);setConnected(true);setLastSyncedAt(new Date().toISOString());
-        if(run)setDetail({...run,events});
+        if(run)setDetail({...run,events:[...events]});
         if(view)setExecutionView(view);
         if(!current&&ts.length)setCurrent(ts[0].RUN_ID);
       }catch{if(active)setConnected(false)}finally{inFlight=false}
@@ -124,6 +138,7 @@ function Workspace() {
   const cancelEvaluation=async()=>{try{await api(`/evaluations/${evalId}/cancel`,{method:'POST'});message.info('已请求停止评测')}catch(e){message.error(e.message)}};
   const compareEvaluations=async()=>{if(!baselineId||!evalId||baselineId===evalId){message.warning('请选择两个不同的评测批次');return}try{const q=new URLSearchParams({baseline:baselineId,candidate:evalId});setEvalComparison(await api(`/evaluations/compare?${q}`))}catch(e){message.error(e.message)}};
   const selectedWorkflow = workflowTemplate;
+  const hasPlannableRoute = !!selectedWorkflow || ['CODE', 'TEST', 'REQUIREMENT', 'DESIGN'].includes(entryKind);
   const workflowState = {
     hasWorkspace: !!taskWorkspace,
     hasBug: !!taskBugId || entryKind === 'BUG',
@@ -136,7 +151,7 @@ function Workspace() {
   const eligibleForWriteWorkflow = workflowCompatible('workspace-change', workflowState);
   const eligibleForBugFixWorkflow = workflowCompatible('bug-fix', workflowState);
   const workflowMismatch = !!selectedWorkflow && !workflowCompatible(selectedWorkflow, workflowState);
-  const create=async()=>{if(workflowMismatch){message.warning('当前任务设置与所选工作流不兼容');return}if(!goal.trim()){message.warning('请填写任务目标');return}setSending(true);try{const x=await api('/tasks',{method:'POST',body:JSON.stringify({goal:goal.trim(),entryKind,workflowTemplate:selectedWorkflow,reviewPlan:!!selectedWorkflow&&reviewPlan,modelMode:model,scenario,maxRounds:rounds,maxTools:tools,maxPerTool:perTool,maxReportedTokens:tokenLimit,maxIdenticalTools:identicalLimit,maxAgentRounds,maxAgentTools,roleBudgets,toolBudgets,nodeBudgets:nodeBudgetsByTemplate[selectedWorkflow]??null,maxSeconds:seconds,workspaceId:taskWorkspace||null,fileScope:null,fileScopes:taskWorkspace?taskFileScope.split('\n').map(x=>x.trim()).filter(Boolean):null,directoryScopes:taskWorkspace?taskDirectories.split('\n').map(x=>x.trim()).filter(Boolean):null,excludedPaths:taskWorkspace?taskExclusions.split('\n').map(x=>x.trim()).filter(Boolean):null,maxCostMicros:taskMaxCost,writeEnabled:taskWorkspace&&taskWrite,bugId:taskBugId,memoryEnabled:!!taskWorkspace&&taskMemory,constraints:taskConstraints.split('\n').map(x=>x.trim()).filter(Boolean),acceptanceCriteria:taskAcceptance.split('\n').map(x=>x.trim()).filter(Boolean)})});setCurrent(x.runId);setDetail(null);setExecutionView(null);setModal(false);setTaskBugId(null);message.success('任务已创建')}catch(e){message.error(e.message)}finally{setSending(false)}};
+  const create=async()=>{if(workflowMismatch){message.warning('当前任务设置与所选工作流不兼容');return}if(!goal.trim()){message.warning('请填写任务目标');return}setSending(true);try{const x=await api('/tasks',{method:'POST',body:JSON.stringify({goal:goal.trim(),entryKind,workflowTemplate:selectedWorkflow,reviewPlan:hasPlannableRoute&&reviewPlan,modelMode:model,scenario,maxRounds:rounds,maxTools:tools,maxPerTool:perTool,maxReportedTokens:tokenLimit,maxIdenticalTools:identicalLimit,maxAgentRounds,maxAgentTools,roleBudgets,toolBudgets,nodeBudgets:nodeBudgetsByTemplate[selectedWorkflow]??null,maxSeconds:seconds,workspaceId:taskWorkspace||null,fileScope:null,fileScopes:taskWorkspace?taskFileScope.split('\n').map(x=>x.trim()).filter(Boolean):null,directoryScopes:taskWorkspace?taskDirectories.split('\n').map(x=>x.trim()).filter(Boolean):null,excludedPaths:taskWorkspace?taskExclusions.split('\n').map(x=>x.trim()).filter(Boolean):null,maxCostMicros:taskMaxCost,writeEnabled:taskWorkspace&&taskWrite,bugId:taskBugId,memoryEnabled:!!taskWorkspace&&taskMemory,constraints:taskConstraints.split('\n').map(x=>x.trim()).filter(Boolean),acceptanceCriteria:taskAcceptance.split('\n').map(x=>x.trim()).filter(Boolean)})});selectRun(x.runId);setModal(false);setTaskBugId(null);message.success('任务已创建')}catch(e){message.error(e.message)}finally{setSending(false)}};
   const approvePlan = async (runId, planId) => {
     setApprovingPlan(true);
     try {
@@ -154,11 +169,38 @@ function Workspace() {
   const returnHandover=async()=>{try{const h=await api(`/runs/${current}/handover/return`,{method:'POST',body:JSON.stringify({note:'用户交还工作区'})});message.success(h.evidenceInvalidated?'已交还；代码变化，旧测试与审批失效':'已交还，代码版本未变化')}catch(e){message.error(e.message)}};
   const archiveTask=async()=>{if(!task?.ID)return;try{await api(`/tasks/${task.ID}/archive`,{method:'POST',body:JSON.stringify({archived:!task.ARCHIVED_AT})});setTasks(await api('/tasks'));message.success(task.ARCHIVED_AT?'已取消归档':'任务已归档，运行和证据保留')}catch(e){message.error(e.message)}};
   const cancel=async()=>{try{await api(`/runs/${current}/cancel`,{method:'POST'});message.info('已请求取消')}catch(e){message.error(e.message)}};
-  const recover=async id=>{try{const x=await api(`/runs/${current}/recover/${id}`,{method:'POST'});setCurrent(x.runId);setDetail(null);setExecutionView(null);message.success('已创建恢复运行')}catch(e){message.error(e.message)}};
+  const recover=async id=>{try{const x=await api(`/runs/${current}/recover/${id}`,{method:'POST'});selectRun(x.runId);message.success('已创建恢复运行')}catch(e){message.error(e.message)}};
   const submitSupplement=async(requestId,expectedTaskVersion,path,content)=>{try{await api(`/runs/${current}/supplements/${requestId}`,{method:'POST',body:JSON.stringify({expectedTaskVersion,path,content})});message.success('补充已接受；运行将从安全边界继续')}catch(e){message.error(e.message)}};
-  const openWorkspaces=async()=>{try{setWorkspaceList(await api('/workspaces'));setWorkspaceOpen(true)}catch(e){message.error(e.message)}};
+  const openWorkspaces = async (workspaceId) => {
+    try {
+      const list = await api('/workspaces');
+      setWorkspaceList(list);
+      if (workspaceId) await loadWorkspace(workspaceId, list);
+      setWorkspaceOpen(true);
+    } catch (error) {
+      message.error(error.message);
+    }
+  };
   const createWorkspace=async()=>{try{const w=await api('/workspaces',{method:'POST',body:JSON.stringify({repositoryPath:repoPath,baseBranch})});setWorkspaceList(await api('/workspaces'));setSelectedWorkspace(w);setWorkspaceStatus(await api(`/workspaces/${w.id}/status`));message.success('独立工作区已创建')}catch(e){message.error(e.message)}};
-  const selectWorkspace=async id=>{try{setSelectedWorkspace(workspaceList.find(w=>w.id===id));setWorkspaceStatus(await api(`/workspaces/${id}/status`));setApprovals(await api(`/workspaces/${id}/approvals`));setFileContent(null)}catch(e){message.error(e.message)}};
+  const loadWorkspace = async (id, list) => {
+    const workspace = list.find(row => row.id === id);
+    if (!workspace) throw new Error('找不到与本次运行关联的工作区。');
+    const [status, reviews] = await Promise.all([
+      api(`/workspaces/${id}/status`), api(`/workspaces/${id}/approvals`)
+    ]);
+    setSelectedWorkspace(workspace);
+    setWorkspaceStatus(status);
+    setApprovals(reviews);
+    setFilePath('');
+    setFileContent(null);
+  };
+  const selectWorkspace = async (id) => {
+    try {
+      await loadWorkspace(id, workspaceList);
+    } catch (error) {
+      message.error(error.message);
+    }
+  };
   const loadMemories=async()=>{try{setMemories(await api(`/workspaces/${selectedWorkspace.id}/memories`));setEditingMemory(null);setMemoryText('');setMemorySearch('');setMemoryFiltered(false);setMemoryOpen(true)}catch(e){message.error(e.message)}};
   const searchMemories=async()=>{try{const query=new URLSearchParams({q:memorySearch});setMemories(await api(`/workspaces/${selectedWorkspace.id}/memories/search?${query}`));setMemoryFiltered(true)}catch(e){message.error(e.message)}};
   const saveMemory=async()=>{try{const url=`/workspaces/${selectedWorkspace.id}/memories`+(editingMemory?`/${editingMemory.id}`:'');await api(url,{method:editingMemory?'PUT':'POST',body:JSON.stringify({category:memoryCategory,content:memoryText,version:editingMemory?.version})});await loadMemories();message.success('项目背景已保存')}catch(e){message.error(e.message)}};
@@ -174,30 +216,95 @@ function Workspace() {
   const checkBug=async kind=>{if(!bugWorkspace){message.warning('请先选择工作区');return}setBugRunning(true);try{setBugResult(await api('/bugs/MOCK-PY-001/checks',{method:'POST',body:JSON.stringify({workspaceId:bugWorkspace,kind})}))}catch(e){message.error(e.message)}finally{setBugRunning(false)}};
   const run=detail?.run, task=detail?.task, taskFiles=taskScopes(detail?.task), live=['PENDING','RUNNING','PAUSED'].includes(run?.STATUS);
   const short=s=>s?.slice(0,8) || '—';
-  const visibleTasks=tasks.filter(t=>showArchived||!t.ARCHIVED_AT);
   const activePolicy=entryPolicies.find(p=>p.kind===entryKind);
-  return <div className="shell">
-    <aside className="rail"><div className="brand"><div className="brand-mark"><ApartmentOutlined /></div><div><strong>Agent Studio</strong><small>开发工作空间</small></div></div>
-      <div className="nav-caption">工作区</div><a className="nav-item selected" href="#workspace"><AppstoreOutlined /><span>任务工作台</span></a><a className="nav-item" href="#overview"><ControlOutlined /><span>平台概况</span></a>
-      <div className="nav-caption secondary-nav">资源</div><button className="nav-item nav-button" onClick={()=>setAgentCatalogOpen(true)}><ApartmentOutlined /><span>Agent 角色目录</span></button><button className="nav-item nav-button" onClick={openWorkspaces}><CodeOutlined /><span>代码工作区</span></button><button className="nav-item nav-button" onClick={openBug}><ExperimentOutlined /><span>模拟 Bug 验证</span></button><button className="nav-item nav-button" onClick={()=>setEvalOpen(true)}><ExperimentOutlined /><span>评测中心</span></button><button className="nav-item nav-button" onClick={()=>setMonitorOpen(true)}><ControlOutlined /><span>运行监控</span></button>
-      <div className="rail-bottom"><div className="local-dot"/><div><strong>本地工作空间</strong><small>单人使用 · 0.1</small></div></div>
-    </aside>
-    <main className="main"><div className="topbar"><div className="breadcrumb">工作空间 <span>/</span> <strong>任务工作台</strong></div><div className="top-right"><span className={'connection '+(connected?'':'offline')}><i />{connected?'服务运行中':'连接中断'}{lastSyncedAt?` · 同步 ${clock(lastSyncedAt)}`:''}</span><div className="profile">Q</div></div></div>
-      <div className="content" id="workspace">
-      <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
-        <Typography component="h1" variant="h5" sx={{ fontWeight: 650, m: 0 }}>任务工作台</Typography>
-        <MaterialButton variant="contained" startIcon={<PlusOutlined />} onClick={()=>{api('/workspaces').then(setWorkspaceList).catch(()=>{});setModal(true)}} sx={{ flexShrink: 0 }}>新建任务</MaterialButton>
-      </Stack>
-      <div className="work-grid"><section className="panel task-panel"><div className="panel-heading"><div><h2>任务列表</h2><p>查看和管理你的任务</p></div><span className="count">{visibleTasks.length}</span><Button size="small" onClick={()=>setShowArchived(v=>!v)}>{showArchived?'隐藏归档':'显示归档'}</Button></div><div className="task-list">{visibleTasks.length===0?<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />:visibleTasks.map(t=><button className={'task-item '+(t.RUN_ID===current?'task-active':'')} key={t.ID} onClick={()=>{setCurrent(t.RUN_ID);setDetail(null);setExecutionView(null)}}><div className="task-symbol"><FileTextOutlined /></div><div className="task-copy"><strong>{t.GOAL}</strong><div><Status value={t.STATUS} label={t.PLAN_REVIEW_PENDING ? '待确认计划' : undefined}/><span>{dateTime(t.CREATED_AT)}</span>{t.ARCHIVED_AT&&<span>已归档</span>}</div></div><ArrowRightOutlined className="task-arrow" /></button>)}</div></section>
-      <section className="panel run-panel"><div className="panel-heading"><div><h2>运行详情</h2></div>{run&&<Status value={run.STATUS} label={run.STATUS === 'PENDING' && detail.workflowPlan?.reviewRequired && !detail.workflowPlan.approvedAt ? '待确认计划' : undefined}/>}</div>{!current?<div className="blank"><div className="blank-icon"><ApartmentOutlined /></div><h3>开始你的第一个任务</h3><p>创建任务后，这里会展示 Agent 的执行过程。</p><Button type="primary" icon={<PlusOutlined />} onClick={()=>{api('/workspaces').then(setWorkspaceList).catch(()=>{});setModal(true)}}>新建任务</Button></div>:!detail?<div className="blank"><Spin /></div>:<><div className="run-heading"><div style={{ minWidth: 0 }}><div className="run-label">当前任务 <span>#{short(run.ID)}</span></div><Typography component="h3" variant="h6" noWrap title={task.GOAL} sx={{ m: 0, maxWidth: "100%" }}>{task.GOAL.split(/[。！？\n]/, 1)[0]}</Typography><div className="run-meta"><span><ClockCircleOutlined /> {dateTime(run.CREATED_AT)}</span><span><ThunderboltFilled /> {task.MODEL_MODE==='deepseek'?'DeepSeek Flash':'模拟模型'}</span><span>入口：{entryNames[task.ENTRY_KIND]||task.ENTRY_KIND||'通用目标'}</span><span><SafetyCertificateOutlined /> {detail.workflowPlan?.scope === 'WORKSPACE_WRITE_AUTHORIZED' ? '授权文件读写' : detail.workflowPlan?.scope === 'WORKSPACE_READ_ONLY' ? '授权文件只读' : detail.workflowPlan ? '无工具' : '模拟工具'}</span></div></div></div>
-      <ExecutionFlowPanel view={executionView} detail={detail} Status={Status} stopCauseLabels={stopCauses} eventNames={eventNames} api={api} connected={connected} lastSyncedAt={lastSyncedAt} approving={approvingPlan} onApprove={approvePlan} onRecover={recover} onPause={pause} onResume={resume} onTakeOver={takeHandover} onReturnHandover={returnHandover} onCancel={cancel} onSwitchRun={id=>{setCurrent(id);setDetail(null);setExecutionView(null);setLastSyncedAt(null)}} onSubmitSupplement={submitSupplement}/>
+
+  function selectRun(id) {
+    if (id === current) {
+      setSection('workspace');
+      return;
+    }
+    setCurrent(id);
+    setDetail(null);
+    setExecutionView(null);
+    setLastSyncedAt(null);
+    setSection('workspace');
+  }
+  const openTaskForm = (draft) => {
+    api('/workspaces').then(setWorkspaceList).catch(() => {});
+    if (draft) {
+      setGoal(draft.goal);
+      setTaskConstraints(draft.constraints.join('\n'));
+      setTaskAcceptance(draft.acceptanceCriteria.join('\n'));
+      setEntryKind(draft.entryKind);
+      setModel(draft.modelMode);
+      setReviewPlan(draft.reviewPlan);
+      setScenario('normal');
+      setWorkflowTemplate(draft.entryKind === 'GENERAL' && draft.reviewPlan ? 'dual-analysis' : null);
+      setTaskWorkspace(null);
+      setTaskWrite(false);
+      setTaskFileScope('');
+      setTaskDirectories('');
+      setTaskExclusions('');
+      setTaskMemory(false);
+      setTaskBugId(null);
+    }
+    setIdeaOpen(false);
+    setModal(true);
+  };
+  const openMonitor = () => setMonitorOpen(true);
+  const changeSection = next => {
+    setSection(next);
+    window.scrollTo(0, 0);
+  };
+
+  return <>
+    <WorkbenchShell section={section} onSection={changeSection} onNewTask={() => setIdeaOpen(true)}
+      connected={connected} syncLabel={lastSyncedAt ? '最后同步 ' + clock(lastSyncedAt) : undefined}
+      user={user} onLogout={logout}
+      actions={{ myAgents: () => changeSection('my-agents'), agents: () => setAgentCatalogOpen(true), workspaces: openWorkspaces, bug: openBug,
+        evaluation: () => setEvalOpen(true), monitor: openMonitor }}>
+      {section === 'my-agents' ? <MyAgentsPage api={api} /> :
+      section === 'overview' ? <WorkbenchOverview overview={overview} onMonitor={openMonitor} /> :
+      <Stack spacing={1.75}>
+        <Box>
+          <Typography component="h1" variant="h5">运行工作台</Typography>
+          <Typography variant="body2" color="text.secondary">从计划、交接到结果，沿执行记录查看 Agent 如何协作。</Typography>
+        </Box>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: '228px minmax(0,1fr)', xl: '254px minmax(0,1fr)' }, gap: 2, alignItems: 'start' }}>
+          <TaskNavigator tasks={tasks} selectedId={current} archived={showArchived} onArchived={setShowArchived} onSelect={selectRun} dateTime={dateTime} />
+          <Paper component="section" className="run-panel" variant="outlined" sx={{ minWidth: 0 }}>
+            {!current ? <Box sx={{ p: { xs: 2, sm: 4 } }}>
+              <Typography component="h2" variant="h6">还没有运行</Typography>
+              <Typography variant="body2" color="text.secondary">创建任务后，可以在这里看流程、回放和交付结果。</Typography>
+            </Box> : !detail ? <Box sx={{ p: 3 }}><Spin aria-label="正在读取运行" /></Box> : <>
+            <Box component="header" sx={{ px: { xs: 1.5, sm: 3 }, py: 2, borderBottom: 1, borderColor: 'divider' }}>
+              <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 1.2 }}>
+                <Typography variant="caption" color="text.secondary">运行 #{short(run.ID)}</Typography>
+                <Status value={run.STATUS} label={run.STATUS === 'PENDING' && executionView?.plan?.reviewRequired && !executionView.plan.approvedAt
+                  ? '待确认计划' : undefined} />
+              </Stack>
+              <Typography component="h2" variant="h5" title={task.GOAL} sx={{
+                my: 0.85, overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: 2, overflow: 'hidden'
+              }}>{task.GOAL.split(/[。！？\n]/, 1)[0] || task.GOAL}</Typography>
+              <Stack direction="row" sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 0.65 }}>
+                <Chip size="small" variant="outlined" label={entryNames[task.ENTRY_KIND] || task.ENTRY_KIND || '通用目标'} />
+                <Chip size="small" variant="outlined" label={task.MODEL_MODE === 'deepseek' ? 'DeepSeek Flash' : '模拟模型'} />
+                <Typography variant="caption" color="text.secondary">{dateTime(run.CREATED_AT)}</Typography>
+              </Stack>
+            </Box>
+      <ExecutionFlowPanel key={run.ID} view={executionView} detail={detail} Status={Status} stopCauseLabels={stopCauses}
+        eventNames={eventNames} api={api} connected={connected} lastSyncedAt={lastSyncedAt} approving={approvingPlan}
+        onApprove={approvePlan} onRecover={recover} onPause={pause} onResume={resume} onTakeOver={takeHandover}
+        onReturnHandover={returnHandover} onCancel={cancel} onSwitchRun={selectRun} onSubmitSupplement={submitSupplement}
+        workspaceOpen={workspaceOpen} onOpenWorkspace={openWorkspaces} />
       <TraceSection title="预算、授权与运行结果">
       <div className="result-box"><div className="result-title">任务原文</div><p>{task.GOAL}</p></div>
-      <div><Button href={`/api/runs/${run.ID}/report`}>下载 HTML 报告</Button><Tooltip title="仅含受控状态和统计，仍需分享前检查"><Button href={`/api/runs/${run.ID}/report?view=SUMMARY`}>下载精简报告</Button></Tooltip><Tooltip title="替换常见路径、邮箱和密钥样式文本"><Button href={`/api/runs/${run.ID}/report?view=REDACTED`}>下载脱敏报告</Button></Tooltip><Button onClick={archiveTask}>{task.ARCHIVED_AT?'取消归档':'归档任务'}</Button>{run.STATUS==='RUNNING'&&<Button onClick={pause}>请求暂停</Button>}{run.STATUS==='PAUSED'&&<Button onClick={resume}>继续</Button>}{live&&<Button icon={<StopOutlined />} onClick={cancel}>取消运行</Button>}</div>
-      <div className="run-metrics"><div><span>Agent 轮次</span><strong>{run.ROUNDS}<small> / {run.MAX_ROUNDS}</small></strong><small>单实例模型上限 {run.MAX_AGENT_ROUNDS ?? "未设置"}</small></div><div><span>工具调用</span><strong>{run.TOOLS}<small> / {run.MAX_TOOLS}</small></strong><small>单工具上限 {run.MAX_PER_TOOL ?? "未知"} · 单实例工具上限 {run.MAX_AGENT_TOOLS ?? "未设置"}</small></div><div><span>执行时间</span><strong>{(run.ELAPSED_MS/1000).toFixed(1)}<small> 秒</small></strong></div><div><span>模型费用</span><strong className="metric-text">{task.MODEL_MODE==='deepseek'?'未计算':'不适用'}</strong></div></div>
+      <div><Button href={`/api/runs/${run.ID}/report`}>下载 HTML 报告</Button><Tooltip title="仅含受控状态和统计，仍需分享前检查"><Button href={`/api/runs/${run.ID}/report?view=SUMMARY`}>下载精简报告</Button></Tooltip><Tooltip title="替换常见路径、邮箱和密钥样式文本"><Button href={`/api/runs/${run.ID}/report?view=REDACTED`}>下载脱敏报告</Button></Tooltip><Button onClick={archiveTask}>{task.ARCHIVED_AT?'取消归档':'归档任务'}</Button>{!executionView&&run.STATUS==='RUNNING'&&<Button onClick={pause}>请求暂停</Button>}{!executionView&&run.STATUS==='PAUSED'&&<Button onClick={resume}>继续</Button>}{!executionView&&live&&<Button icon={<StopOutlined />} onClick={cancel}>取消运行</Button>}</div>
+      <div className="run-metrics"><div><span>Agent 轮次</span><strong>{run.ROUNDS}<small> / {run.MAX_ROUNDS ?? '未设置'}</small></strong><small>单实例模型上限 {run.MAX_AGENT_ROUNDS ?? "未设置"}</small></div><div><span>工具调用</span><strong>{run.TOOLS}<small> / {run.MAX_TOOLS ?? '未设置'}</small></strong><small>单工具上限 {run.MAX_PER_TOOL ?? "未设置"} · 单实例工具上限 {run.MAX_AGENT_TOOLS ?? "未设置"}</small></div><div><span>执行时间</span><strong>{(run.ELAPSED_MS/1000).toFixed(1)}<small> 秒</small></strong></div><div><span>模型费用</span><strong className="metric-text">{task.MODEL_MODE==='deepseek'?'未计算':'不适用'}</strong></div></div>
       {run.REASON&&<Alert type="warning" showIcon message={run.REASON} description={['LIMITED','FAILED','INTERRUPTED','CANCELLED'].includes(run.STATUS)?`停止原因分类：${run.STOP_CAUSE?(stopCauses[run.STOP_CAUSE]||'未知分类'):'未记录'}`:undefined} className="run-alert" />}{run.RESULT&&<div className="result-box"><div className="result-title"><CheckCircleFilled /> 执行结果</div><p>{run.RESULT}</p></div>}
       {!detail.workflowPlan && <RecoveryPanel run={run} task={task} checkpoints={detail.checkpoints} runs={detail.runs} onRecover={recover} clock={clock} />}
-      {detail.runs.length>1&&<div className="run-history">运行历史：{detail.runs.map(r=><Button type="link" key={r.ID} onClick={()=>{setCurrent(r.ID);setDetail(null);setExecutionView(null)}}>{short(r.ID)} · {states[r.STATUS]||r.STATUS}</Button>)}</div>}
+      {detail.runs.length>1&&<div className="run-history">运行历史：{detail.runs.map(r=><Button type="link" key={r.ID} onClick={()=>selectRun(r.ID)}>{short(r.ID)} · {states[r.STATUS]||r.STATUS}</Button>)}</div>}
       {task.WORKSPACE_ID&&<details className="agent-card handoff"><summary>授权文件：{taskFiles?`${taskFiles.length} 个`:'列表不可读'}</summary>{taskFiles?.map(path=><p key={path}>{path}</p>)}<p>任务只能访问所列现有文件；具体写权限以任务授权为准。</p></details>}
       {Object.keys(detail.roleBudgets||{}).length>0&&<div className="result-box"><strong>按角色的单实例限额</strong>{Object.entries(detail.roleBudgets).map(([role,budget])=><p key={role}>{planRoles[role]||role}：模型 {budget.maxModelCalls==null?'未设置':`${budget.maxModelCalls} 次`}，工具 {budget.maxToolCalls==null?'未设置':`${budget.maxToolCalls} 次`}</p>)}<p>仍受统一单 Agent 和运行总上限约束。</p></div>}{Object.keys(detail.toolBudgets||{}).length>0&&<div className="result-box"><strong>按工具类型的调用限额</strong>{Object.entries(detail.toolBudgets).map(([kind,limit])=><p key={kind}>{toolNames[kind]||kind}：{limit} 次</p>)}<p>包含恢复祖先的已启动调用；仍受其他预算及权限约束。</p></div>}
       </TraceSection>
@@ -211,40 +318,50 @@ function Workspace() {
       <div className="section-row"><h3>模型调用</h3><span>{detail.models?.length || 0} 次</span></div>{detail.models?.length?detail.models.map(m=><details className="agent-card handoff" key={m.ID}><summary>{m.MODEL_NAME==='mock'?'模拟模型':m.MODEL_NAME} · {states[m.STATUS]||m.STATUS} · {m.DURATION_MS==null?'耗时未知':`${m.DURATION_MS} 毫秒`}</summary><p>调用 ID：{m.ID}；Agent 实例：{short(m.AGENT_ID)}</p><p>输入 Token：{m.INPUT_TOKENS??'未知'}；输出 Token：{m.OUTPUT_TOKENS??'未知'}</p>{m.ERROR_MESSAGE&&<p>说明：{m.ERROR_MESSAGE}</p>}</details>):<p className="hint">此运行没有模型调用记录。</p>}
       <div className="section-row timeline-title"><h3>执行轨迹</h3><span><i className="live-dot"/> 来自实际运行记录</span></div><div className="timeline">{detail.events.map((event,i)=><div className="timeline-event" key={event.ID}><div className="event-rail"><span className={i===detail.events.length-1?'last':''}/></div><div className="event-content"><div><strong>{eventNames[event.EVENT_TYPE]||event.EVENT_TYPE}</strong><time>{clock(event.CREATED_AT)}</time></div><p>{event.MESSAGE}{event.NODE_ID&&<span className="event-node"> · 节点：{executionView?.nodes?.find(n=>n.id===event.NODE_ID)?.label||event.NODE_ID.slice(0,8)}</span>}{event.ATTEMPT_ID&&<span className="event-node"> · 尝试 #{event.ATTEMPT_ID.slice(0,8)}</span>}{event.MODEL_CALL_ID&&<span className="event-node"> · 模型 #{event.MODEL_CALL_ID.slice(0,8)}</span>}{event.TOOL_CALL_ID&&<span className="event-node"> · 工具 #{event.TOOL_CALL_ID.slice(0,8)}</span>}{event.REASON_CODE&&<span className="event-node"> · 原因 {event.REASON_CODE}</span>}</p></div></div>)}</div>
       </TraceSection>
-      </>}</section></div>
-      <div id="overview">
-      <div className="stats"><div><span>全部运行</span><strong>{overview?.TOTAL ?? '—'}</strong><small>历史运行总数</small></div><div><span>运行中</span><strong>{overview?.RUNNING ?? '—'}</strong><small>当前正在处理</small></div><div><span>已完成</span><strong>{overview?.COMPLETED ?? '—'}</strong><small>已完成的运行</small></div><div className="stats-note"><span>当前能力</span><strong>模拟工具</strong><small>可选 DeepSeek Flash</small></div></div>
-      </div>
-      <footer><span>Agent Studio <i>·</i> 个人开发工作空间</span><span>0.1 开发版</span></footer></div></main>
+            </>}
+          </Paper>
+        </Box>
+      </Stack>}
+    </WorkbenchShell>
     <AgentCatalogDialog open={agentCatalogOpen} onClose={()=>setAgentCatalogOpen(false)} api={api} />
-    <Modal title="平台运行概况" open={monitorOpen} onCancel={()=>setMonitorOpen(false)} footer={null} width={760}>
+    <WorkbenchDialog title="平台运行概况" open={monitorOpen} onCancel={()=>setMonitorOpen(false)} footer={null} width={760}>
       <Alert type="info" showIcon message="统计本机数据库当前保留记录，每 5 秒刷新；已知用量不代表完整消耗，当前不包含计费。" />
-      {monitorError?<Alert type="error" message="运行数据暂时无法获取。"/>:!monitorData?<Spin/>:<>{[['运行',monitorData.runs],['Agent 调用',monitorData.agents],['模型调用',monitorData.models],['工具调用',monitorData.tools],['评测案例',monitorData.evaluationCases]].map(([title,items])=><div className="agent-card" key={title}><div className="agent-text"><strong>{title}</strong><small>{items.length?items.map(item=>`${item.status?(states[item.status]||item.status):`未知状态（${item.unrecognizedStatus??'空值'}）`} ${item.count}`).join(' · '):'暂无记录'}</small></div></div>)}<div className="result-box"><strong>运行停止原因</strong><p>{monitorData.stopCauses?.length?monitorData.stopCauses.map(c=>`${stopCauses[c.cause]||'未知分类'} ${c.count}`).join(' · '):'暂无已分类停止'}</p><p>未记录 {monitorData.missingStopCauses??'未知'}；编码与状态不一致 {monitorData.inconsistentStopCauses??'未知'}。仅统计当前保留的停止记录。</p></div><div className="result-box"><strong>模型与工具用量</strong><p>已知输入 Token：{monitorData.usage.knownInputTokens??'无记录'}；未知 {monitorData.usage.unknownInputCalls} 次</p><p>已知输出 Token：{monitorData.usage.knownOutputTokens??'无记录'}；未知 {monitorData.usage.unknownOutputCalls} 次</p><p>已知模型耗时：{monitorData.usage.knownModelDurationMs??'无记录'} 毫秒；未知 {monitorData.usage.unknownModelDurationCalls} 次</p><p>已知工具耗时：{monitorData.usage.knownToolDurationMs??'无记录'} 毫秒；未知 {monitorData.usage.unknownToolDurationCalls} 次</p></div><div className="result-box"><strong>告警</strong><p className="hint">每条告警都关联运行或受控动作；没有记录不代表系统健康。</p>{monitorAlerts.length===0?<p>暂无告警。</p>:monitorAlerts.map((alert,index)=><div className="agent-card" key={`${alert.code}-${alert.targetId}-${index}`}><div className="agent-text"><strong>{alert.severity} · {alert.title}</strong><small>{alert.detail}</small></div>{alert.runId&&<Button size="small" onClick={()=>{setCurrent(alert.runId);setDetail(null);setExecutionView(null);setMonitorOpen(false)}}>查看运行</Button>}</div>)}</div><div className="result-box"><strong>环境自检</strong><Button size="small" onClick={runSelfCheck}>运行自检</Button>{selfCheck&&<><p>总体：{selfCheck.status}</p>{selfCheck.checks.map(check=><p key={check.name}>{check.status} · {check.name} · {check.detail}</p>)}</>}</div><div className="result-box"><strong>操作审计</strong><p className="hint">记录受控管理动作，不含密钥和文件正文。</p>{monitorAudit.length===0?<p>暂无审计记录。</p>:monitorAudit.map(row=><p key={row.ID}>{row.CREATED_AT} · {row.ACTION} · {row.OUTCOME} · {row.TARGET_TYPE} {row.TARGET_ID||''}</p>)}</div></>}
-    </Modal>
-    <Modal title="创建本地提交" open={commitOpen} onCancel={()=>setCommitOpen(false)} footer={null} width={720}>
+      {monitorError?<Alert type="error" message="运行数据暂时无法获取。"/>:!monitorData?<Spin/>:<>{[['运行',monitorData.runs],['Agent 调用',monitorData.agents],['模型调用',monitorData.models],['工具调用',monitorData.tools],['评测案例',monitorData.evaluationCases]].map(([title,items])=><div className="agent-card" key={title}><div className="agent-text"><strong>{title}</strong><small>{items.length?items.map(item=>`${item.status?(states[item.status]||item.status):`未知状态（${item.unrecognizedStatus??'空值'}）`} ${item.count}`).join(' · '):'暂无记录'}</small></div></div>)}<div className="result-box"><strong>运行停止原因</strong><p>{monitorData.stopCauses?.length?monitorData.stopCauses.map(c=>`${stopCauses[c.cause]||'未知分类'} ${c.count}`).join(' · '):'暂无已分类停止'}</p><p>未记录 {monitorData.missingStopCauses??'未知'}；编码与状态不一致 {monitorData.inconsistentStopCauses??'未知'}。仅统计当前保留的停止记录。</p></div><div className="result-box"><strong>模型与工具用量</strong><p>已知输入 Token：{monitorData.usage.knownInputTokens??'无记录'}；未知 {monitorData.usage.unknownInputCalls} 次</p><p>已知输出 Token：{monitorData.usage.knownOutputTokens??'无记录'}；未知 {monitorData.usage.unknownOutputCalls} 次</p><p>已知模型耗时：{monitorData.usage.knownModelDurationMs??'无记录'} 毫秒；未知 {monitorData.usage.unknownModelDurationCalls} 次</p><p>已知工具耗时：{monitorData.usage.knownToolDurationMs??'无记录'} 毫秒；未知 {monitorData.usage.unknownToolDurationCalls} 次</p></div><div className="result-box"><strong>告警</strong><p className="hint">每条告警都关联运行或受控动作；没有记录不代表系统健康。</p>{monitorAlerts.length===0?<p>暂无告警。</p>:monitorAlerts.map((alert,index)=><div className="agent-card" key={`${alert.code}-${alert.targetId}-${index}`}><div className="agent-text"><strong>{alert.severity} · {alert.title}</strong><small>{alert.detail}</small></div>{alert.runId&&<Button size="small" onClick={()=>{selectRun(alert.runId);setMonitorOpen(false)}}>查看运行</Button>}</div>)}</div><div className="result-box"><strong>环境自检</strong><Button size="small" onClick={runSelfCheck}>运行自检</Button>{selfCheck&&<><p>总体：{selfCheck.status}</p>{selfCheck.checks.map(check=><p key={check.name}>{check.status} · {check.name} · {check.detail}</p>)}</>}</div><div className="result-box"><strong>操作审计</strong><p className="hint">记录受控管理动作，不含密钥和文件正文。</p>{monitorAudit.length===0?<p>暂无审计记录。</p>:monitorAudit.map(row=><p key={row.ID}>{row.CREATED_AT} · {row.ACTION} · {row.OUTCOME} · {row.TARGET_TYPE} {row.TARGET_ID||''}</p>)}</div></>}
+    </WorkbenchDialog>
+    <WorkbenchDialog title="创建本地提交" open={commitOpen} onCancel={()=>setCommitOpen(false)} footer={null} width={720}>
       <Alert type="warning" showIcon message="只提交已批准的全部已跟踪差异，不会推送或合并。状态发生变化会拒绝提交；如结果未知，请检查 Git 状态后再操作。"/>
       <div className="form-label">选择有效批准</div><Select value={commitApproval} onChange={setCommitApproval} placeholder="请选择已批准的审查" style={{width:'100%'}} options={approvals.filter(a=>a.STATUS==='APPROVED').map(a=>({value:a.ID,label:`批准 #${short(a.ID)} · ${dateTime(a.UPDATED_AT)}`}))}/>
       <div className="form-label">提交说明</div><Input value={commitMessage} onChange={e=>setCommitMessage(e.target.value)} maxLength={200} placeholder="描述这次修改"/><Button style={{marginTop:12}} type="primary" loading={committing} onClick={createCommit}>创建本地提交</Button>
       <div className="section-row"><h3>提交操作记录</h3></div>{commitActions.length?commitActions.map(a=><p key={a.id}>{a.status==='CONFIRMED'?'已确认':a.status==='UNKNOWN'?'结果未知，请核对 Git':'处理中'} · {a.commitId?short(a.commitId):short(a.id)} · {dateTime(a.createdAt)}</p>):<p className="hint">暂无提交记录。</p>}
-    </Modal>
-    <Modal title="项目背景记忆" open={memoryOpen} onCancel={()=>setMemoryOpen(false)} footer={null} width={720}>
+    </WorkbenchDialog>
+    <WorkbenchDialog title="项目背景记忆" open={memoryOpen} onCancel={()=>setMemoryOpen(false)} footer={null} width={720}>
       <Alert type="info" showIcon message="仅本地用户确认的内容可保存。任务需单独授权读取；删除后新任务不再读取，但历史版本仍保留。请勿保存密钥。" />
       <div className="form-label">类别</div><Select value={memoryCategory} onChange={setMemoryCategory} options={[{value:'PROJECT_CONVENTION',label:'项目约定'},{value:'PROJECT_BACKGROUND',label:'项目背景'},{value:'PRECAUTION',label:'注意事项'}]} style={{width:'100%'}}/>
       <div className="form-label">内容</div><Input.TextArea value={memoryText} onChange={e=>setMemoryText(e.target.value)} maxLength={300} showCount rows={3}/><Button style={{marginTop:12}} type="primary" onClick={saveMemory}>{editingMemory?'保存修改':'添加背景'}</Button>{editingMemory&&<Button onClick={()=>{setEditingMemory(null);setMemoryText('')}}>取消编辑</Button>}
       <div className="section-row"><h3>有效背景</h3><span>{memoryFiltered?'匹配':'共'} {memories.length} 条</span></div>
       <Input.Search aria-label="按内容查找项目背景" placeholder="按内容查找项目背景" value={memorySearch} onChange={e=>setMemorySearch(e.target.value)} maxLength={100} enterButton="查找" onSearch={searchMemories}/>{memoryFiltered&&<Button type="link" onClick={loadMemories}>显示全部</Button>}
       {memoryFiltered&&memories.length===0&&<p className="hint">没有找到匹配的背景。</p>}{memories.map(m=><div className="agent-card" key={m.id}><div className="agent-text"><strong>{({PROJECT_CONVENTION:'项目约定',PROJECT_BACKGROUND:'项目背景',PRECAUTION:'注意事项'})[m.category]} · v{m.version}</strong><small>{m.content}</small></div><Button size="small" onClick={()=>setHistoryMemory(m)}>历史</Button><Button size="small" onClick={()=>{setEditingMemory(m);setMemoryCategory(m.category);setMemoryText(m.content)}}>编辑</Button><Button size="small" danger onClick={()=>deleteMemory(m)}>删除</Button></div>)}
-    </Modal>
+    </WorkbenchDialog>
     {historyMemory&&selectedWorkspace&&<MemoryHistoryDialog key={historyMemory.id} workspaceId={selectedWorkspace.id} memoryId={historyMemory.id} api={api} onClose={()=>setHistoryMemory(null)}/>}
-    <Modal title="本地种子评测" open={evalOpen} onCancel={()=>setEvalOpen(false)} footer={null} width={760}>
+    <WorkbenchDialog title="本地种子评测" open={evalOpen} onCancel={()=>setEvalOpen(false)} footer={null} width={760}>
       <Alert type="info" showIcon message="使用模拟模型和工具检查固定流程，不访问真实模型、仓库或外部服务。批次完成不代表所有样本通过。" />
-      <DatasetManager api={api} onOpenRun={runId=>{setCurrent(runId);setDetail(null);setExecutionView(null);setEvalOpen(false)}}/>
+      <DatasetManager api={api} onOpenRun={runId=>{selectRun(runId);setEvalOpen(false)}}/>
       <div style={{display:'flex',gap:12,margin:'18px 0',alignItems:'center',flexWrap:'wrap'}}><Select aria-label="评测种子集" value={evalSuite} onChange={setEvalSuite} style={{minWidth:170}} options={Object.entries(evaluationSuites).map(([value,label])=>({value,label}))}/><InputNumber aria-label="套件版本" placeholder="版本" min={1} value={evalVersion} onChange={setEvalVersion}/><InputNumber aria-label="模型轮次上限" placeholder="轮次" min={1} max={20} value={evalRounds} onChange={setEvalRounds}/><InputNumber aria-label="工具上限" placeholder="工具" min={0} max={20} value={evalTools} onChange={setEvalTools}/><InputNumber aria-label="时间上限秒" placeholder="秒" min={1} max={300} value={evalSeconds} onChange={setEvalSeconds}/><Button type="primary" onClick={startEvaluation} disabled={evalList.some(b=>['RUNNING','CANCELLING'].includes(b.status))}>运行种子集</Button><Select placeholder="选择历史评测" value={evalId} onChange={v=>{setEvalId(v);setEvalComparison(null)}} style={{minWidth:260}} options={evalList.map(b=>({value:b.id,label:`${evaluationSuites[b.suite]||b.suite} · ${dateTime(b.createdAt)} · ${states[b.status]||b.status} · ${short(b.id)}`}))}/>{evalDetail?.batch.status==='RUNNING'&&<Button onClick={cancelEvaluation}>停止评测</Button>}</div>
-      {evalDetail?<><p>批次状态：{states[evalDetail.batch.status]||evalDetail.batch.status}；评测定义摘要：{evalDetail.batch.definitionSha256||'历史记录未知'}；通过 {evalDetail.cases.filter(c=>c.status==='PASSED').length} / {evalDetail.cases.length}，未完成或中断不计通过。</p>{evalDetail.batch.definitionJson&&<details><summary>查看评测定义快照</summary><pre className="workspace-output">{evalDetail.batch.definitionJson}</pre></details>}{evalDetail.cases.map(c=><div className="agent-card" key={c.id}><div className="agent-text"><strong>{c.title}</strong><small>{c.explanation||'等待评测结果'}</small>{c.checks?.length>0?<details><summary>查看逐项断言（{c.checks.length}）</summary>{c.checks.map(check=><small key={check.code}>{check.passed?'通过':'未通过'} · {check.detail}</small>)}</details>:<small>逐项断言尚未记录</small>}</div><Status value={c.status}/>{c.runId&&<Button size="small" onClick={()=>{setCurrent(c.runId);setDetail(null);setExecutionView(null);setEvalOpen(false)}}>查看运行</Button>}</div>)}</>:<p className="hint">尚无评测记录。</p>}
+      {evalDetail?<><p>批次状态：{states[evalDetail.batch.status]||evalDetail.batch.status}；评测定义摘要：{evalDetail.batch.definitionSha256||'历史记录未知'}；通过 {evalDetail.cases.filter(c=>c.status==='PASSED').length} / {evalDetail.cases.length}，未完成或中断不计通过。</p>{evalDetail.batch.definitionJson&&<details><summary>查看评测定义快照</summary><pre className="workspace-output">{evalDetail.batch.definitionJson}</pre></details>}{evalDetail.cases.map(c=><div className="agent-card" key={c.id}><div className="agent-text"><strong>{c.title}</strong><small>{c.explanation||'等待评测结果'}</small>{c.checks?.length>0?<details><summary>查看逐项断言（{c.checks.length}）</summary>{c.checks.map(check=><small key={check.code}>{check.passed?'通过':'未通过'} · {check.detail}</small>)}</details>:<small>逐项断言尚未记录</small>}</div><Status value={c.status}/>{c.runId&&<Button size="small" onClick={()=>{selectRun(c.runId);setEvalOpen(false)}}>查看运行</Button>}</div>)}</>:<p className="hint">尚无评测记录。</p>}
       <div className="section-row"><h3>历史批次对照</h3><span>当前选中批次作为候选</span></div><p className="hint">评测定义一致也不能证明代码和环境一致；对照不会分析差异原因。</p><div style={{display:'flex',gap:8}}><Select placeholder="选择基线批次" value={baselineId} onChange={v=>{setBaselineId(v);setEvalComparison(null)}} style={{minWidth:260}} options={evalList.filter(b=>b.id!==evalId).map(b=>({value:b.id,label:`${evaluationSuites[b.suite]||b.suite} · ${dateTime(b.createdAt)} · ${states[b.status]||b.status} · ${short(b.id)}`}))}/><Button onClick={compareEvaluations}>对照</Button></div>
-      {evalComparison&&<><p>{evalComparison.comparabilityReason || (evalComparison.comparableDefinition?'套件编码及评测定义快照一致':'评测定义不同、缺失或无效：所有案例均无法判断')}；这是查询时的快照。部分 Token 未知时，已知合计不是总量。</p>{evalComparison.cases.map(c=><div className="agent-card" key={c.code}><div className="agent-text"><strong>{c.title} · {comparisonNames[c.outcome]}</strong><small>基线：{states[c.baseline?.status]||c.baseline?.status||'无记录'} → 候选：{states[c.candidate?.status]||c.candidate?.status||'无记录'}</small><small>基线资源：{resourcesText(c.baselineResources)}</small><small>候选资源：{resourcesText(c.candidateResources)}</small></div>{c.baseline?.runId&&<Button size="small" onClick={()=>{setCurrent(c.baseline.runId);setDetail(null);setExecutionView(null);setEvalOpen(false)}}>基线运行</Button>}{c.candidate?.runId&&<Button size="small" onClick={()=>{setCurrent(c.candidate.runId);setDetail(null);setExecutionView(null);setEvalOpen(false)}}>候选运行</Button>}</div>)}</>}
-    </Modal>
-    <Modal title="新建任务" open={modal} onCancel={()=>setModal(false)} onOk={create} okText={selectedWorkflow && reviewPlan ? '创建计划' : '创建并运行'} cancelText="取消" confirmLoading={sending} destroyOnHidden><div className="modal-intro">入口类型用于分析指引，不会自动生成文档、运行测试或授予工具权限。</div><div className="form-label">任务入口</div><Select aria-label="任务入口" value={entryKind} onChange={setEntryKind} options={Object.entries(entryNames).map(([value,label])=>({value,label}))} style={{width:'100%'}}/><EntryRoutePreview entryKind={entryKind} workspaceId={taskWorkspace} writeEnabled={taskWrite} fileScopes={taskFileScope.split('\n').map(x=>x.trim()).filter(Boolean)} directoryScopes={taskDirectories.split('\n').map(x=>x.trim()).filter(Boolean)} workflowTemplate={workflowTemplate} api={api}/>{activePolicy&&<div className="result-box"><strong>入口约定 · {activePolicy.label}</strong><p>必填：{activePolicy.requiredInputs.join('；')}</p><p>交付物：{activePolicy.deliverables.join('；')}</p><p>默认验收条件：{activePolicy.defaultAcceptance.join('；')}</p><p className="hint">{activePolicy.guidance}</p></div>}<div className="form-label">任务目标</div><Input.TextArea value={goal} onChange={e=>setGoal(e.target.value)} maxLength={500} showCount rows={3} placeholder="描述你希望 Agent 完成的任务"/><div className="form-label">任务约束（每行一条，可选）</div><Input.TextArea value={taskConstraints} onChange={e=>setTaskConstraints(e.target.value)} rows={2} placeholder="例如：只修改授权文件"/><div className="form-label">验收条件（每行一条，可选）</div><Input.TextArea value={taskAcceptance} onChange={e=>setTaskAcceptance(e.target.value)} rows={2} placeholder="例如：指定回归测试通过"/><p className="hint">最多各 10 条，每条 300 字；验收条件需要证据，模型回答不等于验证通过。</p><div className="form-label">Agent 模型</div><Select value={model} onChange={v=>{setModel(v);if(v==='deepseek'&&scenario==='repeat')setScenario('normal')}} options={[{value:'mock',label:'模拟模型（无需密钥）'},{value:'deepseek',label:'DeepSeek Flash（真实调用）'}]} style={{width:'100%'}}/>{model==='deepseek'&&<Alert className="modal-alert" type="info" showIcon message={selectedWorkflow ? '任务目标、约束以及相关上游结果将发送至 DeepSeek，可能产生费用。' : '任务目标与模拟工具结果将发送至 DeepSeek，可能产生费用。'}/>}<div className="form-label">工作区（可选）</div><Select allowClear style={{width:'100%'}} value={taskWorkspace} onChange={v=>{if(v!==taskWorkspace){setTaskFileScope('');setTaskDirectories('');setTaskExclusions('');}setTaskWorkspace(v);setTaskWrite(false);setTaskMemory(false);if(v!==bugWorkspace)setTaskBugId(null)}} options={workspaceList.map(w=>({value:w.id,label:w.branchName}))}/>{taskWorkspace&&<><div className="form-label">允许访问的文件（工作区相对路径，每行一个，最多 20 个）</div><AuthorizedFilePicker key={taskWorkspace} workspaceId={taskWorkspace} value={taskFileScope} onChange={setTaskFileScope} api={api}/><Input.TextArea aria-label="授权文件路径列表" value={taskFileScope} onChange={e=>setTaskFileScope(e.target.value)} rows={3} placeholder="例如 src/main.java"/><p className="hint">已填写 {taskFileScope.split('\n').map(x=>x.trim()).filter(Boolean).length} 个路径；每个路径必须是工作区内现有文件。</p><div className="form-label">目录授权（每行一个相对目录，可选）</div><Input.TextArea aria-label="目录授权列表" value={taskDirectories} onChange={e=>setTaskDirectories(e.target.value)} rows={2} placeholder="例如 src"/><div className="form-label">排除规则（每行一个路径或目录，可选）</div><Input.TextArea aria-label="排除路径列表" value={taskExclusions} onChange={e=>setTaskExclusions(e.target.value)} rows={2} placeholder="例如 src/secret"/><p className="hint">目录授权由服务端展开为实际文件；排除项、符号链接和工作区外路径会在读取、搜索和写入时再次校验。</p><Checkbox checked={taskWrite} onChange={e=>setTaskWrite(e.target.checked)}>允许 Agent 修改所列文件</Checkbox><div><Checkbox checked={taskMemory} onChange={e=>setTaskMemory(e.target.checked)}>允许本次任务读取此工作区的项目背景</Checkbox></div>{taskMemory&&<Alert type="info" showIcon message="最多读取 5 条有效项目背景；使用真实模型时，这些内容会发送至模型服务。"/>}<Alert type="warning" showIcon message="选择真实模型时，授权文件内容与相关测试输出可能发送给模型服务；关联模拟 Bug 时将运行受控测试，不会自动合并。"/></>}<>
+      {evalComparison&&<><p>{evalComparison.comparabilityReason || (evalComparison.comparableDefinition?'套件编码及评测定义快照一致':'评测定义不同、缺失或无效：所有案例均无法判断')}；这是查询时的快照。部分 Token 未知时，已知合计不是总量。</p>{evalComparison.cases.map(c=><div className="agent-card" key={c.code}><div className="agent-text"><strong>{c.title} · {comparisonNames[c.outcome]}</strong><small>基线：{states[c.baseline?.status]||c.baseline?.status||'无记录'} → 候选：{states[c.candidate?.status]||c.candidate?.status||'无记录'}</small><small>基线资源：{resourcesText(c.baselineResources)}</small><small>候选资源：{resourcesText(c.candidateResources)}</small></div>{c.baseline?.runId&&<Button size="small" onClick={()=>{selectRun(c.baseline.runId);setEvalOpen(false)}}>基线运行</Button>}{c.candidate?.runId&&<Button size="small" onClick={()=>{selectRun(c.candidate.runId);setEvalOpen(false)}}>候选运行</Button>}</div>)}</>}
+    </WorkbenchDialog>
+    {ideaOpen && <TaskIdeaDialog api={api} onClose={() => setIdeaOpen(false)} onManual={openTaskForm}
+      onCreated={id => { setIdeaOpen(false); selectRun(id); }} />}
+    {planOpen && <PlanCandidateDialog api={api} onClose={() => setPlanOpen(false)} maxCostMicros={taskMaxCost}
+      onRun={runId => { setPlanOpen(false); setModal(false); selectRun(runId); }}
+      input={{goal: goal.trim(), entryKind: 'CODE', workspaceId: taskWorkspace, writeEnabled: !planReadOnly,
+        readOnly: planReadOnly, agentMode: 'BUILTIN', candidateAgentIds: [], manualAgentId: null, manualAgentVersion: null,
+        fileScopes: taskFileScope.split('\n').map(x => x.trim()).filter(Boolean),
+        constraints: taskConstraints.split('\n').map(x => x.trim()).filter(Boolean),
+        acceptanceCriteria: taskAcceptance.split('\n').map(x => x.trim()).filter(Boolean),
+        deliverable: null}} />}
+    <WorkbenchDialog title="新建任务" open={modal} onCancel={()=>setModal(false)} onOk={create} okText={hasPlannableRoute && reviewPlan ? '创建计划' : '创建并运行'} cancelText="取消" confirmLoading={sending}><div className="modal-intro">入口类型用于分析指引，不会自动生成文档、运行测试或授予工具权限。</div><div className="form-label">任务入口</div><Select aria-label="任务入口" value={entryKind} onChange={setEntryKind} options={Object.entries(entryNames).map(([value,label])=>({value,label}))} style={{width:'100%'}}/><EntryRoutePreview entryKind={entryKind} workspaceId={taskWorkspace} writeEnabled={taskWrite} fileScopes={taskFileScope.split('\n').map(x=>x.trim()).filter(Boolean)} directoryScopes={taskDirectories.split('\n').map(x=>x.trim()).filter(Boolean)} workflowTemplate={workflowTemplate} api={api}/>{activePolicy&&<div className="result-box"><strong>入口约定 · {activePolicy.label}</strong><p>必填：{activePolicy.requiredInputs.join('；')}</p><p>交付物：{activePolicy.deliverables.join('；')}</p><p>默认验收条件：{activePolicy.defaultAcceptance.join('；')}</p><p className="hint">{activePolicy.guidance}</p></div>}<div className="form-label">任务目标</div><Input.TextArea value={goal} onChange={e=>setGoal(e.target.value)} maxLength={500} showCount rows={3} placeholder="描述你希望 Agent 完成的任务"/><div className="form-label">任务约束（每行一条，可选）</div><Input.TextArea value={taskConstraints} onChange={e=>setTaskConstraints(e.target.value)} rows={2} placeholder="例如：只修改授权文件"/><div className="form-label">验收条件（每行一条，可选）</div><Input.TextArea value={taskAcceptance} onChange={e=>setTaskAcceptance(e.target.value)} rows={2} placeholder="例如：指定回归测试通过"/><p className="hint">最多各 10 条，每条 300 字；验收条件需要证据，模型回答不等于验证通过。</p><div className="form-label">Agent 模型</div><Select value={model} onChange={v=>{setModel(v);if(v==='deepseek'&&scenario==='repeat')setScenario('normal')}} options={[{value:'mock',label:'模拟模型（无需密钥）'},{value:'deepseek',label:'DeepSeek Flash（真实调用）'}]} style={{width:'100%'}}/>{model==='deepseek'&&<Alert className="modal-alert" type="info" showIcon message={selectedWorkflow ? '任务目标、约束以及相关上游结果将发送至 DeepSeek，可能产生费用。' : '任务目标与模拟工具结果将发送至 DeepSeek，可能产生费用。'}/>}<div className="form-label">工作区（可选）</div><Select allowClear style={{width:'100%'}} value={taskWorkspace} onChange={v=>{if(v!==taskWorkspace){setTaskFileScope('');setTaskDirectories('');setTaskExclusions('');}setTaskWorkspace(v);setTaskWrite(false);setTaskMemory(false);if(v!==bugWorkspace)setTaskBugId(null)}} options={workspaceList.map(w=>({value:w.id,label:w.branchName}))}/>{taskWorkspace&&<><div className="form-label">允许访问的文件（工作区相对路径，每行一个，最多 20 个）</div><AuthorizedFilePicker key={taskWorkspace} workspaceId={taskWorkspace} value={taskFileScope} onChange={setTaskFileScope} api={api}/><Input.TextArea aria-label="授权文件路径列表" value={taskFileScope} onChange={e=>setTaskFileScope(e.target.value)} rows={3} placeholder="例如 src/main.java"/><p className="hint">已填写 {taskFileScope.split('\n').map(x=>x.trim()).filter(Boolean).length} 个路径；每个路径必须是工作区内现有文件。</p><div className="form-label">目录授权（每行一个相对目录，可选）</div><Input.TextArea aria-label="目录授权列表" value={taskDirectories} onChange={e=>setTaskDirectories(e.target.value)} rows={2} placeholder="例如 src"/><div className="form-label">排除规则（每行一个路径或目录，可选）</div><Input.TextArea aria-label="排除路径列表" value={taskExclusions} onChange={e=>setTaskExclusions(e.target.value)} rows={2} placeholder="例如 src/secret"/><p className="hint">目录授权由服务端展开为实际文件；排除项、符号链接和工作区外路径会在读取、搜索和写入时再次校验。</p><Checkbox checked={taskWrite} onChange={e=>setTaskWrite(e.target.checked)}>允许 Agent 修改所列文件</Checkbox><div><Checkbox checked={taskMemory} onChange={e=>setTaskMemory(e.target.checked)}>允许本次任务读取此工作区的项目背景</Checkbox></div>{taskMemory&&<Alert type="info" showIcon message="最多读取 5 条有效项目背景；使用真实模型时，这些内容会发送至模型服务。"/>}<Alert type="warning" showIcon message="选择真实模型时，授权文件内容与相关测试输出可能发送给模型服务；关联模拟 Bug 时将运行受控测试，不会自动合并。"/></>}<>
       <div className="form-label">工作流</div>
       <Select aria-label="工作流" value={workflowTemplate ?? 'compatibility'}
         onChange={value => setWorkflowTemplate(value === 'compatibility' ? null : value)}
@@ -252,26 +369,27 @@ function Workspace() {
         style={{width:'100%'}}/>
       {workflowMismatch && <p className="hint">当前任务设置与所选工作流不兼容。</p>}
       {selectedWorkflow === 'bug-fix' && !taskWrite && <p className="hint">Bug 修复会修改授权文件；请先勾选“允许 Agent 修改所列文件”，系统不会默认授予写权限。</p>}
-      {selectedWorkflow && <div><Checkbox checked={reviewPlan}
+      {hasPlannableRoute && <div><Checkbox checked={reviewPlan}
         onChange={e => setReviewPlan(e.target.checked)}>先审阅计划再运行</Checkbox></div>}
-    </>{selectedWorkflow !== 'dual-analysis' && <><div className="form-label">模拟工具场景</div><Select value={scenario} onChange={setScenario} options={[{value:'normal',label:'正常执行'},{value:'fail',label:'工具失败'},{value:'slow',label:'慢速执行（用于测试取消）'},{value:'repeat',label:'重复调用（模拟模型测试）',disabled:model==='deepseek'}]} style={{width:'100%'}}/></>}<div className="form-label">运行限制</div><div className="limit-grid"><label>最大轮次<InputNumber min={1} max={20} value={rounds} onChange={setRounds}/></label><label>工具总次数<InputNumber min={0} max={20} value={tools} onChange={setTools}/></label><label>单工具次数<InputNumber min={0} max={20} value={perTool} onChange={setPerTool}/></label><label>时间（秒）<InputNumber min={1} max={300} value={seconds} onChange={setSeconds}/></label><label>单 Agent 模型调用上限（可选）<InputNumber min={1} max={20} value={maxAgentRounds} onChange={setMaxAgentRounds}/></label><label>单 Agent 工具调用上限（可选）<InputNumber min={0} max={20} value={maxAgentTools} onChange={setMaxAgentTools}/></label><label>已报告 Token 上限（可选）<InputNumber min={1} max={1000000} value={tokenLimit} onChange={setTokenLimit}/></label><label>费用硬预算（微单位，可选）<InputNumber min={1} max={1000000000} value={taskMaxCost} onChange={setTaskMaxCost}/></label><label>连续相同工具上限（可选）<InputNumber min={1} max={20} value={identicalLimit} onChange={setIdenticalLimit}/></label></div><NodeBudgetEditor template={selectedWorkflow} value={nodeBudgetsByTemplate[selectedWorkflow]??{}}
-      onChange={value=>setNodeBudgetsByTemplate(previous=>({...previous,[selectedWorkflow]:value}))}/><RoleBudgetEditor value={roleBudgets} onChange={setRoleBudgets}/><ToolBudgetEditor value={toolBudgets} onChange={setToolBudgets}/><p className="hint">单 Agent 与角色上限按实例分别计算；恢复后新实例重新计数，运行总预算继续继承。工具上限 0 表示不允许调用工具。</p><p className="hint">重复保护仅比较连续相同输入，可能阻止有意义的重复读取；留空关闭。</p><p className="hint">这是收到用量后的停止阈值，单次请求可能超额；用量未知时会停止。</p></Modal>
-    <Modal title="代码工作区" open={workspaceOpen} onCancel={()=>setWorkspaceOpen(false)} footer={null} width={760}><Alert type="warning" showIcon message="仅用于可信本地仓库。工作区不是代码执行沙箱；创建分支前请检查仓库。"/><div className="form-label">本地仓库目录</div><Input value={repoPath} onChange={e=>setRepoPath(e.target.value)} placeholder="例如 D:\\projects\\my-repo"/><div className="form-label">基础分支</div><Input value={baseBranch} onChange={e=>setBaseBranch(e.target.value)}/><Button style={{marginTop:12}} onClick={createWorkspace}>创建独立分支和工作区</Button><div className="form-label">已创建工作区</div><Select style={{width:'100%'}} value={selectedWorkspace?.id} onChange={selectWorkspace} options={workspaceList.map(w=>({value:w.id,label:`${w.branchName} · ${w.repositoryPath}`}))}/>{selectedWorkspace&&<><p>工作区：{selectedWorkspace.workspacePath}</p><p>基础提交：{selectedWorkspace.baseCommit}</p><Button onClick={()=>selectWorkspace(selectedWorkspace.id)}>刷新状态与差异</Button><Button onClick={loadMemories}>管理项目背景</Button><Button onClick={openCommits}>本地提交</Button><WorkspaceDeliveryPanel workspace={selectedWorkspace} api={api} onChanged={()=>selectWorkspace(selectedWorkspace.id)} />{workspaceStatus?.baseChanged&&<Alert type="warning" message="目标分支已变化，请重新检查。"/>}<div className="form-label">Git 状态（未跟踪文件不包含在下方差异中）</div><pre className="workspace-output">{workspaceStatus?.changes||'无变更'}</pre><div className="form-label">已跟踪文件差异</div><pre className="workspace-output">{workspaceStatus?.diff||'无差异'}</pre><div className="form-label">审查决定</div><p>仅记录当前差异的审查结果，不会提交、推送或合并；未跟踪文件尚不支持审批。</p><Button onClick={proposeApproval}>发起审查</Button>{approvals.map(a=><p key={a.ID}>{a.STATUS} · {a.ID.slice(0,8)} {a.STATUS==='PENDING'&&<><Button size="small" onClick={()=>decideApproval(a.ID,'APPROVE')}>批准</Button><Button size="small" onClick={()=>decideApproval(a.ID,'REJECT')}>拒绝</Button></>}</p>)}<div className="form-label">读取或编辑现有文件</div><Input value={filePath} onChange={e=>setFilePath(e.target.value)} placeholder="工作区内相对路径"/><Button style={{marginTop:8}} onClick={readFile}>读取文件</Button>{fileContent&&<><Input.TextArea value={fileContent.content} onChange={e=>setFileContent({...fileContent,content:e.target.value})} rows={8}/><Button onClick={saveFile}>确认保存到工作区</Button></>}</>}</Modal>
-    <Modal title="模拟 Bug 验证" open={bugOpen} onCancel={()=>setBugOpen(false)} footer={null} width={760}><p>MOCK-PY-001：验证工作区中 Python unittest 测试是否失败或通过。</p><Button onClick={()=>{if(!bugWorkspace){message.warning('请先选择工作区');return}if(taskWorkspace!==bugWorkspace){setTaskFileScope('');setTaskWrite(false);setTaskMemory(false)}setTaskWorkspace(bugWorkspace);const quick=bugQuickEntryDefaults();setTaskBugId(quick.bugId);setWorkflowTemplate(quick.workflowTemplate);setTaskWrite(quick.writeEnabled);setReviewPlan(quick.reviewPlan);setEntryKind(quick.entryKind);setGoal(quick.goal);setBugOpen(false);setModal(true)}}>基于此 Bug 创建 Agent 任务</Button><Alert type="warning" showIcon message="测试将在无网络、只读挂载的容器中运行。测试失败只说明观察到失败，不自动证明复现了特定 Bug。"/><div className="form-label">选择工作区</div><Select style={{width:'100%'}} value={bugWorkspace} onChange={v=>{setBugWorkspace(v);setBugResult(null);api('/bugs/feedback?workspaceId='+encodeURIComponent(v)).then(setBugFeedback).catch(()=>{})}} options={workspaceList.map(w=>({value:w.id,label:w.branchName}))}/><div style={{marginTop:12,display:'flex',gap:8}}><Button loading={bugRunning} onClick={()=>checkBug('REPRODUCE')}>观察失败</Button><Button loading={bugRunning} onClick={()=>checkBug('REGRESSION')}>运行回归检查</Button></div><div className="form-label">模拟平台反馈</div><p>关闭需当前版本回归通过及用户审查；仅写入本地模拟平台。</p><Button onClick={()=>sendFeedback('WAITING_REVIEW')}>待审查</Button><Button onClick={()=>sendFeedback('REJECTED')}>拒绝</Button><Button onClick={()=>sendFeedback('USER_CONFIRMED_CLOSED')}>用户确认关闭</Button>{bugFeedback.map(f=><p key={f.ID}>{f.STATUS} · {f.CREATED_AT}</p>)}{bugResult&&<><p>结果：{bugResult.status}；耗时：{bugResult.durationMs} 毫秒</p><pre className="workspace-output">{bugResult.output}</pre><p>测试结果对应执行时的文件状态，修改代码后需要重新运行。</p></>}</Modal>
-  </div>;
+      {entryKind === 'CODE' && taskWorkspace && taskWrite && taskFileScope.trim() && taskAcceptance.trim() &&
+        <Button style={{marginTop: 8}} onClick={() => { setPlanReadOnly(false); setPlanOpen(true); }}>生成执行计划草稿</Button>}
+      {entryKind === 'CODE' && taskWorkspace && taskFileScope.trim() && taskAcceptance.trim() &&
+        <Button style={{marginTop: 8}} onClick={() => { setPlanReadOnly(true); setPlanOpen(true); }}>生成只读私有 Agent 计划</Button>}
+    </>{selectedWorkflow !== 'dual-analysis' && <><div className="form-label">模拟工具场景</div><Select value={scenario} onChange={setScenario} options={[{value:'normal',label:'正常执行'},{value:'fail',label:'工具失败'},{value:'slow',label:'慢速执行（用于测试取消）'},{value:'repeat',label:'重复调用（模拟模型测试）',disabled:model==='deepseek'}]} style={{width:'100%'}}/></>}<div className="form-label">运行限制</div><div className="form-label">运行限额（可选，留空则不设上限）</div><div className="limit-grid"><label>最大轮次<InputNumber min={1} max={20} placeholder="未设置" value={rounds} onChange={setRounds}/></label><label>工具总次数<InputNumber min={0} max={20} placeholder="未设置" value={tools} onChange={setTools}/></label><label>单工具次数<InputNumber min={0} max={20} placeholder="未设置" value={perTool} onChange={setPerTool}/></label><label>时间（秒）<InputNumber min={1} max={300} placeholder="未设置" value={seconds} onChange={setSeconds}/></label><label>单 Agent 模型调用上限（可选）<InputNumber min={1} max={20} value={maxAgentRounds} onChange={setMaxAgentRounds}/></label><label>单 Agent 工具调用上限（可选）<InputNumber min={0} max={20} value={maxAgentTools} onChange={setMaxAgentTools}/></label><label>已报告 Token 上限（可选）<InputNumber min={1} max={1000000} value={tokenLimit} onChange={setTokenLimit}/></label><label>费用硬预算（微单位，可选）<InputNumber min={1} max={1000000000} value={taskMaxCost} onChange={setTaskMaxCost}/></label><label>连续相同工具上限（可选）<InputNumber min={1} max={20} value={identicalLimit} onChange={setIdenticalLimit}/></label></div><NodeBudgetEditor template={selectedWorkflow} value={nodeBudgetsByTemplate[selectedWorkflow]??{}}
+      onChange={value=>setNodeBudgetsByTemplate(previous=>({...previous,[selectedWorkflow]:value}))}/><RoleBudgetEditor value={roleBudgets} onChange={setRoleBudgets}/><ToolBudgetEditor value={toolBudgets} onChange={setToolBudgets}/><p className="hint">单 Agent 与角色上限按实例分别计算；恢复后新实例重新计数，运行总预算继续继承。工具上限 0 表示不允许调用工具。</p><p className="hint">重复保护仅比较连续相同输入，可能阻止有意义的重复读取；留空关闭。</p><p className="hint">这是收到用量后的停止阈值，单次请求可能超额；用量未知时会停止。</p></WorkbenchDialog>
+    <WorkbenchDialog title="代码工作区" open={workspaceOpen} onCancel={()=>setWorkspaceOpen(false)} footer={null} width={760}><Alert type="warning" showIcon message="仅用于可信本地仓库。工作区不是代码执行沙箱；创建分支前请检查仓库。"/><div className="form-label">本地仓库目录</div><Input value={repoPath} onChange={e=>setRepoPath(e.target.value)} placeholder="例如 D:\\projects\\my-repo"/><div className="form-label">基础分支</div><Input value={baseBranch} onChange={e=>setBaseBranch(e.target.value)}/><Button style={{marginTop:12}} onClick={createWorkspace}>创建独立分支和工作区</Button><div className="form-label">已创建工作区</div><Select style={{width:'100%'}} value={selectedWorkspace?.id} onChange={selectWorkspace} options={workspaceList.map(w=>({value:w.id,label:`${w.branchName} · ${w.repositoryPath}`}))}/>{selectedWorkspace&&<><p>工作区：{selectedWorkspace.workspacePath}</p><p>基础提交：{selectedWorkspace.baseCommit}</p><Button onClick={()=>selectWorkspace(selectedWorkspace.id)}>刷新状态与差异</Button><Button onClick={loadMemories}>管理项目背景</Button><Button onClick={openCommits}>本地提交</Button><WorkspaceDeliveryPanel workspace={selectedWorkspace} api={api} onChanged={()=>selectWorkspace(selectedWorkspace.id)} />{workspaceStatus?.baseChanged&&<Alert type="warning" message="目标分支已变化，请重新检查。"/>}<div className="form-label">Git 状态（未跟踪文件不包含在下方差异中）</div><pre className="workspace-output">{workspaceStatus?.changes||'无变更'}</pre><div className="form-label">已跟踪文件差异</div><pre className="workspace-output">{workspaceStatus?.diff||'无差异'}</pre><div className="form-label">审查决定</div><p>仅记录当前差异的审查结果，不会提交、推送或合并；未跟踪文件尚不支持审批。</p><Button onClick={proposeApproval}>发起审查</Button>{approvals.map(a=><p key={a.ID}>{a.STATUS} · {a.ID.slice(0,8)} {a.STATUS==='PENDING'&&<><Button size="small" onClick={()=>decideApproval(a.ID,'APPROVE')}>批准</Button><Button size="small" onClick={()=>decideApproval(a.ID,'REJECT')}>拒绝</Button></>}</p>)}<div className="form-label">读取或编辑现有文件</div><Input value={filePath} onChange={e=>setFilePath(e.target.value)} placeholder="工作区内相对路径"/><Button style={{marginTop:8}} onClick={readFile}>读取文件</Button>{fileContent&&<><Input.TextArea value={fileContent.content} onChange={e=>setFileContent({...fileContent,content:e.target.value})} rows={8}/><Button onClick={saveFile}>确认保存到工作区</Button></>}</>}</WorkbenchDialog>
+    <WorkbenchDialog title="模拟 Bug 验证" open={bugOpen} onCancel={()=>setBugOpen(false)} footer={null} width={760}><p>MOCK-PY-001：验证工作区中 Python unittest 测试是否失败或通过。</p><Button onClick={()=>{if(!bugWorkspace){message.warning('请先选择工作区');return}if(taskWorkspace!==bugWorkspace){setTaskFileScope('');setTaskWrite(false);setTaskMemory(false)}setTaskWorkspace(bugWorkspace);const quick=bugQuickEntryDefaults();setTaskBugId(quick.bugId);setWorkflowTemplate(quick.workflowTemplate);setTaskWrite(quick.writeEnabled);setReviewPlan(quick.reviewPlan);setEntryKind(quick.entryKind);setGoal(quick.goal);setBugOpen(false);setModal(true)}}>基于此 Bug 创建 Agent 任务</Button><Alert type="warning" showIcon message="测试将在无网络、只读挂载的容器中运行。测试失败只说明观察到失败，不自动证明复现了特定 Bug。"/><div className="form-label">选择工作区</div><Select style={{width:'100%'}} value={bugWorkspace} onChange={v=>{setBugWorkspace(v);setBugResult(null);api('/bugs/feedback?workspaceId='+encodeURIComponent(v)).then(setBugFeedback).catch(()=>{})}} options={workspaceList.map(w=>({value:w.id,label:w.branchName}))}/><div style={{marginTop:12,display:'flex',gap:8}}><Button loading={bugRunning} onClick={()=>checkBug('REPRODUCE')}>观察失败</Button><Button loading={bugRunning} onClick={()=>checkBug('REGRESSION')}>运行回归检查</Button></div><div className="form-label">模拟平台反馈</div><p>关闭需当前版本回归通过及用户审查；仅写入本地模拟平台。</p><Button onClick={()=>sendFeedback('WAITING_REVIEW')}>待审查</Button><Button onClick={()=>sendFeedback('REJECTED')}>拒绝</Button><Button onClick={()=>sendFeedback('USER_CONFIRMED_CLOSED')}>用户确认关闭</Button>{bugFeedback.map(f=><p key={f.ID}>{f.STATUS} · {f.CREATED_AT}</p>)}{bugResult&&<><p>结果：{bugResult.status}；耗时：{bugResult.durationMs} 毫秒</p><pre className="workspace-output">{bugResult.output}</pre><p>测试结果对应执行时的文件状态，修改代码后需要重新运行。</p></>}</WorkbenchDialog>
+  </>;
 }
 
-createRoot(document.getElementById('root')).render(<ConfigProvider theme={{token:{colorPrimary:'#5368df',borderRadius:8,fontFamily:'"Segoe UI", "Microsoft YaHei UI", sans-serif',fontSize:13,colorText:'#24304b'}}}><AntApp><Workspace /></AntApp></ConfigProvider>);
-
-
-
-
-
-
-
-
-
-
-
-
-
+createRoot(document.getElementById('root')).render(
+  <ThemeProvider theme={workbenchTheme}>
+    <CssBaseline />
+    <ConfigProvider theme={{ token: {
+      colorPrimary: '#0b57d0', borderRadius: 10, fontFamily: workbenchTheme.typography.fontFamily,
+      colorText: workbenchTheme.palette.text.primary
+    } }}>
+      <AntApp><AuthGate><Workspace /></AuthGate></AntApp>
+    </ConfigProvider>
+  </ThemeProvider>
+);

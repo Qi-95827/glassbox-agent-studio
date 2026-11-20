@@ -64,7 +64,10 @@ public class PlanProposalService {
     }
     String proposalSha = sha(proposalJson);
     int version =
-        adjustments.findFirstByRunIdOrderByVersionDesc(runId).map(row -> row.getVersion() + 1).orElse(1);
+        adjustments
+            .findFirstByRunIdOrderByVersionDesc(runId)
+            .map(row -> row.getVersion() + 1)
+            .orElse(1);
     PlanAdjustmentEntity saved =
         adjustments.save(
             new PlanAdjustmentEntity(
@@ -88,8 +91,7 @@ public class PlanProposalService {
         adjustments
             .findByIdAndRunId(adjustmentId, runId)
             .orElseThrow(() -> new IllegalArgumentException("候选计划不存在。"));
-    if (!"PROPOSED".equals(row.getStatus()))
-      throw new IllegalStateException("候选计划已经应用或失效。");
+    if (!"PROPOSED".equals(row.getStatus())) throw new IllegalStateException("候选计划已经应用或失效。");
     if (!plan.graphSha256().equals(row.getBaseSha256()))
       throw new IllegalStateException("计划已变化，候选调整基于旧版本，不能应用。");
     var nodes = plans.find(runId);
@@ -150,8 +152,7 @@ public class PlanProposalService {
 
   private List<NodeChange> validate(
       String runId, WorkflowPlan plan, List<PlanNode> nodes, List<NodeChange> changes) {
-    if (changes == null || changes.isEmpty())
-      throw new IllegalArgumentException("候选计划至少需要包含一个节点。");
+    if (changes == null || changes.isEmpty()) throw new IllegalArgumentException("候选计划至少需要包含一个节点。");
     var byKey = new LinkedHashMap<String, PlanNode>();
     for (var node : nodes) byKey.put(node.key(), node);
     if (changes.size() != byKey.size())
@@ -161,8 +162,7 @@ public class PlanProposalService {
       if (change == null || change.key() == null || !byKey.containsKey(change.key()))
         throw new IllegalArgumentException("候选计划包含未知节点。");
       if (!seen.add(change.key())) throw new IllegalArgumentException("候选计划节点重复。");
-      if (change.dependencies() == null)
-        throw new IllegalArgumentException("节点依赖不能为空；无依赖请传空列表。");
+      if (change.dependencies() == null) throw new IllegalArgumentException("节点依赖不能为空；无依赖请传空列表。");
       if (new HashSet<>(change.dependencies()).size() != change.dependencies().size())
         throw new IllegalArgumentException("节点依赖不能重复。");
       for (String dependency : change.dependencies()) {
@@ -173,13 +173,16 @@ public class PlanProposalService {
       if (change.maxModelCalls() != null || change.maxToolCalls() != null)
         new WorkflowNodeBudget(change.maxModelCalls(), change.maxToolCalls());
       var run = runs.runSnapshot(runId);
-      if (change.maxModelCalls() != null && change.maxModelCalls() > run.maxRounds())
+      if (change.maxModelCalls() != null
+          && run.maxRounds() != null
+          && change.maxModelCalls() > run.maxRounds())
         throw new IllegalArgumentException("节点模型调用上限不能超过运行轮次上限。");
-      if (change.maxToolCalls() != null && change.maxToolCalls() > run.maxTools())
+      if (change.maxToolCalls() != null
+          && run.maxTools() != null
+          && change.maxToolCalls() > run.maxTools())
         throw new IllegalArgumentException("节点工具调用上限不能超过运行工具上限。");
     }
-    if (!seen.equals(byKey.keySet()))
-      throw new IllegalArgumentException("候选计划必须覆盖全部现有节点。");
+    if (!seen.equals(byKey.keySet())) throw new IllegalArgumentException("候选计划必须覆盖全部现有节点。");
     // 依赖必须构成有向无环图，避免候选计划在保存后无法调度。
     var graph = new LinkedHashMap<String, List<String>>();
     for (var change : changes) graph.put(change.key(), change.dependencies());
@@ -192,7 +195,10 @@ public class PlanProposalService {
             .map(
                 node -> {
                   var change =
-                      changes.stream().filter(item -> item.key().equals(node.key())).findFirst().orElseThrow();
+                      changes.stream()
+                          .filter(item -> item.key().equals(node.key()))
+                          .findFirst()
+                          .orElseThrow();
                   return withChange(node, change, byKey);
                 })
             .toList();
@@ -212,8 +218,7 @@ public class PlanProposalService {
 
   private static PlanNode withChange(
       PlanNode node, NodeChange change, Map<String, PlanNode> byKey) {
-    var dependencyIds =
-        change.dependencies().stream().map(key -> byKey.get(key).id()).toList();
+    var dependencyIds = change.dependencies().stream().map(key -> byKey.get(key).id()).toList();
     return new PlanNode(
         node.id(),
         node.runId(),
@@ -252,8 +257,7 @@ public class PlanProposalService {
       Integer beforeTools = node.budget() == null ? null : node.budget().maxToolCalls();
       Map<UUID, String> keyById = new LinkedHashMap<>();
       for (var candidate : base) keyById.put(candidate.id(), candidate.key());
-      List<String> beforeDeps =
-          node.dependencyIds().stream().map(keyById::get).sorted().toList();
+      List<String> beforeDeps = node.dependencyIds().stream().map(keyById::get).sorted().toList();
       List<String> afterDeps = change.dependencies().stream().sorted().toList();
       if (java.util.Objects.equals(beforeModel, change.maxModelCalls())
           && java.util.Objects.equals(beforeTools, change.maxToolCalls())
@@ -288,8 +292,7 @@ public class PlanProposalService {
   private List<NodeChange> read(String value) {
     try {
       return json.readValue(
-          value,
-          json.getTypeFactory().constructCollectionType(List.class, NodeChange.class));
+          value, json.getTypeFactory().constructCollectionType(List.class, NodeChange.class));
     } catch (JsonProcessingException e) {
       throw new IllegalStateException("已保存的候选计划无法读取。", e);
     }

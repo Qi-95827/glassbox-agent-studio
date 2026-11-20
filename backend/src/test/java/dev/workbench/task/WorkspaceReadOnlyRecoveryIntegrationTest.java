@@ -147,6 +147,16 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
     assertEquals("已保存的分析", dependencies.get(0).path("result").asText());
     assertEquals("SYSTEM_CHECK", dependencies.get(1).path("kind").asText());
 
+    var checkDetail = executionViews.detail(recovered, reused.get(1).id().toString());
+    assertEquals("已保存的分析", checkDetail.checks().getFirst().inputs().getFirst().sourceResult());
+    var summaryDetail = executionViews.detail(recovered, reused.getLast().id().toString());
+    var handoff = summaryDetail.inboundHandoffs().getFirst();
+    assertEquals(prepared.runId, handoff.sourceRunId());
+    assertEquals("已保存的分析", handoff.sourceResult());
+    var receipt = summaryDetail.checkReceipts().getFirst();
+    assertEquals(checkDetail.checks().getFirst().id(), receipt.checkId());
+    assertEquals(checkDetail.checks().getFirst().summary(), receipt.summary());
+
     assertTrue(
         recovery.checkpoints(prepared.runId, plans.workflowPlan(prepared.runId)).stream()
             .noneMatch(WorkflowCheckpoint::available));

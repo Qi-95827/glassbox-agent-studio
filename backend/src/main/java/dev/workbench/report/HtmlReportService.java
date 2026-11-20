@@ -98,7 +98,8 @@ public class HtmlReportService {
     return html.toString();
   }
 
-  public String render(String runId) {    Map<String, Object> run = repository.run(runId),
+  public String render(String runId) {
+    Map<String, Object> run = repository.run(runId),
         task = repository.task(run.get("TASK_ID").toString());
     var taskDefinition = repository.taskDefinition(run.get("TASK_ID").toString());
     StringBuilder html =
@@ -148,12 +149,14 @@ public class HtmlReportService {
           .append("</li>");
     html.append("</ul></section><section><h2>调用统计</h2><p>模型轮次：")
         .append(escape(run.get("ROUNDS")))
+        .append(" / ")
+        .append(run.get("MAX_ROUNDS") == null ? "未设置" : escape(run.get("MAX_ROUNDS")))
         .append("；工具次数：")
         .append(escape(run.get("TOOLS")))
         .append(" / ")
-        .append(escape(run.get("MAX_TOOLS")))
+        .append(run.get("MAX_TOOLS") == null ? "未设置" : escape(run.get("MAX_TOOLS")))
         .append("；单工具上限：")
-        .append(escape(run.get("MAX_PER_TOOL")))
+        .append(run.get("MAX_PER_TOOL") == null ? "未设置" : escape(run.get("MAX_PER_TOOL")))
         .append("；单 Agent 模型调用上限：")
         .append(run.get("MAX_AGENT_ROUNDS") == null ? "未设置" : escape(run.get("MAX_AGENT_ROUNDS")))
         .append("；单 Agent 工具调用上限：")
@@ -263,13 +266,9 @@ public class HtmlReportService {
         .append(escape(intake.expectedSymptom()))
         .append("</p>");
     if (intake.duplicateOf() != null)
-      html.append("<p>同来源同内容重复提交；首次记录：")
-          .append(escape(intake.duplicateOf()))
-          .append("。</p>");
+      html.append("<p>同来源同内容重复提交；首次记录：").append(escape(intake.duplicateOf())).append("。</p>");
     else if (intake.previousIntakeId() != null)
-      html.append("<p>同来源内容已变化；上一记录：")
-          .append(escape(intake.previousIntakeId()))
-          .append("。</p>");
+      html.append("<p>同来源内容已变化；上一记录：").append(escape(intake.previousIntakeId())).append("。</p>");
     else html.append("<p>该来源的首次提交。</p>");
     html.append("<p>分诊：")
         .append(escape(intake.triageStatus().label()))
@@ -288,7 +287,8 @@ public class HtmlReportService {
         .append("；回归记录代码状态摘要：")
         .append(regressionFingerprint == null ? "未记录" : escape(regressionFingerprint))
         .append("；回归证据对应当前版本：")
-        .append(regressionCurrent == null ? "尚无回归" : Boolean.TRUE.equals(regressionCurrent) ? "是" : "否")
+        .append(
+            regressionCurrent == null ? "尚无回归" : Boolean.TRUE.equals(regressionCurrent) ? "是" : "否")
         .append("。</p>");
     html.append("<p>交付结论：")
         .append(escape(delivery.get("conclusionLabel")))

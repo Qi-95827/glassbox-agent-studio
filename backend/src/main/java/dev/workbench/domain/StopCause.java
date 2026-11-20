@@ -24,6 +24,8 @@ public enum StopCause {
   TOOL_EFFECT_UNKNOWN(RunStatus.FAILED),
   /** 系统检查未通过或无法判定，运行保留已知记录并等待用户处理。 */
   CHECK_FAILED(RunStatus.BLOCKED),
+  /** 开发节点没有写出全部必需文件；已落地变更和证据保留，审查不会继续。 */
+  OUTPUT_MISSING(RunStatus.BLOCKED),
   RECOVERY_PRECONDITION_FAILED(RunStatus.FAILED),
   UNCLASSIFIED_FAILURE(RunStatus.FAILED);
 

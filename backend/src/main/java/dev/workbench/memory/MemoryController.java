@@ -8,13 +8,22 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/workspaces/{workspaceId}/memories")
 public class MemoryController {
   private final MemoryService memories;
+  private final dev.workbench.ownership.OwnershipService ownership;
 
   public record Change(MemoryCategory category, String content, Integer version) {}
 
   public record Deleted(boolean deleted) {}
 
-  public MemoryController(MemoryService memories) {
+  public MemoryController(
+      MemoryService memories, dev.workbench.ownership.OwnershipService ownership) {
     this.memories = memories;
+    this.ownership = ownership;
+  }
+
+  /** 所有记忆读写都先核对工作区归属。 */
+  @ModelAttribute
+  void requireWorkspace(@PathVariable String workspaceId) {
+    ownership.requireWorkspace(workspaceId);
   }
 
   @GetMapping

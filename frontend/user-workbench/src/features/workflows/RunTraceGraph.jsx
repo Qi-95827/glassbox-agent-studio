@@ -3,7 +3,7 @@ import { Box, ButtonBase, Chip, Paper, Stack, Typography, useMediaQuery } from '
 import { useTheme } from '@mui/material/styles';
 import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined';
 import FactCheckOutlined from '@mui/icons-material/FactCheckOutlined';
-import { Background, Controls, Handle, MarkerType, Position, ReactFlow } from '@xyflow/react';
+import { Background, BaseEdge, Controls, Handle, MarkerType, Position, ReactFlow } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
 import '@xyflow/react/dist/style.css';
 
@@ -13,6 +13,8 @@ const handleStyle = { opacity: 0, pointerEvents: 'none' };
 const status = {
   PENDING: ['待执行', 'default'],
   RUNNING: ['运行中', 'primary'],
+  PAUSED: ['已暂停', 'warning'],
+  CANCELLING: ['正在取消', 'warning'],
   COMPLETED: ['已完成', 'success'],
   REUSED: ['复用历史结果', 'info'],
   FAILED: ['失败', 'error'],
@@ -72,6 +74,16 @@ function TraceNode({ data }) {
 const nodeTypes = { trace: TraceNode };
 const edgeKey = edge => `${edge.fromNodeId}:${edge.toNodeId}`;
 
+function TraceEdge({ id, sourceX, sourceY, targetX, targetY, data, style, markerEnd, interactionWidth, label }) {
+  const points = [{ x: sourceX, y: sourceY }, ...(data.points ?? []).slice(1, -1), { x: targetX, y: targetY }];
+  const path = points.map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
+  const midpoint = points[Math.floor(points.length / 2)];
+  return <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} interactionWidth={interactionWidth}
+    label={label} labelX={midpoint.x} labelY={midpoint.y} labelBgPadding={[5, 3]} labelBgBorderRadius={4} />;
+}
+
+const edgeTypes = { trace: TraceEdge };
+
 function positions(nodes, edges, vertical) {
   const graph = new dagre.graphlib.Graph()
     .setGraph({ rankdir: vertical ? 'TB' : 'LR', nodesep: 25, ranksep: 52 })
@@ -84,10 +96,13 @@ function positions(nodes, edges, vertical) {
     }
   });
   dagre.layout(graph);
-  return new Map(nodes.map(node => {
-    const point = graph.node(node.id);
-    return [node.id, { x: point.x - width / 2, y: point.y - height / 2 }];
-  }));
+  return {
+    nodes: new Map(nodes.map(node => {
+      const point = graph.node(node.id);
+      return [node.id, { x: point.x - width / 2, y: point.y - height / 2 }];
+    })),
+    edges: new Map(graph.edges().map(edge => [`${edge.v}:${edge.w}`, graph.edge(edge).points]))
+  };
 }
 
 /** 计划依赖以服务端为准，已有回执时才把选中连线标成已接收。 */
@@ -100,11 +115,13 @@ export default function RunTraceGraph({
   const graphNodes = nodes.map(node => ({
     id: node.id,
     type: 'trace',
-    position: layout.get(node.id),
+    position: layout.nodes.get(node.id),
     data: { node, isSelected: selectedId === node.id, isActive: focusIds.has(node.id), onSelect: onSelectNode, vertical }
   }));
   const byId = new Map(nodes.map(node => [node.id, node]));
-  const receipts = [...(nodeDetail?.inboundHandoffs ?? []), ...(nodeDetail?.outboundHandoffs ?? [])];
+  const receipts = [
+    ...(nodeDetail?.inboundHandoffs ?? []), ...(nodeDetail?.outboundHandoffs ?? []), ...(nodeDetail?.checkReceipts ?? [])
+  ];
   const graphEdges = edges.filter(edge => byId.has(edge.fromNodeId) && byId.has(edge.toNodeId)).map(edge => {
     const id = edgeKey(edge);
     const active = selectedEdge && id === edgeKey(selectedEdge);
@@ -118,8 +135,8 @@ export default function RunTraceGraph({
       id,
       source: edge.fromNodeId,
       target: edge.toNodeId,
-      data: edge,
-      type: 'smoothstep',
+      data: { edge, points: layout.edges.get(id) },
+      type: 'trace',
       label: active ? (received ? '已接收' : '查看记录') : undefined,
       ariaLabel: `${traceNodeLabel(byId.get(edge.fromNodeId))} 到 ${traceNodeLabel(byId.get(edge.toNodeId))}的交接`,
       interactionWidth: 24,
@@ -128,10 +145,20 @@ export default function RunTraceGraph({
     };
   });
 
+  function openFocusedEdge(event) {
+    if ((event.key !== 'Enter' && event.key !== ' ') || event.altKey || event.ctrlKey || event.metaKey) return;
+    const id = event.target.closest('.react-flow__edge')?.getAttribute('data-id');
+    const edge = graphEdges.find(item => item.id === id);
+    if (edge) {
+      event.preventDefault();
+      onSelectEdge(edge.data.edge);
+    }
+  }
+
   return <Paper variant="outlined">
-    <Box sx={{ height: vertical ? 375 : nodes.length > 4 ? 348 : 278, minWidth: 0, bgcolor: 'grey.50' }}>
-      <ReactFlow key={`${runId}:${vertical}`} nodes={graphNodes} edges={graphEdges} nodeTypes={nodeTypes}
-        onEdgeClick={(_, edge) => onSelectEdge(edge.data)}
+    <Box onKeyDown={openFocusedEdge} sx={{ height: vertical ? 375 : nodes.length > 4 ? 348 : 278, minWidth: 0, bgcolor: 'grey.50' }}>
+      <ReactFlow key={`${runId}:${vertical}`} nodes={graphNodes} edges={graphEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+        onEdgeClick={(_, edge) => onSelectEdge(edge.data.edge)}
         nodesDraggable={false} nodesConnectable={false} nodesFocusable={false} deleteKeyCode={null}
         fitView fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
         minZoom={0.2} maxZoom={2} zoomOnScroll={false} onlyRenderVisibleElements>

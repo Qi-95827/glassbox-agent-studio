@@ -16,6 +16,8 @@ public record WorkflowHandoff(
     UUID receiverNodeId,
     UUID receiverAgentId,
     Instant acceptedAt,
+    UUID sourceRunId,
+    String sourceResult,
     List<ToolEvidence> toolEvidence) {
   public WorkflowHandoff {
     toolEvidence = List.copyOf(toolEvidence);

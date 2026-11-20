@@ -35,7 +35,8 @@ public record PlanNode(
     boolean workspaceWrite,
     WorkflowNodeBudget budget,
     PlanNodeKind kind,
-    SystemCheckRef checkRef) {
+    SystemCheckRef checkRef,
+    AgentBindingInfo agentBinding) {
   public PlanNode {
     dependencyIds = List.copyOf(dependencyIds);
     if (kind == null) throw new IllegalArgumentException("计划节点类型不能为空。");
@@ -43,6 +44,56 @@ public record PlanNode(
       throw new IllegalArgumentException("Agent 节点缺少定义引用。");
     if (kind == PlanNodeKind.SYSTEM_CHECK && (checkRef == null || definitionRef != null))
       throw new IllegalArgumentException("系统检查节点必须且只能引用受信检查。");
+  }
+
+  /** 兼容尚未保存 Agent 选择记录的旧计划。 */
+  public PlanNode(
+      UUID id,
+      UUID runId,
+      int sequence,
+      AgentRole role,
+      AgentRole prerequisite,
+      PlanNodeStatus status,
+      UUID agentId,
+      UUID sourceAgentId,
+      Instant startedAt,
+      Instant finishedAt,
+      List<UUID> dependencyIds,
+      AgentDefinitionRef definitionRef,
+      String definitionSha256,
+      UUID planVersionId,
+      String key,
+      String label,
+      String phase,
+      boolean workspaceRead,
+      boolean workspaceWrite,
+      WorkflowNodeBudget budget,
+      PlanNodeKind kind,
+      SystemCheckRef checkRef) {
+    this(
+        id,
+        runId,
+        sequence,
+        role,
+        prerequisite,
+        status,
+        agentId,
+        sourceAgentId,
+        startedAt,
+        finishedAt,
+        dependencyIds,
+        definitionRef,
+        definitionSha256,
+        planVersionId,
+        key,
+        label,
+        phase,
+        workspaceRead,
+        workspaceWrite,
+        budget,
+        kind,
+        checkRef,
+        null);
   }
 
   /** 是否由系统检查执行器处理。 */

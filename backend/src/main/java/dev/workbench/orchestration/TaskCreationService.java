@@ -55,7 +55,8 @@ public class TaskCreationService {
       WorkflowTemplate workflow,
       boolean reviewRequired,
       EntryPolicyService.Validation entryValidation) {
-    persist(task, runId, limits, message, workflow, reviewRequired, entryValidation, null, null, null);
+    persist(
+        task, runId, limits, message, workflow, reviewRequired, entryValidation, null, null, null);
   }
 
   @Transactional
@@ -77,6 +78,27 @@ public class TaskCreationService {
       entryPolicies.save(task.id().toString(), entryValidation);
     }
     if (route != null) entryRoutes.save(task.id().toString(), route);
+    if (workspaceScope != null)
+      workspaceAuthorization.save(task.id().toString(), task.workspaceId(), workspaceScope);
+    if (maxCostMicros != null) costs.bindLimit(runId.toString(), task.modelMode(), maxCostMicros);
+  }
+
+  /**
+   * 已确认候选的唯一创建事务。
+   *
+   * <p>任务、首运行、计划、节点规格、授权范围和费用上限一起提交；调用方在同一事务内消费候选， 任一写入失败时不会留下可派发的运行。
+   */
+  @Transactional
+  public void persistFromCandidate(
+      TaskDefinition task,
+      UUID runId,
+      RunLimits limits,
+      String message,
+      dev.workbench.framework.workflow.plan.CandidateRunPlan plan,
+      WorkspaceAuthorizationService.Prepared workspaceScope,
+      Long maxCostMicros) {
+    runs.createTaskAndFirstRunFromPlan(
+        task, runId, limits, message, plan, java.time.Instant.now().toString());
     if (workspaceScope != null)
       workspaceAuthorization.save(task.id().toString(), task.workspaceId(), workspaceScope);
     if (maxCostMicros != null) costs.bindLimit(runId.toString(), task.modelMode(), maxCostMicros);

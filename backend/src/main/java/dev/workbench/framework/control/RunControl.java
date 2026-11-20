@@ -28,7 +28,7 @@ public final class RunControl {
   private final long startedNanos = System.nanoTime();
   private final Object pauseMonitor;
   private long pausedNanos, pauseStartedNanos;
-  private final int maxRounds, maxTools, maxPerTool, maxSeconds;
+  private final Integer maxRounds, maxTools, maxPerTool, maxSeconds;
   private final Long maxReportedTokens;
   private final Integer maxIdenticalTools;
   private final Integer maxAgentRounds, maxAgentTools;
@@ -133,7 +133,8 @@ public final class RunControl {
       }
     }
     if (cancelled.contains(runId)) throw new StopExecution(StopCause.USER_CANCELLED, "用户已取消运行。");
-    if (elapsed() >= maxSeconds * 1000L) throw new StopExecution(StopCause.TIME_LIMIT, "运行时间达到上限。");
+    if (maxSeconds != null && elapsed() >= maxSeconds * 1000L)
+      throw new StopExecution(StopCause.TIME_LIMIT, "运行时间达到上限。");
     save(RunStatus.RUNNING, null, null);
   }
 
@@ -171,7 +172,8 @@ public final class RunControl {
 
   private void checkModelBudget(NodePolicy node) {
     checkTokenBudget();
-    if (rounds >= maxRounds) throw new StopExecution(StopCause.MODEL_ROUND_LIMIT, "Agent 轮次达到上限。");
+    if (maxRounds != null && rounds >= maxRounds)
+      throw new StopExecution(StopCause.MODEL_ROUND_LIMIT, "Agent 轮次达到上限。");
     if (node != null
         && node.budget().maxModelCalls() != null
         && repository.countNodeModelCalls(runId, node.nodeId()) >= node.budget().maxModelCalls())
@@ -180,7 +182,7 @@ public final class RunControl {
 
   /** 创建新尝试前先确认原节点和运行预算还允许一次模型调用。 */
   public boolean hasModelRetryBudget(NodePolicy node) {
-    if (elapsed() + MODEL_RETRY_DELAY_MS >= maxSeconds * 1000L) return false;
+    if (maxSeconds != null && elapsed() + MODEL_RETRY_DELAY_MS >= maxSeconds * 1000L) return false;
     try {
       checkModelBudget(node);
       return true;
@@ -223,7 +225,8 @@ public final class RunControl {
 
   private void toolCall(String agentId, ToolKind kind, String fingerprint, NodePolicy node) {
     check();
-    if (tools >= maxTools) throw new StopExecution(StopCause.TOOL_CALL_LIMIT, "工具调用次数达到上限。");
+    if (maxTools != null && tools >= maxTools)
+      throw new StopExecution(StopCause.TOOL_CALL_LIMIT, "工具调用次数达到上限。");
     if (node != null
         && node.budget().maxToolCalls() != null
         && repository.countNodeToolCalls(runId, node.nodeId()) >= node.budget().maxToolCalls())
@@ -237,12 +240,15 @@ public final class RunControl {
       if (roleLimit != null && used >= roleLimit)
         throw new StopExecution(StopCause.ROLE_TOOL_LIMIT, "当前角色的单实例工具调用次数达到上限。");
     }
-    int usedForTool = repository.countToolCalls(runId, kind);
-    if (usedForTool >= maxPerTool)
-      throw new StopExecution(StopCause.PER_TOOL_LIMIT, "单工具调用次数达到上限：" + kind.recordName());
     Integer specificLimit = toolBudgets.get(kind);
-    if (specificLimit != null && usedForTool >= specificLimit)
-      throw new StopExecution(StopCause.SPECIFIC_TOOL_LIMIT, "该工具的专属调用次数达到上限：" + kind.recordName());
+    if (maxPerTool != null || specificLimit != null) {
+      int usedForTool = repository.countToolCalls(runId, kind);
+      if (maxPerTool != null && usedForTool >= maxPerTool)
+        throw new StopExecution(StopCause.PER_TOOL_LIMIT, "单工具调用次数达到上限：" + kind.recordName());
+      if (specificLimit != null && usedForTool >= specificLimit)
+        throw new StopExecution(
+            StopCause.SPECIFIC_TOOL_LIMIT, "该工具的专属调用次数达到上限：" + kind.recordName());
+    }
     if (maxIdenticalTools != null
         && repository.consecutiveToolAttempts(runId, kind, fingerprint, maxIdenticalTools)
             >= maxIdenticalTools)

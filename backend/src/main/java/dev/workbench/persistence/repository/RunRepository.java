@@ -58,8 +58,9 @@ public interface RunRepository extends JpaRepository<RunEntity, String> {
       """)
   List<RunData> findRunsByTaskId(@Param("taskId") String taskId);
 
-  @Query("select new dev.workbench.persistence.repository.RunOwner(r.taskId, r.parentId)"
-      + " from RunEntity r where r.id = :id")
+  @Query(
+      "select new dev.workbench.persistence.repository.RunOwner(r.taskId, r.parentId)"
+          + " from RunEntity r where r.id = :id")
   Optional<RunOwner> findOwner(@Param("id") String id);
 
   @Query(
@@ -149,13 +150,7 @@ public interface RunRepository extends JpaRepository<RunEntity, String> {
 
   default boolean rejectBeforeDispatch(String runId, String reason, String time) {
     return rejectBeforeDispatch(
-            runId,
-            FAILED,
-            reason,
-            RecoveryDispatchStatus.REJECTED.name(),
-            time,
-            PENDING,
-            UNKNOWN)
+            runId, FAILED, reason, RecoveryDispatchStatus.REJECTED.name(), time, PENDING, UNKNOWN)
         == 1;
   }
 
@@ -304,6 +299,19 @@ public interface RunRepository extends JpaRepository<RunEntity, String> {
         coalesce(sum(case when r.status = :completed then 1 else 0 end), 0))
       from RunEntity r
       """)
-  RunCounts countByStatus(
-      @Param("running") String running, @Param("completed") String completed);
+  RunCounts countByStatus(@Param("running") String running, @Param("completed") String completed);
+
+  @Query(
+      """
+      select new dev.workbench.persistence.repository.RunCounts(
+        count(r.id),
+        coalesce(sum(case when r.status = :running then 1 else 0 end), 0),
+        coalesce(sum(case when r.status = :completed then 1 else 0 end), 0))
+      from RunEntity r
+      where r.taskId in :taskIds
+      """)
+  RunCounts countByStatusForTasks(
+      @Param("taskIds") List<String> taskIds,
+      @Param("running") String running,
+      @Param("completed") String completed);
 }

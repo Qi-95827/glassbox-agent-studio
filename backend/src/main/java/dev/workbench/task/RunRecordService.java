@@ -11,16 +11,16 @@ import dev.workbench.framework.tool.AgentToolGrant;
 import dev.workbench.framework.workflow.plan.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.orchestration.Handoff;
-import dev.workbench.persistence.repository.AgentConfigurationRepository;
-import dev.workbench.persistence.repository.HandoffRepository;
-import dev.workbench.persistence.repository.InvocationRepository;
-import dev.workbench.persistence.repository.RunCheckpointRepository;
 import dev.workbench.persistence.entity.EventEntity;
 import dev.workbench.persistence.entity.RunEntity;
 import dev.workbench.persistence.entity.TaskEntity;
 import dev.workbench.persistence.entity.TaskRoleBudgetEntity;
 import dev.workbench.persistence.entity.TaskToolBudgetEntity;
+import dev.workbench.persistence.repository.AgentConfigurationRepository;
 import dev.workbench.persistence.repository.EventRepository;
+import dev.workbench.persistence.repository.HandoffRepository;
+import dev.workbench.persistence.repository.InvocationRepository;
+import dev.workbench.persistence.repository.RunCheckpointRepository;
 import dev.workbench.persistence.repository.RunData;
 import dev.workbench.persistence.repository.RunRepository;
 import dev.workbench.persistence.repository.TaskData;
@@ -41,7 +41,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.LinkedCaseInsensitiveMap;
 
-/** 持久化边界：将领域枚举转换为稳定编码，保留已有查询接口格式。*/
+/** 持久化边界：将领域枚举转换为稳定编码，保留已有查询接口格式。 */
 @Service
 public class RunRecordService {
   private static final int BUDGET_POLICY_VERSION = 1;
@@ -58,6 +58,7 @@ public class RunRecordService {
   private final TaskRepository taskRows;
   private final TaskRoleBudgetRepository roleBudgetRows;
   private final TaskToolBudgetRepository toolBudgetRows;
+  private final dev.workbench.ownership.OwnershipService ownership;
 
   public RunRecordService(
       AgentConfigurationRepository agentConfiguration,
@@ -72,7 +73,8 @@ public class RunRecordService {
       InvocationRepository invocationRows,
       TaskRepository taskRows,
       TaskRoleBudgetRepository roleBudgetRows,
-      TaskToolBudgetRepository toolBudgetRows) {
+      TaskToolBudgetRepository toolBudgetRows,
+      dev.workbench.ownership.OwnershipService ownership) {
     this.agentConfiguration = agentConfiguration;
     this.handoffRows = handoffRows;
     this.checkpointRows = checkpointRows;
@@ -86,6 +88,7 @@ public class RunRecordService {
     this.taskRows = taskRows;
     this.roleBudgetRows = roleBudgetRows;
     this.toolBudgetRows = toolBudgetRows;
+    this.ownership = ownership;
   }
 
   public static String id() {
@@ -138,7 +141,7 @@ public class RunRecordService {
     return row;
   }
 
-  /** 归档只改变任务列表可见性，不删除运行、证据或 Git 产物。*/
+  /** 归档只改变任务列表可见性，不删除运行、证据或 Git 产物。 */
   public void setTaskArchived(String taskId, boolean archived) {
     if (taskRows.setArchivedAt(taskId, archived ? now() : null) != 1)
       throw new IllegalArgumentException("任务不存在。");
@@ -156,7 +159,7 @@ public class RunRecordService {
     return runRows.findRunById(id).orElseThrow(() -> new EmptyResultDataAccessException(1));
   }
 
-  /** 当前任务版本；补充等信息变更会递增，提交方用它做乐观并发校验。*/
+  /** 当前任务版本；补充等信息变更会递增，提交方用它做乐观并发校验。 */
   public int taskVersion(String taskId) {
     return taskRows
         .findVersionById(taskId)
@@ -186,7 +189,7 @@ public class RunRecordService {
         toolBudgets(id));
   }
 
-  /** 读取任务角色策略；未知版本或角色不能当作未设置。*/
+  /** 读取任务角色策略；未知版本或角色不能当作未设置。 */
   public Map<AgentRole, RoleBudget> roleBudgets(String taskId) {
     var result = new java.util.EnumMap<AgentRole, RoleBudget>(AgentRole.class);
     for (var row : taskRows.findRoleBudgets(taskId)) {
@@ -203,7 +206,7 @@ public class RunRecordService {
     return Map.copyOf(result);
   }
 
-  /** 读取指定工具的策略；未知版本或类型不能当作未设置。*/
+  /** 读取指定工具的策略；未知版本或类型不能当作未设置。 */
   public Map<ToolKind, Integer> toolBudgets(String taskId) {
     var result = new java.util.EnumMap<ToolKind, Integer>(ToolKind.class);
     for (var row : taskRows.findToolBudgets(taskId)) {
@@ -221,7 +224,7 @@ public class RunRecordService {
     return Map.copyOf(result);
   }
 
-  /** 限额计算使用本运行已启动实例的角色，不能由模型自行声明。*/
+  /** 限额计算使用本运行已启动实例的角色，不能由模型自行声明。 */
   public AgentRole agentRole(String runId, String agentId) {
     String code = invocationRows.findRoleCode(runId, agentId);
     try {
@@ -248,7 +251,7 @@ public class RunRecordService {
     }
   }
 
-  /** 先验证摘要和事件引用，再转换检查点；拒绝不兼容或损坏的数据。*/
+  /** 先验证摘要和事件引用，再转换检查点；拒绝不兼容或损坏的数据。 */
   public CheckpointSnapshot checkedCheckpoint(String id) {
     Map<String, Object> row = checkpoint(id);
     if (!validCheckpoint(row)) throw new IllegalArgumentException("检查点损坏、缺少关联事件或版本不兼容。");
@@ -292,7 +295,7 @@ public class RunRecordService {
         .toList();
   }
 
-  /** 读取真实实例所认领节点的定义；历史节点没有记录时返回空。*/
+  /** 读取真实实例所认领节点的定义；历史节点没有记录时返回空。 */
   public PlannedAgentDefinition plannedDefinitionForAgent(String runId, String agentId) {
     UUID instanceId = UUID.fromString(agentId);
     var matching =
@@ -305,10 +308,10 @@ public class RunRecordService {
     return new PlannedAgentDefinition(node.definitionRef(), node.definitionSha256());
   }
 
-  /** 历史计划引用和摘要可同时为空；不根据当前定义伪造历史摘要。*/
+  /** 历史计划引用和摘要可同时为空；不根据当前定义伪造历史摘要。 */
   public record PlannedAgentDefinition(AgentDefinitionRef reference, String sha256) {}
 
-  /** 完整装配及兼容查询所需投影在同一事务内发布。*/
+  /** 完整装配及兼容查询所需投影在同一事务内发布。 */
   public void recordAgentAssembly(String runId, String agentId, AgentAssemblySnapshot snapshot) {
     tx.executeWithoutResult(
         ignored -> {
@@ -331,7 +334,7 @@ public class RunRecordService {
         });
   }
 
-  /** 历史没有快照的实例不会由现行配置推测补齐。*/
+  /** 历史没有快照的实例不会由现行配置推测补齐。 */
   public List<AgentAssemblySnapshot.Recorded> agentAssemblies(String runId) {
     return agentConfiguration.findAssemblies(runId).stream()
         .map(
@@ -348,7 +351,7 @@ public class RunRecordService {
         .toList();
   }
 
-  /** 仅记录运行中实例实际解析的定义；历史空值不自动推断。*/
+  /** 仅记录运行中实例实际解析的定义；历史空值不自动推断。 */
   public void recordAgentDefinition(
       String runId, String agentId, AgentDefinitionRef ref, String sha256) {
     java.util.Objects.requireNonNull(ref, "Agent 定义引用不能为空");
@@ -358,7 +361,7 @@ public class RunRecordService {
       throw new IllegalStateException("Agent 不存在、已结束或定义已记录。");
   }
 
-  /** 记录已装配技能的不可变引用；不记录提示正文，也不授予工具权限。*/
+  /** 记录已装配技能的不可变引用；不记录提示正文，也不授予工具权限。 */
   public void recordAgentSkills(String agentId, List<SkillRef> skills) {
     tx.executeWithoutResult(
         s -> {
@@ -380,7 +383,7 @@ public class RunRecordService {
     return agentConfiguration.findSkills(runId);
   }
 
-  /** 注册集合和空集合标记在同一事务保存；失败时不应启动模型。*/
+  /** 注册集合和空集合标记在同一事务保存；失败时不应启动模型。 */
   public void recordAgentToolGrants(String agentId, java.util.Set<ToolKind> tools) {
     if (tools == null || tools.stream().anyMatch(java.util.Objects::isNull))
       throw new IllegalArgumentException("工具集合无效。");
@@ -389,7 +392,7 @@ public class RunRecordService {
     saveAgentToolGrants(agentId, versions);
   }
 
-  /** 新装配必须提供明确的服务端工具契约版本。*/
+  /** 新装配必须提供明确的服务端工具契约版本。 */
   public void recordAgentVersionedToolGrants(
       String agentId, java.util.Map<ToolKind, Integer> tools) {
     if (tools == null
@@ -408,7 +411,7 @@ public class RunRecordService {
         });
   }
 
-  /** 缺失标记与已登记空集合分开。*/
+  /** 缺失标记与已登记空集合分开。 */
   public List<AgentToolGrant> agentToolGrants(String runId) {
     return agentConfiguration.findToolGrants(runId);
   }
@@ -448,7 +451,7 @@ public class RunRecordService {
     invocationRows.insertTool(id, runId, agentId, toolName, version, now());
   }
 
-  /** 已启用重复保护时，调用记录与指纹在同一事务中写入。*/
+  /** 已启用重复保护时，调用记录与指纹在同一事务中写入。 */
   public void startTool(
       String id, String runId, String agentId, ToolKind kind, String fingerprint) {
     startTool(id, runId, agentId, kind, null, fingerprint);
@@ -470,7 +473,7 @@ public class RunRecordService {
     finishTool(id, status, result, error, duration, null);
   }
 
-  /** 只读工具的资源版本与调用终态一起保存；旧调用没有该证据时保持为空。*/
+  /** 只读工具的资源版本与调用终态一起保存；旧调用没有该证据时保持为空。 */
   public void finishTool(
       String id,
       InvocationStatus status,
@@ -534,7 +537,7 @@ public class RunRecordService {
     tx.executeWithoutResult(ignored -> startAgentRecord(id, runId, goal, role, now()));
   }
 
-  /** 首次委派、实例启动和接收记录共同提交，避免半成品运行。*/
+  /** 首次委派、实例启动和接收记录共同提交，避免半成品运行。 */
   public void startAgentWithDelegation(String id, String runId, String goal, Handoff delegation) {
     tx.executeWithoutResult(
         ignored -> {
@@ -554,7 +557,7 @@ public class RunRecordService {
         });
   }
 
-  /** 启动下游实例和确认交接为同一事务；确认不证明模型已读取输入。*/
+  /** 启动下游实例和确认交接为同一事务；确认不证明模型已读取输入。 */
   public void startAgentFromHandoff(
       String id, String runId, String goal, AgentRole role, UUID handoffId) {
     tx.executeWithoutResult(
@@ -591,7 +594,7 @@ public class RunRecordService {
         });
   }
 
-  /** 由调用方提供事务，确保计划节点和 Agent 调用一起写入。*/
+  /** 由调用方提供事务，确保计划节点和 Agent 调用一起写入。 */
   private void startAgentRecord(String id, String runId, String goal, AgentRole role, String time) {
     plans.start(runId, id, role, time);
     insertAgent(id, runId, goal, role, time);
@@ -625,7 +628,7 @@ public class RunRecordService {
         });
   }
 
-  /** 审查完成、交接和整个运行终态一起提交，外部模型调用不在事务内。*/
+  /** 审查完成、交接和整个运行终态一起提交，外部模型调用不在事务内。 */
   public void finishReviewedRun(ReviewCompletion completion) {
     java.util.Objects.requireNonNull(completion, "运行终态不能为。");
     tx.executeWithoutResult(
@@ -748,9 +751,10 @@ public class RunRecordService {
     task.setEntryKind(entryKind.name());
     task.setFileScopesJson(writeTextList(fileScopes));
     taskRows.save(task);
+    if (ownership != null) ownership.stamp(dev.workbench.ownership.OwnershipService.TASK, id);
   }
 
-  /** 首运行及计划与任务、创建事件同事务，避免持久化出孤立的半成品。*/
+  /** 首运行及计划与任务、创建事件同事务，避免持久化出孤立的半成品。 */
   public void createTaskAndFirstRun(
       TaskDefinition task, UUID runId, RunLimits limits, String message) {
     createTaskAndFirstRun(task, runId, limits, message, null, false);
@@ -765,37 +769,7 @@ public class RunRecordService {
       boolean reviewRequired) {
     tx.executeWithoutResult(
         status -> {
-          createTask(
-              task.id().toString(),
-              task.goal(),
-              task.scenario(),
-              task.modelMode(),
-              task.workspaceId(),
-              task.fileScope(),
-              task.writeEnabled(),
-              task.bugId(),
-              task.memoryEnabled(),
-              task.constraints(),
-              task.acceptanceCriteria(),
-              task.entryKind(),
-              task.fileScopes());
-          for (var entry : task.roleBudgets().entrySet()) {
-            roleBudgetRows.save(
-                new TaskRoleBudgetEntity(
-                    task.id().toString(),
-                    entry.getKey().name(),
-                    BUDGET_POLICY_VERSION,
-                    entry.getValue().maxModelCalls(),
-                    entry.getValue().maxToolCalls()));
-          }
-          for (var entry : task.toolBudgets().entrySet()) {
-            toolBudgetRows.save(
-                new TaskToolBudgetEntity(
-                    task.id().toString(),
-                    entry.getKey().name(),
-                    BUDGET_POLICY_VERSION,
-                    entry.getValue()));
-          }
+          createTaskRow(task);
           createRun(
               runId.toString(),
               task.id().toString(),
@@ -813,12 +787,82 @@ public class RunRecordService {
               limits.maxAgentRounds(),
               limits.maxAgentTools(),
               workflow,
+              null,
               reviewRequired);
           event(runId.toString(), EventType.TASK_CREATED, message);
         });
   }
 
-  /** 恢复子运行、计划和创建事件一起保存，预算采用父运行与快照的较大值。*/
+  /** 已确认候选计划的任务、运行、计划、节点规格和创建事件一起提交。 */
+  public void createTaskAndFirstRunFromPlan(
+      TaskDefinition task,
+      UUID runId,
+      RunLimits limits,
+      String message,
+      dev.workbench.framework.workflow.plan.CandidateRunPlan plan,
+      String planTime) {
+    tx.executeWithoutResult(
+        status -> {
+          createTaskRow(task);
+          createRun(
+              runId.toString(),
+              task.id().toString(),
+              null,
+              0,
+              0,
+              limits.maxRounds(),
+              limits.maxTools(),
+              limits.maxPerTool(),
+              limits.maxReportedTokens(),
+              limits.maxIdenticalTools(),
+              limits.maxSeconds(),
+              0,
+              task.writeEnabled(),
+              limits.maxAgentRounds(),
+              limits.maxAgentTools(),
+              null,
+              plan,
+              false);
+          event(runId.toString(), EventType.TASK_CREATED, message);
+          event(runId.toString(), EventType.PLAN_APPROVED, "用户确认候选计划并创建运行。");
+        });
+  }
+
+  private void createTaskRow(TaskDefinition task) {
+    createTask(
+        task.id().toString(),
+        task.goal(),
+        task.scenario(),
+        task.modelMode(),
+        task.workspaceId(),
+        task.fileScope(),
+        task.writeEnabled(),
+        task.bugId(),
+        task.memoryEnabled(),
+        task.constraints(),
+        task.acceptanceCriteria(),
+        task.entryKind(),
+        task.fileScopes());
+    for (var entry : task.roleBudgets().entrySet()) {
+      roleBudgetRows.save(
+          new TaskRoleBudgetEntity(
+              task.id().toString(),
+              entry.getKey().name(),
+              BUDGET_POLICY_VERSION,
+              entry.getValue().maxModelCalls(),
+              entry.getValue().maxToolCalls()));
+    }
+    for (var entry : task.toolBudgets().entrySet()) {
+      toolBudgetRows.save(
+          new TaskToolBudgetEntity(
+              task.id().toString(),
+              entry.getKey().name(),
+              BUDGET_POLICY_VERSION,
+              entry.getValue()));
+    }
+  }
+
+  /** 恢复子运行、计划和创建事件一起保存，预算采用父运行与快照的较大值。 */
   public void createRecoveryRun(UUID runId, RunSnapshot original, CheckpointSnapshot checkpoint) {
     if (!checkpoint.runId().equals(original.id()) || original.status() != RunStatus.INTERRUPTED)
       throw new IllegalArgumentException("检查点与中断运行不匹配。");
@@ -847,7 +891,7 @@ public class RunRecordService {
         });
   }
 
-  /** 调用方在源运行锁和恢复校验事务内创建副本。*/
+  /** 调用方在源运行锁和恢复校验事务内创建副本。 */
   void createWorkflowRecoveryRun(
       UUID id,
       RunSnapshot original,
@@ -876,7 +920,7 @@ public class RunRecordService {
         reviewRequired);
   }
 
-  /** 仅在线程池明确拒绝时调用；记录成功后父运行才允许再次申请恢复。*/
+  /** 仅在线程池明确拒绝时调用；记录成功后父运行才允许再次申请恢复。 */
   public void rejectRecoveryBeforeDispatch(String runId) {
     tx.executeWithoutResult(
         status -> {
@@ -894,15 +938,15 @@ public class RunRecordService {
       String parent,
       int rounds,
       int tools,
-      int maxRounds,
-      int maxTools,
-      int maxSeconds,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxSeconds,
       long elapsed) {
     createRun(
         id, taskId, parent, rounds, tools, maxRounds, maxTools, maxTools, maxSeconds, elapsed);
   }
 
-  /** 仅当前置检查在任何 Agent、模型和工具调用之前失败时，才允许父运行重试。*/
+  /** 仅当前置检查在任何 Agent、模型和工具调用之前失败时，才允许父运行重试。 */
   public void rejectRecoveryPrecondition(
       String runId, int rounds, int tools, long elapsed, String reason) {
     tx.executeWithoutResult(
@@ -914,17 +958,17 @@ public class RunRecordService {
         });
   }
 
-  /** 创建运行及固定计划；单工具上限随恢复运行传递。*/
+  /** 创建运行及固定计划；单工具上限随恢复运行传递。 */
   public void createRun(
       String id,
       String taskId,
       String parent,
       int rounds,
       int tools,
-      int maxRounds,
-      int maxTools,
-      int maxPerTool,
-      int maxSeconds,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxPerTool,
+      Integer maxSeconds,
       long elapsed) {
     createRun(
         id,
@@ -946,11 +990,11 @@ public class RunRecordService {
       String parent,
       int rounds,
       int tools,
-      int maxRounds,
-      int maxTools,
-      int maxPerTool,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxPerTool,
       Long maxReportedTokens,
-      int maxSeconds,
+      Integer maxSeconds,
       long elapsed) {
     createRun(
         id,
@@ -973,11 +1017,11 @@ public class RunRecordService {
       String parent,
       int rounds,
       int tools,
-      int maxRounds,
-      int maxTools,
-      int maxPerTool,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxPerTool,
       Long maxReportedTokens,
-      int maxSeconds,
+      Integer maxSeconds,
       long elapsed,
       boolean includeCoder) {
     createRun(
@@ -1002,12 +1046,12 @@ public class RunRecordService {
       String parent,
       int rounds,
       int tools,
-      int maxRounds,
-      int maxTools,
-      int maxPerTool,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxPerTool,
       Long maxReportedTokens,
       Integer maxIdenticalTools,
-      int maxSeconds,
+      Integer maxSeconds,
       long elapsed,
       boolean includeCoder) {
     createRun(
@@ -1034,12 +1078,12 @@ public class RunRecordService {
       String parent,
       int rounds,
       int tools,
-      int maxRounds,
-      int maxTools,
-      int maxPerTool,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxPerTool,
       Long maxReportedTokens,
       Integer maxIdenticalTools,
-      int maxSeconds,
+      Integer maxSeconds,
       long elapsed,
       boolean includeCoder,
       Integer maxAgentRounds,
@@ -1070,17 +1114,57 @@ public class RunRecordService {
       String parent,
       int rounds,
       int tools,
-      int maxRounds,
-      int maxTools,
-      int maxPerTool,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxPerTool,
       Long maxReportedTokens,
       Integer maxIdenticalTools,
-      int maxSeconds,
+      Integer maxSeconds,
       long elapsed,
       boolean includeCoder,
       Integer maxAgentRounds,
       Integer maxAgentTools,
       WorkflowTemplate workflow,
+      boolean reviewRequired) {
+    createRun(
+        id,
+        taskId,
+        parent,
+        rounds,
+        tools,
+        maxRounds,
+        maxTools,
+        maxPerTool,
+        maxReportedTokens,
+        maxIdenticalTools,
+        maxSeconds,
+        elapsed,
+        includeCoder,
+        maxAgentRounds,
+        maxAgentTools,
+        workflow,
+        null,
+        reviewRequired);
+  }
+
+  private void createRun(
+      String id,
+      String taskId,
+      String parent,
+      int rounds,
+      int tools,
+      Integer maxRounds,
+      Integer maxTools,
+      Integer maxPerTool,
+      Long maxReportedTokens,
+      Integer maxIdenticalTools,
+      Integer maxSeconds,
+      long elapsed,
+      boolean includeCoder,
+      Integer maxAgentRounds,
+      Integer maxAgentTools,
+      WorkflowTemplate workflow,
+      dev.workbench.framework.workflow.plan.CandidateRunPlan candidatePlan,
       boolean reviewRequired) {
     String now = now();
     tx.executeWithoutResult(
@@ -1108,12 +1192,15 @@ public class RunRecordService {
           runRows.save(run);
           // 计划与节点外键引用运行，事件写入还要锁运行行；先落库再继续。
           runRows.flush();
-          if (workflow == null) plans.initialize(id, includeCoder);
-          else plans.initializeWorkflow(id, workflow, taskDefinition(taskId), reviewRequired, now);
+          if (workflow == null) {
+            if (candidatePlan == null) plans.initialize(id, includeCoder);
+            else plans.initializeFromCandidate(id, candidatePlan, taskDefinition(taskId), now);
+          } else
+            plans.initializeWorkflow(id, workflow, taskDefinition(taskId), reviewRequired, now);
         });
   }
 
-  /** 仅用于当前实例限额；已开始调用无论最终状态都计数。*/
+  /** 仅用于当前实例限额；已开始调用无论最终状态都计数。 */
   public int countAgentModelCalls(String agentId) {
     return invocationRows.countAgentModelCalls(agentId);
   }
@@ -1122,7 +1209,7 @@ public class RunRecordService {
     return invocationRows.countAgentToolCalls(agentId);
   }
 
-  /** 累计节点的全部尝试，所有已记录启动的调用占用预算。*/
+  /** 累计节点的全部尝试，所有已记录启动的调用占用预算。 */
   public int countNodeModelCalls(String runId, UUID nodeId) {
     return invocationRows.countNodeModelCalls(runId, nodeId.toString());
   }
@@ -1131,7 +1218,7 @@ public class RunRecordService {
     return invocationRows.countNodeToolCalls(runId, nodeId.toString());
   }
 
-  /** 按记录顺序倒查当前运行及恢复祖先，遇到不同调用立即停止。*/
+  /** 按记录顺序倒查当前运行及恢复祖先，遇到不同调用立即停止。 */
   public int consecutiveToolAttempts(String runId, ToolKind kind, String fingerprint, int limit) {
     int count = 0;
     var visited = new java.util.HashSet<String>();
@@ -1149,7 +1236,7 @@ public class RunRecordService {
     return count;
   }
 
-  /** 已报告用量和未知用量次数；未知不能按零解释。*/
+  /** 已报告用量和未知用量次数；未知不能按零解释。 */
   public record ReportedTokenUsage(long knownTokens, long unknownCalls) {}
 
   public ReportedTokenUsage reportedTokens(String runId) {
@@ -1167,7 +1254,7 @@ public class RunRecordService {
     return new ReportedTokenUsage(known, unknown);
   }
 
-  /** 包含本运行和恢复祖先中的已启动调用，避免恢复时同种工具限额归零。*/
+  /** 包含本运行和恢复祖先中的已启动调用，避免恢复时同种工具限额归零。 */
   public int countToolCalls(String runId, ToolKind kind) {
     int count = 0;
     var visited = new java.util.HashSet<String>();
@@ -1181,7 +1268,7 @@ public class RunRecordService {
     return count;
   }
 
-  /** 检查点原因使用受控编码，便于稳定聚合且不暴露用户数据。*/
+  /** 检查点原因使用受控编码，便于稳定聚合且不暴露用户数据。 */
   public void checkpointSkipped(String runId, dev.workbench.domain.CheckpointSkipReason reason) {
     insertEvent(
         runId, EventType.CHECKPOINT_SKIPPED, reason.message(), EventRef.empty(), reason.name());
@@ -1191,7 +1278,7 @@ public class RunRecordService {
     event(runId, type, message, EventRef.empty());
   }
 
-  /** 写入带结构化归属的事件；空关联与旧接口行为一致。*/
+  /** 写入带结构化归属的事件；空关联与旧接口行为一致。 */
   public void event(String runId, EventType type, String message, EventRef ref) {
     insertEvent(runId, type, message, ref == null ? EventRef.empty() : ref, null);
   }
@@ -1261,7 +1348,7 @@ public class RunRecordService {
     update(id, status, reason, result, rounds, tools, elapsed, null);
   }
 
-  /** 状态和停止原因在同一事务保存；旧记录或不适用时原因保持未知。*/
+  /** 状态和停止原因在同一事务保存；旧记录或不适用时原因保持未知。 */
   public void update(
       String id,
       RunStatus status,
@@ -1290,7 +1377,7 @@ public class RunRecordService {
     writeCheckpoint(runId, stage, rounds, tools, elapsed, result, version);
   }
 
-  /** 创建只读工作区的审查前检查点；摘要由工作区服务在分析边界取得。*/
+  /** 创建只读工作区的审查前检查点；摘要由工作区服务在分析边界取得。 */
   public void workspaceReviewCheckpoint(
       String runId,
       int rounds,
@@ -1319,7 +1406,7 @@ public class RunRecordService {
     }
   }
 
-  /** 检查点 JSON 不含文件正文；格式不合法时拒绝恢复。*/
+  /** 检查点 JSON 不含文件正文；格式不合法时拒绝恢复。 */
   public dev.workbench.domain.WorkspaceReviewCheckpoint workspaceReviewPayload(String value) {
     try {
       return json.readValue(value, dev.workbench.domain.WorkspaceReviewCheckpoint.class);
@@ -1372,10 +1459,10 @@ public class RunRecordService {
         });
   }
 
-  /** 已完成分析的引用与摘要；结果正文保留在原 Agent 调用中。*/
+  /** 已完成分析的引用与摘要；结果正文保留在原 Agent 调用中。 */
   public record AnalysisSource(UUID agentId, String result) {}
 
-  /** 检查点复用的真实分析来源，不把祖先 Agent 当成本次调用。*/
+  /** 检查点复用的真实分析来源，不把祖先 Agent 当成本次调用。 */
   public record CheckpointAnalysisSource(UUID runId, UUID agentId, String result) {}
 
   public String analysisReference(String runId, String agentId) {
@@ -1384,7 +1471,7 @@ public class RunRecordService {
     return UUID.fromString(agentId) + ":" + checksum(result);
   }
 
-  /** 拒绝跨运行引用、损坏摘要和已经改变的分析结果。*/
+  /** 拒绝跨运行引用、损坏摘要和已经改变的分析结果。 */
   public AnalysisSource analysisSource(String runId, String reference) {
     if (reference == null || !reference.matches("[0-9a-fA-F-]{36}:[0-9a-f]{64}"))
       throw new IllegalArgumentException("分析检查点内容无效。");
@@ -1397,7 +1484,7 @@ public class RunRecordService {
     return new AnalysisSource(UUID.fromString(agentId), result);
   }
 
-  /** 解析旧版本运行引用或新版祖先引用，并核验运行链与复用节点。*/
+  /** 解析旧版本运行引用或新版祖先引用，并核验运行链与复用节点。 */
   public CheckpointAnalysisSource checkpointAnalysisSource(
       String checkpointRunId, String reference) {
     if (reference == null) throw new IllegalArgumentException("分析检查点内容无效。");
@@ -1441,7 +1528,7 @@ public class RunRecordService {
     return new CheckpointAnalysisSource(sourceRun, source.agentId(), source.result());
   }
 
-  /** 保存引用前复验祖先关系，避免凭模型输出构造来源。*/
+  /** 保存引用前复验祖先关系，避免凭模型输出构造来源。 */
   public String ancestorAnalysisReference(
       String checkpointRunId, String sourceRunId, UUID sourceAgentId) {
     String reference = sourceRunId + "|" + analysisReference(sourceRunId, sourceAgentId.toString());
@@ -1471,7 +1558,7 @@ public class RunRecordService {
   public boolean validCheckpoint(Map<String, Object> cp) {
     try {
       // 旧手写流程的快照没有框架上下文，不能当作 AgentScope 状态恢复。
-if (!"AGENTSCOPE".equals(cp.get("ENGINE"))) return false;
+      if (!"AGENTSCOPE".equals(cp.get("ENGINE"))) return false;
       if (cp.get("CHECKSUM") == null) return false;
       int version = ((Number) cp.get("VERSION")).intValue();
       CheckpointStage parsedStage = CheckpointStage.valueOf(cp.get("STAGE").toString());
@@ -1527,7 +1614,7 @@ if (!"AGENTSCOPE".equals(cp.get("ENGINE"))) return false;
         | ClassCastException
         | org.springframework.dao.DataAccessException e) {
       // 字段缺失或编码非法属于不可恢复的快照，不应让整个列表查询失败。
-return false;
+      return false;
     }
   }
 
@@ -1549,5 +1636,14 @@ return false;
 
   public Map<String, Object> overview() {
     return runRows.countByStatus().apiFields();
+  }
+
+  /** 运行概况按当前会话可读取的任务过滤，不返回全库状态计数。 */
+  public Map<String, Object> overview(java.util.List<String> taskIds) {
+    if (taskIds == null || taskIds.isEmpty())
+      return new dev.workbench.persistence.repository.RunCounts(0L, 0L, 0L).apiFields();
+    return runRows
+        .countByStatusForTasks(taskIds, RunStatus.RUNNING.name(), RunStatus.COMPLETED.name())
+        .apiFields();
   }
 }

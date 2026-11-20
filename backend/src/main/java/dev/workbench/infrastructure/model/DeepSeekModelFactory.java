@@ -4,12 +4,12 @@ import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.transport.HttpTransportException;
 import io.agentscope.extensions.model.openai.OpenAIChatModel;
+import io.agentscope.extensions.model.openai.compat.deepseek.DeepSeekFormatter;
 import io.agentscope.extensions.model.openai.exception.OpenAIException;
 import io.agentscope.extensions.model.openai.exception.RateLimitException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
 
 /** 创建 DeepSeek 模型；密钥只在请求前读取，不写入日志。 */
 final class DeepSeekModelFactory {
@@ -34,13 +34,9 @@ final class DeepSeekModelFactory {
           .apiKey(key)
           .baseUrl("https://api.deepseek.com")
           .modelName("deepseek-flash")
+          .formatter(new DeepSeekFormatter())
           .stream(false)
-          .generateOptions(
-              GenerateOptions.builder()
-                  .maxTokens(256)
-                  .parallelToolCalls(false)
-                  .additionalBodyParam("thinking", Map.of("type", "disabled"))
-                  .build())
+          .generateOptions(GenerateOptions.builder().parallelToolCalls(false).build())
           .build();
     } catch (java.io.IOException e) {
       throw new IllegalStateException("无法读取 DeepSeek 密钥文件。");

@@ -1,5 +1,6 @@
+import WorkbenchDialog from '../../layout/WorkbenchDialog.jsx';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Modal, Spin } from 'antd';
+import { Alert, Button, Spin } from 'antd';
 
 const categories = { PROJECT_CONVENTION: '项目约定', PROJECT_BACKGROUND: '项目背景', PRECAUTION: '注意事项' };
 
@@ -35,7 +36,7 @@ export default function MemoryHistoryDialog({ workspaceId, memoryId, api, onClos
   }, [workspaceId, memoryId]);
 
   return (
-    <Modal title="项目背景历史" open onCancel={onClose} footer={null} width={700}>
+    <WorkbenchDialog title="项目背景历史" open onCancel={onClose} footer={null} width={700}>
       <Alert type="info" showIcon message="历史版本含原文；查看不会恢复旧版本，也不会撤回已发送给模型的内容。" />
       {error && <Alert type="error" showIcon message={error} />}
       {items.map(item => (
@@ -51,6 +52,6 @@ export default function MemoryHistoryDialog({ workspaceId, memoryId, api, onClos
       {!loading && !error && items.length === 0 && <p>没有保留历史记录。</p>}
       {!loading && error && items.length === 0 && <Button onClick={() => load(null)}>重新加载</Button>}
       {!loading && next != null && <Button onClick={() => load(next)}>加载更早版本</Button>}
-    </Modal>
+    </WorkbenchDialog>
   );
 }

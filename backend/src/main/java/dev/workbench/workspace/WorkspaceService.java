@@ -13,8 +13,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -24,22 +26,60 @@ import org.springframework.stereotype.Service;
 @Service
 public class WorkspaceService {
   private static final int OUTPUT_LIMIT = 1_000_000;
+  private static final Pattern IDEA_FILE =
+      Pattern.compile(
+          "[a-zA-Z0-9][a-zA-Z0-9_.-]{0,70}\\.(html|css|js|md|txt|json|py|ts|jsx|tsx|java|svg)",
+          Pattern.CASE_INSENSITIVE);
+  private static final Pattern RESERVED_FILE =
+      Pattern.compile("(con|prn|aux|nul|com[0-9]|lpt[0-9])\\..*", Pattern.CASE_INSENSITIVE);
   private final WorkspaceRepository workspaceRows;
   private final WorkspaceDeclaredFileRepository declaredFileRows;
   private final Path workspaceRoot;
+  private final dev.workbench.ownership.OwnershipService ownership;
+  private final dev.workbench.ownership.RepositoryAuthorizationService repositoryAuthorization;
 
   @Autowired
   public WorkspaceService(
       WorkspaceRepository workspaceRows,
       WorkspaceDeclaredFileRepository declaredFileRows,
-      @Value("${workbench.workspace-root:data/workspaces}") String workspaceRoot) {
+      @Value("${workbench.workspace-root:data/workspaces}") String workspaceRoot,
+      dev.workbench.ownership.OwnershipService ownership,
+      dev.workbench.ownership.RepositoryAuthorizationService repositoryAuthorization) {
     this.workspaceRows = workspaceRows;
     this.declaredFileRows = declaredFileRows;
     this.workspaceRoot = Path.of(workspaceRoot).toAbsolutePath().normalize();
+    this.ownership = ownership;
+    this.repositoryAuthorization = repositoryAuthorization;
+  }
+
+  /** 独立测试可直接构造；没有归属服务时不做登记，旧单机行为保持不变。 */
+  public WorkspaceService(
+      WorkspaceRepository workspaceRows,
+      WorkspaceDeclaredFileRepository declaredFileRows,
+      String workspaceRoot) {
+    this(workspaceRows, declaredFileRows, workspaceRoot, null, null);
+  }
+
+  private String ownerScope() {
+    return ownership == null
+        ? dev.workbench.planning.ExecutionScope.LOCAL.ownerScopeKey()
+        : ownership.scope().ownerScopeKey();
+  }
+
+  private void stampOwner(String workspaceId) {
+    if (ownership != null)
+      ownership.stamp(dev.workbench.ownership.OwnershipService.WORKSPACE, workspaceId);
   }
 
   /** 用户显式指定仓库和分支；只允许创建独立工作区，不覆盖当前工作区。 */
   public synchronized Workspace create(String repository, String branch) {
+    return create(repository, branch, false);
+  }
+
+  /**
+   * @param internal 服务端自建的独立交付仓库不使用用户仓库授权；用户导入必须先通过仓库授权。
+   */
+  private synchronized Workspace create(String repository, String branch, boolean internal) {
     if (repository == null || branch == null || branch.isBlank() || branch.startsWith("-"))
       throw new IllegalArgumentException("请填写本地仓库目录与基础分支。");
     Path repo;
@@ -48,6 +88,9 @@ public class WorkspaceService {
     } catch (IOException | RuntimeException e) {
       throw new IllegalArgumentException("仓库目录不存在或不可访问。");
     }
+    // 先按管理员登记的规范化仓库根目录核验，再调用任何 Git 命令。
+    if (!internal && repositoryAuthorization != null)
+      repositoryAuthorization.requireAuthorized(repo);
     String branchRef = "refs/heads/" + branch;
     runGit(repo, "check-ref-format", branchRef);
     String top = runGit(repo, "rev-parse", "--show-toplevel").strip();
@@ -57,6 +100,7 @@ public class WorkspaceService {
     } catch (IOException e) {
       throw new IllegalArgumentException("无法定位仓库根目录。");
     }
+    if (!root.equals(repo)) throw new IllegalArgumentException("请填写仓库根目录，而不是子目录或非仓库目录。");
     String commit = runGit(root, "rev-parse", "--verify", branchRef + "^{commit}").strip();
     if (!commit.matches("[0-9a-fA-F]{40,64}")) throw new IllegalStateException("无法确定基础提交。");
     String id = RunRecordService.id();
@@ -72,18 +116,129 @@ public class WorkspaceService {
     runGit(root, "worktree", "add", "-b", name, "--", target.toString(), commit);
     workspaceRows.save(
         new WorkspaceEntity(
-            id,
-            root.toString(),
-            target.toString(),
-            branch,
-            commit,
-            name,
-            RunRecordService.now()));
+            id, root.toString(), target.toString(), branch, commit, name, RunRecordService.now()));
+    stampOwner(id);
     return get(id);
   }
 
   public List<Workspace> list() {
     return workspaceRows.findAllByOrderByCreatedAtDesc().stream().map(this::map).toList();
+  }
+
+  /** 当前会话可读取的工作区；旧记录由归属服务进一步判断。 */
+  public List<Workspace> listOwned() {
+    return workspaceRows.findAllByOrderByCreatedAtDesc().stream()
+        .filter(
+            row ->
+                ownership == null
+                    || ownership.canRead(
+                        ownership
+                            .owner(dev.workbench.ownership.OwnershipService.WORKSPACE, row.getId())
+                            .orElse(null)))
+        .map(this::map)
+        .toList();
+  }
+
+  /** 独立交付仅允许受限的单层文本文件名。 */
+  public static List<String> ideaFiles(List<String> files) {
+    if (files == null || files.isEmpty() || files.size() > 5)
+      throw new IllegalArgumentException("独立工作区需要 1 至 5 个交付文件。");
+    var seen = new java.util.HashSet<String>();
+    var normalized = new ArrayList<String>();
+    for (String file : files) {
+      if (file == null) throw new IllegalArgumentException("请填写交付文件名。");
+      String name = file.strip();
+      if (!IDEA_FILE.matcher(name).matches()
+          || RESERVED_FILE.matcher(name).matches()
+          || !seen.add(name.toLowerCase(Locale.ROOT)))
+        throw new IllegalArgumentException("请使用不同的简单文本文件名，例如 index.html 或 app.js。");
+      normalized.add(name);
+    }
+    return List.copyOf(normalized);
+  }
+
+  /** 创建自己的空白基线，之后沿用与手动工作区相同的 Git 隔离与授权规则。 */
+  public Workspace createIdeaWorkspace(List<String> files) {
+    var names = ideaFiles(files);
+    try {
+      Path drafts = Files.createDirectories(workspaceRoot.resolve("idea-repositories"));
+      return prepareIdeaWorkspace(Files.createTempDirectory(drafts, "idea-"), names, ownerScope());
+    } catch (IOException e) {
+      throw new IllegalStateException("无法创建独立交付工作区。");
+    }
+  }
+
+  /**
+   * P14：用固定操作标识创建独立工作区。
+   *
+   * <p>仓库目录由操作标识决定，进程中断后可以按同一标识核对是否已经创建，避免重复准备。
+   */
+  public Workspace createIdeaWorkspace(List<String> files, String operationId) {
+    return createIdeaWorkspace(files, operationId, ownerScope());
+  }
+
+  /** 固定操作标识并可显式指定归属；候选确认使用候选保存的归属，而不是临时线程状态。 */
+  public Workspace createIdeaWorkspace(
+      List<String> files, String operationId, String ownerScopeKey) {
+    var names = ideaFiles(files);
+    if (operationId == null || !operationId.matches("[0-9a-fA-F-]{36}"))
+      throw new IllegalArgumentException("工作区准备标识无效。");
+    try {
+      Path drafts = Files.createDirectories(workspaceRoot.resolve("idea-repositories"));
+      Path repo = drafts.resolve("idea-" + operationId).normalize();
+      // 原子创建唯一目录：只有成功创建目录的请求可以继续执行 Git 初始化。
+      Files.createDirectory(repo);
+      return prepareIdeaWorkspace(repo, names, ownerScopeKey);
+    } catch (java.nio.file.FileAlreadyExistsException e) {
+      throw new IllegalStateException("该候选的独立工作区目录已经存在，请核对后再重试。");
+    } catch (IOException e) {
+      throw new IllegalStateException("无法创建独立交付工作区。");
+    }
+  }
+
+  /** 按操作标识查找已登记的工作区；Git 已完成但候选记录未更新时用于收口。 */
+  public java.util.Optional<Workspace> findIdeaWorkspace(String operationId) {
+    Path repo = ideaRepository(operationId);
+    if (repo == null || !Files.isDirectory(repo)) return java.util.Optional.empty();
+    try {
+      return workspaceRows.findFirstByRepositoryPath(repo.toRealPath().toString()).map(this::map);
+    } catch (IOException e) {
+      return java.util.Optional.empty();
+    }
+  }
+
+  /** 只判断仓库目录是否存在；没有登记行时不能直接复用，需要人工核对。 */
+  public boolean ideaRepositoryExists(String operationId) {
+    Path repo = ideaRepository(operationId);
+    return repo != null && Files.isDirectory(repo);
+  }
+
+  private Path ideaRepository(String operationId) {
+    if (operationId == null || !operationId.matches("[0-9a-fA-F-]{36}")) return null;
+    return workspaceRoot.resolve("idea-repositories").resolve("idea-" + operationId).normalize();
+  }
+
+  private Workspace prepareIdeaWorkspace(Path repo, List<String> names, String ownerScopeKey)
+      throws IOException {
+    // 目录由调用方以原子方式创建；这里只做 Git 初始化和提交。
+    runGit(repo, "init", "--initial-branch=main", "--template=");
+    for (String name : names) Files.createFile(repo.resolve(name));
+    var add = new ArrayList<>(List.of("add", "--force", "--"));
+    add.addAll(names);
+    runGit(repo, add.toArray(String[]::new));
+    runGit(
+        repo,
+        "-c",
+        "user.name=Agent Studio",
+        "-c",
+        "user.email=agent-studio@localhost",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "Prepare empty task deliverables");
+    Workspace workspace = create(repo.toString(), "main", true);
+    return workspace;
   }
 
   public Workspace get(String id) {
@@ -194,7 +349,10 @@ public class WorkspaceService {
     try {
       Files.createDirectories(target.getParent());
       Files.write(
-          target, bytes, java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE);
+          target,
+          bytes,
+          java.nio.file.StandardOpenOption.CREATE_NEW,
+          java.nio.file.StandardOpenOption.WRITE);
     } catch (java.nio.file.FileAlreadyExistsException e) {
       throw new IllegalArgumentException("目标文件已存在，不能覆盖现有文件。");
     } catch (IOException e) {
@@ -222,7 +380,9 @@ public class WorkspaceService {
   }
 
   private static List<String> untrackedPaths(Status status) {
-    return status.changes().lines()
+    return status
+        .changes()
+        .lines()
         .filter(line -> line.startsWith("?? "))
         .map(line -> unquote(line.substring(3).strip()))
         .toList();
@@ -255,7 +415,9 @@ public class WorkspaceService {
     Status status = status(id);
     var declared = declaredFiles(id);
     var untracked =
-        status.changes().lines()
+        status
+            .changes()
+            .lines()
             .filter(line -> line.startsWith("?? "))
             .map(line -> unquote(line.substring(3).strip()))
             .toList();
@@ -311,14 +473,7 @@ public class WorkspaceService {
     declared.forEach(
         (file, sha) -> extra.append("\nDECLARED\n").append(file).append('\n').append(sha));
     return hash(
-        head
-            + "\n"
-            + status.currentBase()
-            + "\n"
-            + status.changes()
-            + "\n"
-            + binaryDiff
-            + extra);
+        head + "\n" + status.currentBase() + "\n" + status.changes() + "\n" + binaryDiff + extra);
   }
 
   private String hashFile(Path file) {
@@ -362,7 +517,9 @@ public class WorkspaceService {
     String unstaged = runGit(path, "diff", "--binary", "--no-ext-diff", "--no-textconv", "--", ".");
     Status after = status(workspaceId);
     boolean unclean =
-        after.changes().lines()
+        after
+            .changes()
+            .lines()
             .anyMatch(
                 line ->
                     line.startsWith("?? ")
@@ -390,7 +547,8 @@ public class WorkspaceService {
   }
 
   String head(String workspaceId) {
-    return runGit(Path.of(get(workspaceId).workspacePath()), "rev-parse", "--verify", "HEAD").strip();
+    return runGit(Path.of(get(workspaceId).workspacePath()), "rev-parse", "--verify", "HEAD")
+        .strip();
   }
 
   /** 读取本地分支当前提交；用于合并审批绑定被合入版本。 */
@@ -400,14 +558,12 @@ public class WorkspaceService {
     requireBranchName(repository, branch);
     String commit =
         runGit(repository, "rev-parse", "--verify", "refs/heads/" + branch + "^{commit}").strip();
-    if (!commit.matches("[0-9a-fA-F]{40,64}"))
-      throw new IllegalStateException("无法确认待合入分支提交。");
+    if (!commit.matches("[0-9a-fA-F]{40,64}")) throw new IllegalStateException("无法确认待合入分支提交。");
     return commit;
   }
 
   String currentBranch(String workspaceId) {
-    return runGit(
-            Path.of(get(workspaceId).workspacePath()), "rev-parse", "--abbrev-ref", "HEAD")
+    return runGit(Path.of(get(workspaceId).workspacePath()), "rev-parse", "--abbrev-ref", "HEAD")
         .strip();
   }
 
@@ -416,12 +572,7 @@ public class WorkspaceService {
     if (remote == null || !remote.matches("[A-Za-z0-9._-]{1,80}") || remote.startsWith("-"))
       throw new IllegalArgumentException("远端名称无效。");
     String url =
-        runGit(
-                Path.of(get(workspaceId).workspacePath()),
-                "remote",
-                "get-url",
-                "--push",
-                remote)
+        runGit(Path.of(get(workspaceId).workspacePath()), "remote", "get-url", "--push", remote)
             .strip();
     if (url.isBlank() || url.contains("\n") || url.contains("\r"))
       throw new IllegalStateException("无法解析远端推送地址。");
@@ -429,12 +580,7 @@ public class WorkspaceService {
   }
 
   String remotePushUrl(String workspaceId, String remote) {
-    return runGit(
-            Path.of(get(workspaceId).workspacePath()),
-            "remote",
-            "get-url",
-            "--push",
-            remote)
+    return runGit(Path.of(get(workspaceId).workspacePath()), "remote", "get-url", "--push", remote)
         .strip();
   }
 
@@ -510,7 +656,10 @@ public class WorkspaceService {
     try {
       Files.createDirectories(target.getParent());
       // 原子新建：并发提交同名文件时只有一个请求能创建成功，另一个明确拒绝，不覆盖已有内容。
-      Files.write(target, bytes, java.nio.file.StandardOpenOption.CREATE_NEW,
+      Files.write(
+          target,
+          bytes,
+          java.nio.file.StandardOpenOption.CREATE_NEW,
           java.nio.file.StandardOpenOption.WRITE);
     } catch (java.nio.file.FileAlreadyExistsException e) {
       throw new IllegalArgumentException("目标文件已存在，不能覆盖现有文件。");
@@ -586,8 +735,7 @@ public class WorkspaceService {
     Path root = Path.of(workspace.workspacePath()).toAbsolutePath().normalize();
     List<String> normalizedDirectories = normalizeDirectories(root, directories);
     List<String> normalizedExclusions = normalizeExclusions(exclusions);
-    if (normalizedDirectories.isEmpty())
-      throw new IllegalArgumentException("目录授权至少需要一个工作区内目录。");
+    if (normalizedDirectories.isEmpty()) throw new IllegalArgumentException("目录授权至少需要一个工作区内目录。");
     String output =
         runGit(
             Path.of(workspace.workspacePath()),
@@ -758,8 +906,7 @@ public class WorkspaceService {
 
   String runGit(Path dir, String... args) {
     GitResult result = runGitResult(dir, args);
-    if (result.exitCode() != 0)
-      throw new IllegalArgumentException("Git 操作失败，请检查仓库、分支和访问权限。");
+    if (result.exitCode() != 0) throw new IllegalArgumentException("Git 操作失败，请检查仓库、分支和访问权限。");
     return result.output();
   }
 

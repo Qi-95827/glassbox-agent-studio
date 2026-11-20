@@ -47,6 +47,8 @@ public class ExecutionViewService {
   private final TaskSupplementService supplements;
   private final RunHandoverService handovers;
   private final EventRepository events;
+  private final dev.workbench.ownership.OwnershipService ownership;
+  private final com.fasterxml.jackson.databind.ObjectMapper json;
 
   public ExecutionViewService(
       RunRecordService runs,
@@ -55,7 +57,9 @@ public class ExecutionViewService {
       WorkflowRecoveryService recovery,
       TaskSupplementService supplements,
       RunHandoverService handovers,
-      EventRepository events) {
+      EventRepository events,
+      dev.workbench.ownership.OwnershipService ownership,
+      com.fasterxml.jackson.databind.ObjectMapper json) {
     this.runs = runs;
     this.plans = plans;
     this.workflows = workflows;
@@ -63,9 +67,12 @@ public class ExecutionViewService {
     this.supplements = supplements;
     this.handovers = handovers;
     this.events = events;
+    this.ownership = ownership;
+    this.json = json;
   }
 
   public ExecutionView view(String runId) {
+    ownership.requireRun(runId);
     var run = runs.run(runId);
     var snapshot = runs.runSnapshot(runId);
     var plan = plans.workflowPlan(runId);
@@ -140,6 +147,7 @@ public class ExecutionViewService {
   }
 
   public NodeDetail detail(String runId, String nodeIdText) {
+    ownership.requireRun(runId);
     runs.runSnapshot(runId);
     UUID nodeId = parseUuid(nodeIdText, "节点标识格式无效");
     var plan = plans.workflowPlan(runId);
@@ -149,29 +157,24 @@ public class ExecutionViewService {
             .filter(candidate -> candidate.id().equals(nodeId))
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("节点不属于该运行。"));
-    var attempts =
-        workflows.workflowAttempts(runId).stream()
-            .filter(attempt -> attempt.nodeId().equals(nodeId))
-            .toList();
-    var checks =
-        workflows.workflowChecks(runId).stream()
-            .filter(check -> check.nodeId().equals(nodeId))
-            .toList();
+    var allAttempts = workflows.workflowAttempts(runId);
+    var allChecks = workflows.workflowChecks(runId);
+    var attempts = allAttempts.stream().filter(attempt -> attempt.nodeId().equals(nodeId)).toList();
+    var checks = allChecks.stream().filter(check -> check.nodeId().equals(nodeId)).toList();
     var models = runs.models(runId);
     var tools = runs.tools(runId);
     var agents = runs.agents(runId);
+    var assemblies = runs.agentAssemblies(runId);
     var handoffs = workflows.workflowHandoffs(runId);
     return new NodeDetail(
         SCHEMA_VERSION,
         Instant.now().toString(),
         runId,
-        nodeView(
-            node,
-            nodes,
-            groupAttempts(workflows.workflowAttempts(runId)),
-            groupChecks(workflows.workflowChecks(runId))),
+        nodeView(node, nodes, groupAttempts(allAttempts), groupChecks(allChecks)),
         dependencies(nodes, node),
-        attempts.stream().map(attempt -> attemptView(attempt, models, tools, agents)).toList(),
+        attempts.stream()
+            .map(attempt -> attemptView(attempt, models, tools, agents, assemblies))
+            .toList(),
         checks.stream().map(this::checkView).toList(),
         handoffs.stream()
             .filter(handoff -> nodeId.equals(handoff.receiverNodeId()))
@@ -180,6 +183,20 @@ public class ExecutionViewService {
         handoffs.stream()
             .filter(handoff -> nodeId.equals(handoff.senderNodeId()))
             .map(handoff -> handoffView(handoff, nodes))
+            .toList(),
+        workflows.workflowCheckReceipts(runId, nodeId).stream()
+            .map(
+                receipt ->
+                    new CheckReceiptView(
+                        receipt.checkId(),
+                        receipt.dependencyNodeId(),
+                        receipt.dependencyNodeLabel(),
+                        receipt.receiverNodeId(),
+                        receipt.receiverNodeLabel(),
+                        receipt.receiverAttemptId(),
+                        receipt.acceptedAt(),
+                        receipt.summary(),
+                        receipt.evidence()))
             .toList(),
         nodeEvents(runId, nodeId),
         nodeResult(node, attempts, checks, agents));
@@ -243,7 +260,36 @@ public class ExecutionViewService {
         ready,
         waiting,
         attempts.getOrDefault(node.id(), List.of()).size(),
-        checks.getOrDefault(node.id(), List.of()).size());
+        checks.getOrDefault(node.id(), List.of()).size(),
+        node.agentBinding() == null ? null : node.agentBinding().kind(),
+        node.agentBinding() == null ? null : node.agentBinding().name(),
+        node.agentBinding() == null ? null : node.agentBinding().source(),
+        node.agentBinding() == null ? null : node.agentBinding().reason(),
+        node.agentBinding() == null ? null : node.agentBinding().specSha256(),
+        bindingComponents(node, "skills"),
+        bindingComponents(node, "tools"));
+  }
+
+  /** 从已保存的组件快照展示 Skill/工具版本；损坏时返回空而不是补造记录。 */
+  private List<BindingComponentView> bindingComponents(PlanNode node, String field) {
+    if (node.agentBinding() == null || node.agentBinding().componentsJson() == null)
+      return List.of();
+    try {
+      var tree = json.readTree(node.agentBinding().componentsJson()).path(field);
+      var result = new ArrayList<BindingComponentView>();
+      for (var item : tree) {
+        result.add(
+            new BindingComponentView(
+                item.path("id").asText(null),
+                item.path("version").asInt(0),
+                item.path("name").asText(null),
+                item.path("kind").asText(null),
+                item.path("sha256").asText(null)));
+      }
+      return List.copyOf(result);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      return List.of();
+    }
   }
 
   private List<EdgeView> edges(List<PlanNode> nodes) {
@@ -303,7 +349,7 @@ public class ExecutionViewService {
               .max(Comparator.comparingInt(WorkflowAttempt::number))
               .orElse(null);
       // 兼容流程没有 workflow_attempts；实例标识仍来自计划节点，不能用空尝试跳过。
-String agentId =
+      String agentId =
           attempt != null
               ? attempt.agentId().toString()
               : node.agentId() == null ? null : node.agentId().toString();
@@ -564,7 +610,7 @@ String agentId =
       return recovery.checkpoints(runId, plan);
     } catch (RuntimeException e) {
       // 历史运行缺少检查点依赖数据时不阻断流程图；恢复入口显示为未记录。
-return List.of();
+      return List.of();
     }
   }
 
@@ -599,7 +645,8 @@ return List.of();
         parentRunId, sourceCheckpoint, reused, inherited, modelCalls, toolCalls);
   }
 
-  private SupplementView supplementView(SupplementRepository.Request request, List<PlanNode> nodes) {
+  private SupplementView supplementView(
+      SupplementRepository.Request request, List<PlanNode> nodes) {
     if (request == null) return null;
     return new SupplementView(
         request.id(),
@@ -637,9 +684,16 @@ return List.of();
         snapshot.maxReportedTokens() == null
             ? null
             : Math.max(0, snapshot.maxReportedTokens() - tokens.knownTokens());
-    long remainingRounds = Math.max(0, snapshot.maxRounds() - snapshot.rounds());
-    long remainingTools = Math.max(0, snapshot.maxTools() - snapshot.tools());
-    long remainingMs = Math.max(0, snapshot.maxSeconds() * 1000L - snapshot.elapsedMs());
+    Long remainingRounds =
+        snapshot.maxRounds() == null
+            ? null
+            : Math.max(0L, snapshot.maxRounds() - snapshot.rounds());
+    Long remainingTools =
+        snapshot.maxTools() == null ? null : Math.max(0L, snapshot.maxTools() - snapshot.tools());
+    Long remainingMs =
+        snapshot.maxSeconds() == null
+            ? null
+            : Math.max(0L, snapshot.maxSeconds() * 1000L - snapshot.elapsedMs());
     return new BudgetView(
         snapshot.maxRounds(),
         snapshot.rounds(),
@@ -657,7 +711,7 @@ return List.of();
         snapshot.parentId() != null);
   }
 
-  /** 中断运行是否可恢复的明确原因；不根据节点顺序猜测。*/
+  /** 中断运行是否可恢复的明确原因；不根据节点顺序猜测。 */
   private RecoverySupportView recoverySupportView(
       RunSnapshot snapshot, WorkflowPlan plan, String runId) {
     if (snapshot.status() != RunStatus.INTERRUPTED) return null;
@@ -729,7 +783,8 @@ return List.of();
       WorkflowAttempt attempt,
       List<Map<String, Object>> models,
       List<Map<String, Object>> tools,
-      List<Map<String, Object>> agents) {
+      List<Map<String, Object>> agents,
+      List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded> assemblies) {
     String agentId = attempt.agentId().toString();
     String result =
         agents.stream()
@@ -754,7 +809,12 @@ return List.of();
             .filter(row -> agentId.equals(nullable(row.get("AGENT_ID"))))
             .map(this::toolView)
             .toList(),
-        result);
+        result,
+        assemblies.stream()
+            .filter(recorded -> recorded.agentId().toString().equals(agentId))
+            .map(dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded::snapshot)
+            .findFirst()
+            .orElse(null));
   }
 
   private ModelCallView modelView(Map<String, Object> row) {
@@ -807,7 +867,8 @@ return List.of();
                         input.sourceAttemptId() == null ? null : input.sourceAttemptId().toString(),
                         input.sourceCheckId() == null ? null : input.sourceCheckId().toString(),
                         input.sourceRunId().toString(),
-                        input.resultSha256()))
+                        input.resultSha256(),
+                        input.sourceResult()))
             .toList());
   }
 
@@ -825,6 +886,8 @@ return List.of();
         handoff.dependencyNodeId().toString(),
         handoff.dependencyNodeId() == null ? null : label(nodes, handoff.dependencyNodeId()),
         handoff.acceptedAt() == null ? null : handoff.acceptedAt().toString(),
+        handoff.sourceRunId() == null ? null : handoff.sourceRunId().toString(),
+        handoff.sourceResult(),
         handoff.toolEvidence().stream()
             .map(
                 evidence ->
@@ -859,8 +922,8 @@ return List.of();
   }
 
   private List<NodeEventView> nodeEvents(String runId, UUID nodeId) {
-    return events.findByRunIdAndNodeIdAndRunSeqIsNotNullOrderByRunSeqAsc(
-            runId, nodeId.toString())
+    return events
+        .findByRunIdAndNodeIdAndRunSeqIsNotNullOrderByRunSeqAsc(runId, nodeId.toString())
         .stream()
         .map(
             event ->
@@ -877,7 +940,7 @@ return List.of();
         .toList();
   }
 
-  /** 该运行最新已提交事件的序号；诊断游标进度使用，不作为读取入口。*/
+  /** 该运行最新已提交事件的序号；诊断游标进度使用，不作为读取入口。 */
   private long lastEventSeq(String runId) {
     return events.maxRunSeq(runId);
   }
@@ -1019,7 +1082,17 @@ return List.of();
       boolean ready,
       List<String> waitingForNodeIds,
       int attemptCount,
-      int checkCount) {}
+      int checkCount,
+      String agentKind,
+      String agentName,
+      String agentSource,
+      String agentReason,
+      String agentSpecSha256,
+      List<BindingComponentView> agentSkills,
+      List<BindingComponentView> agentTools) {}
+
+  public record BindingComponentView(
+      String id, int version, String name, String kind, String sha256) {}
 
   public record EdgeView(String fromNodeId, String toNodeId) {}
 
@@ -1067,7 +1140,7 @@ return List.of();
 
   public record InheritedView(Integer rounds, Integer tools, Long elapsedMs) {}
 
-  /** 待补充或已应用的补充请求；不存在时为空。*/
+  /** 待补充或已应用的补充请求；不存在时为空。 */
   public record SupplementView(
       String id,
       String status,
@@ -1082,7 +1155,7 @@ return List.of();
       String createdAt,
       String decidedAt) {}
 
-  /** 人工接手记录；旧测试或审批是否失效以服务端快照为准。*/
+  /** 人工接手记录；旧测试或审批是否失效以服务端快照为准。 */
   public record HandoverView(
       String id,
       String status,
@@ -1095,19 +1168,19 @@ return List.of();
       String returnedAt) {}
 
   public record BudgetView(
-      int maxRounds,
+      Integer maxRounds,
       int usedRounds,
-      long remainingRounds,
-      int maxTools,
+      Long remainingRounds,
+      Integer maxTools,
       int usedTools,
-      long remainingTools,
+      Long remainingTools,
       Long maxTokens,
       long knownTokens,
       long unknownTokenCalls,
       Long remainingTokens,
-      int maxSeconds,
+      Integer maxSeconds,
       long elapsedMs,
-      long remainingMs,
+      Long remainingMs,
       boolean inherited) {}
 
   public record RecoverySupportView(boolean supported, String reason) {}
@@ -1135,6 +1208,7 @@ return List.of();
       List<CheckView> checks,
       List<HandoffView> inboundHandoffs,
       List<HandoffView> outboundHandoffs,
+      List<CheckReceiptView> checkReceipts,
       List<NodeEventView> nodeEvents,
       String result) {}
 
@@ -1151,7 +1225,8 @@ return List.of();
       String stopCause,
       List<ModelCallView> models,
       List<ToolCallView> tools,
-      String result) {}
+      String result,
+      dev.workbench.framework.agent.assembly.AgentAssemblySnapshot assembly) {}
 
   public record ModelCallView(
       String id,
@@ -1197,7 +1272,19 @@ return List.of();
       String sourceAttemptId,
       String sourceCheckId,
       String sourceRunId,
-      String resultSha256) {}
+      String resultSha256,
+      String sourceResult) {}
+
+  public record CheckReceiptView(
+      String checkId,
+      String dependencyNodeId,
+      String dependencyNodeLabel,
+      String receiverNodeId,
+      String receiverNodeLabel,
+      String receiverAttemptId,
+      String acceptedAt,
+      String summary,
+      String evidence) {}
 
   public record HandoffView(
       int version,
@@ -1212,6 +1299,8 @@ return List.of();
       String dependencyNodeId,
       String dependencyNodeLabel,
       String acceptedAt,
+      String sourceRunId,
+      String sourceResult,
       List<ToolEvidenceView> toolEvidence) {}
 
   public record ToolEvidenceView(

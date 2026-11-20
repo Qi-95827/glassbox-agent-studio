@@ -51,8 +51,10 @@ public class RunService {
   private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
   private final Set<String> paused = ConcurrentHashMap.newKeySet();
   private final java.util.Map<String, Object> pauseMonitors = new ConcurrentHashMap<>();
+
   /** 诊断计数：只统计真正提交给执行队列的派发次数。 */
   volatile int dispatchInvocationCount;
+
   /** 测试注入点：在派发前同步观察数据库提交结果。 */
   volatile Runnable beforeDispatch = () -> {};
 
@@ -178,8 +180,7 @@ public class RunService {
       } else {
         fileScopes = new AuthorizedFileSet(requested).paths();
       }
-      if (fileScopes.isEmpty())
-        throw new IllegalArgumentException("请选择至少一个授权文件或目录。");
+      if (fileScopes.isEmpty()) throw new IllegalArgumentException("请选择至少一个授权文件或目录。");
       try {
         if (json.writeValueAsString(fileScopes).length() > 20_000)
           throw new IllegalArgumentException("授权文件路径总长度超过允许范围。");
@@ -190,10 +191,6 @@ public class RunService {
       fileScope = fileScopes.getFirst();
     } else if (fileScope != null || hasFileList || writeEnabled || memoryEnabled)
       throw new IllegalArgumentException("请先选择工作区。");
-    int rounds = bounded(request.maxRounds(), writeEnabled ? 8 : 4, 1, 20);
-    int tools = bounded(request.maxTools(), writeEnabled ? 5 : 2, 0, 20);
-    int perTool = bounded(request.maxPerTool(), tools, 0, 20);
-    int seconds = bounded(request.maxSeconds(), 30, 1, 300);
     Long tokenLimit = request.maxReportedTokens();
     if (tokenLimit != null && (tokenLimit < 1 || tokenLimit > 1_000_000))
       throw new IllegalArgumentException("已报告 Token 上限须在 1 至 1000000 之间。");
@@ -275,7 +272,14 @@ public class RunService {
             toolBudgets);
     var limits =
         new RunLimits(
-            rounds, tools, perTool, tokenLimit, identicalLimit, seconds, agentRounds, agentTools);
+            request.maxRounds(),
+            request.maxTools(),
+            request.maxPerTool(),
+            tokenLimit,
+            identicalLimit,
+            request.maxSeconds(),
+            agentRounds,
+            agentTools);
     boolean reviewPlan = Boolean.TRUE.equals(request.reviewPlan());
     WorkflowTemplate template =
         selectedTemplate == null ? null : workflows.template(selectedTemplate);
@@ -331,6 +335,11 @@ public class RunService {
   /** 补充接受后从安全边界重新排队；沿用与首次派发相同的单线程队列与拒绝语义。 */
   public void dispatchContinuation(String runId) {
     dispatchAfterCommit(runId);
+  }
+
+  /** 候选确认事务提交后派发；调用方不得在未提交事务中调用。 */
+  public void dispatchConfirmed(String runId) {
+    dispatchInitial(runId);
   }
 
   /** 有外层事务时只在提交成功后派发；无活动事务时调用方已完成提交。 */
@@ -990,7 +999,8 @@ public class RunService {
   }
 
   private AgentRuntime runtimeFor(String runId, String agentId, RunControl control) {
-    return new ControlledAgentRuntime(runId, agentId, control, repository, null, costs, workspaceAuthorization);
+    return new ControlledAgentRuntime(
+        runId, agentId, control, repository, null, costs, workspaceAuthorization);
   }
 
   private Handoff buildDelegation(RunSnapshot run, TaskDefinition task, String agentId) {
@@ -1100,12 +1110,6 @@ public class RunService {
             control.tools(),
             control.elapsed(),
             systemHandoff));
-  }
-
-  private static int bounded(Integer value, int fallback, int minimum, int maximum) {
-    int actual = value == null ? fallback : value;
-    if (actual < minimum || actual > maximum) throw new IllegalArgumentException("限额超出允许范围。");
-    return actual;
   }
 
   private static List<String> validatedItems(List<String> values, String label) {

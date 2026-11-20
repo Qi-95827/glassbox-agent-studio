@@ -14,6 +14,7 @@ import org.springframework.data.domain.Persistable;
 @Table(name = "runs")
 public class RunEntity implements Persistable<String> {
   @Transient private boolean isNew = true;
+
   @Id
   @Column(name = "id", length = 36)
   private String id;
@@ -39,14 +40,14 @@ public class RunEntity implements Persistable<String> {
   @Column(name = "tools", nullable = false)
   private int tools;
 
-  @Column(name = "max_rounds", nullable = false)
-  private int maxRounds;
+  @Column(name = "max_rounds")
+  private Integer maxRounds;
 
-  @Column(name = "max_tools", nullable = false)
-  private int maxTools;
+  @Column(name = "max_tools")
+  private Integer maxTools;
 
-  @Column(name = "max_per_tool", nullable = false)
-  private int maxPerTool;
+  @Column(name = "max_per_tool")
+  private Integer maxPerTool;
 
   @Column(name = "max_reported_tokens")
   private Long maxReportedTokens;
@@ -54,8 +55,8 @@ public class RunEntity implements Persistable<String> {
   @Column(name = "max_identical_tools")
   private Integer maxIdenticalTools;
 
-  @Column(name = "max_seconds", nullable = false)
-  private int maxSeconds;
+  @Column(name = "max_seconds")
+  private Integer maxSeconds;
 
   @Column(name = "elapsed_ms", nullable = false)
   private long elapsedMs;
@@ -155,27 +156,27 @@ public class RunEntity implements Persistable<String> {
     this.tools = tools;
   }
 
-  public int getMaxRounds() {
+  public Integer getMaxRounds() {
     return maxRounds;
   }
 
-  public void setMaxRounds(int maxRounds) {
+  public void setMaxRounds(Integer maxRounds) {
     this.maxRounds = maxRounds;
   }
 
-  public int getMaxTools() {
+  public Integer getMaxTools() {
     return maxTools;
   }
 
-  public void setMaxTools(int maxTools) {
+  public void setMaxTools(Integer maxTools) {
     this.maxTools = maxTools;
   }
 
-  public int getMaxPerTool() {
+  public Integer getMaxPerTool() {
     return maxPerTool;
   }
 
-  public void setMaxPerTool(int maxPerTool) {
+  public void setMaxPerTool(Integer maxPerTool) {
     this.maxPerTool = maxPerTool;
   }
 
@@ -195,11 +196,11 @@ public class RunEntity implements Persistable<String> {
     this.maxIdenticalTools = maxIdenticalTools;
   }
 
-  public int getMaxSeconds() {
+  public Integer getMaxSeconds() {
     return maxSeconds;
   }
 
-  public void setMaxSeconds(int maxSeconds) {
+  public void setMaxSeconds(Integer maxSeconds) {
     this.maxSeconds = maxSeconds;
   }
 

@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Empty, Input, Tooltip } from 'antd';
-import { Box, Paper, Stack, Tab, Tabs, Typography } from '@mui/material';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
+import { Box, Button as MaterialButton, Paper, Stack, Tab, Tabs, Typography } from '@mui/material';
+import AssignmentOutlined from '@mui/icons-material/AssignmentOutlined';
 import WorkflowPlanPanel from './WorkflowPlanPanel.jsx';
 import PlanAdjustmentEditor from './PlanAdjustmentEditor.jsx';
 import RunExtensionsPanel from './RunExtensionsPanel.jsx';
 import CostPricePanel from './CostPricePanel.jsx';
 import RunTraceGraph from './RunTraceGraph.jsx';
 import RunTraceInspector, { TraceSection } from './RunTraceInspector.jsx';
+import RunLearningReplay from './RunLearningReplay.jsx';
+import RunOutputsPanel, { deliveryRunStatus } from './RunOutputsPanel.jsx';
 
 const activityNames = { MODEL_CALL: '模型调用', TOOL_CALL: '工具调用', ATTEMPT: 'Agent 实例', CHECK: '系统检查' };
 const roleNames = { ANALYST: '分析 Agent', CODER: '开发 Agent', REVIEWER: '审查 Agent' };
@@ -17,17 +19,12 @@ const blockingNames = {
   RUN_BLOCKED: '等待处理', CHECK_FAILED: '检查未通过', NODE_FAILED: '节点未完成', DEPENDENCY_NOT_STARTED: '前置步骤未结算'
 };
 
-const traceTheme = createTheme({
-  palette: { primary: { main: '#0b57d0' }, background: { default: '#f3f6fc' } },
-  shape: { borderRadius: 10 },
-  typography: { fontFamily: '"Segoe UI", "Microsoft YaHei UI", sans-serif' }
-});
-
 export default function ExecutionFlowPanel({
   view, detail, Status, stopCauseLabels, eventNames, api, connected, lastSyncedAt,
-  approving, onApprove, onRecover, onPause, onResume, onTakeOver, onReturnHandover, onCancel, onSwitchRun, onSubmitSupplement
+  approving, onApprove, onRecover, onPause, onResume, onTakeOver, onReturnHandover, onCancel, onSwitchRun, onSubmitSupplement,
+  workspaceOpen, onOpenWorkspace
 }) {
-  const [tab, setTab] = useState('flow');
+  const [tab, setTab] = useState(() => detail.run?.STATUS === 'COMPLETED' ? 'output' : 'flow');
   const [selection, setSelection] = useState(null);
   const [nodeDetail, setNodeDetail] = useState(null);
   const [nodeLoading, setNodeLoading] = useState(false);
@@ -85,6 +82,7 @@ export default function ExecutionFlowPanel({
   const plan = view?.plan;
   const actions = view?.availableActions ?? [];
   const recovery = view?.recovery;
+  const deliveryStatus = deliveryRunStatus(detail.run?.STATUS);
   const blocking = (view?.blocking ?? []).filter(item => !(view.reason && item.code === 'RUN_BLOCKED' && !item.nodeId));
 
   const actionHandler = action => {
@@ -105,24 +103,44 @@ export default function ExecutionFlowPanel({
     </>;
   }
 
-  return <ThemeProvider theme={traceTheme}>
-    <Box sx={{ px: { xs: 1.5, sm: 3 }, pt: 1.5, pb: 1, minWidth: 0 }}>
+  return <Box sx={{ px: { xs: 1.5, sm: 3 }, pt: 1.5, pb: 1, minWidth: 0 }}>
     <Stack direction="row" sx={{ alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.25 }}>
-      <Typography component="h3" variant="subtitle1" sx={{ fontWeight: 650 }}>执行流程图</Typography>
+      <Typography component="h3" variant="subtitle1" sx={{ fontWeight: 650 }}>
+        {tab === 'output' ? '任务交付' : '执行记录'}
+      </Typography>
       <Typography component="span" variant="caption" color="text.secondary">
         {plan ? `计划 v${plan.version} · ${plan.templateId} v${plan.templateVersion}` : '历史计划无版本'}
         {' · '}已同步 {lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '未记录'}
       </Typography>
     </Stack>
+    {deliveryStatus && tab !== 'output' && <Stack direction="row" sx={{
+      justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1,
+      bgcolor: '#eaf2ff', px: 1.5, py: 1, borderRadius: 2, mt: 1
+    }}>
+      <Typography variant="body2" role="status" sx={{ fontWeight: 600 }}>{deliveryStatus}</Typography>
+      <MaterialButton size="small" variant="contained" startIcon={<AssignmentOutlined />}
+        onClick={() => setTab('output')}>
+        {detail.run.STATUS === 'COMPLETED' ? '查看交付说明' : '查看阶段结果'}
+      </MaterialButton>
+    </Stack>}
     <Stack direction="row" sx={{ alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-      <Tabs value={tab} onChange={(_, value) => setTab(value)} aria-label="执行视图切换">
-        <Tab value="flow" label="流程图" />
+      <Tabs value={tab} onChange={(_, value) => setTab(value)} variant="scrollable" aria-label="执行视图切换">
+        <Tab value="flow" label="观察流程" />
+        <Tab value="replay" label="逐步回放" />
+        <Tab value="output" label="交付说明" />
         <Tab value="list" label="列表视图" />
       </Tabs>
       {!connected && <Typography variant="caption" color="warning.dark">连接中断 · 显示最后成功快照</Typography>}
     </Stack>
 
-    {tab === 'list' ? <WorkflowPlanPanel detail={detail} Status={Status} stopCauseLabels={stopCauseLabels}
+    {tab === 'replay' ? <RunLearningReplay key={runId} view={view} detail={detail} api={api} eventNames={eventNames}
+      onLocate={(nodeId, type) => {
+        const inspectorTab = type.startsWith('HANDOFF') ? 'handoffs' : /^(CHECK|NODE_RETRY)/.test(type) ? 'decisions' : 'calls';
+        setSelection({ runId, nodeId, inspectorTab });
+        setTab('flow');
+      }} /> : tab === 'output' ? <RunOutputsPanel key={runId} detail={detail} view={view} api={api}
+        workspaceOpen={workspaceOpen} onOpenWorkspace={onOpenWorkspace} />
+      : tab === 'list' ? <WorkflowPlanPanel detail={detail} Status={Status} stopCauseLabels={stopCauseLabels}
       onApprove={onApprove} approving={approving} onRecover={onRecover} /> : <>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 1 }}>
         节点已完成 {view.counts?.completed ?? 0} / {view.counts?.total ?? nodes.length}
@@ -229,10 +247,11 @@ export default function ExecutionFlowPanel({
             onSelectNode={nodeId => setSelection({ runId, nodeId })}
             onSelectEdge={edge => setSelection({ runId, nodeId: edge.toNodeId, edge })} />
           <Paper variant="outlined" sx={{ minWidth: 0 }}>
-            <RunTraceInspector key={`${runId}:${selectedId}:${selectedEdge?.fromNodeId ?? ''}`}
+            <RunTraceInspector key={`${runId}:${selectedId}:${selectedEdge?.fromNodeId ?? ''}:${currentSelection?.inspectorTab ?? ''}`}
               detail={matchingDetail} selectedNode={selectedNode} selectedEdge={selectedEdge}
               view={view} runDetail={detail} byId={nodeById} api={api}
               loading={nodeLoading || !matchingDetail} error={nodeError}
+              defaultTab={currentSelection?.inspectorTab}
               stopCauseLabels={stopCauseLabels} eventNames={eventNames} />
           </Paper>
         </Box>}
@@ -242,8 +261,8 @@ export default function ExecutionFlowPanel({
           {' · '}复用 {view.counts?.reused ?? 0} · 检查 {view.counts?.checks ?? 0}
         </Typography>
         <Typography variant="body2">
-          剩余轮次 {view.budget.remainingRounds} · 工具 {view.budget.remainingTools}
-          {' · '}时间 {Math.ceil((view.budget.remainingMs || 0) / 1000)} 秒
+          剩余轮次 {view.budget.remainingRounds ?? '未设上限'} · 工具 {view.budget.remainingTools ?? '未设上限'}
+          {' · '}时间 {view.budget.remainingMs == null ? '未设上限' : `${Math.ceil(view.budget.remainingMs / 1000)} 秒`}
           {view.budget.remainingTokens != null && ` · Token ${view.budget.remainingTokens}`}
           {view.counts?.unknownTokenCalls > 0 && ` · 未知用量 ${view.counts.unknownTokenCalls} 次`}
         </Typography>
@@ -254,6 +273,5 @@ export default function ExecutionFlowPanel({
       <RunExtensionsPanel detail={detail} api={api} />
       <CostPricePanel api={api} />
     </TraceSection>
-    </Box>
-  </ThemeProvider>;
+    </Box>;
 }

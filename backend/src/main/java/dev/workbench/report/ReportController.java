@@ -12,14 +12,18 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/runs")
 public class ReportController {
   private final HtmlReportService service;
+  private final dev.workbench.ownership.OwnershipService ownership;
 
-  public ReportController(HtmlReportService service) {
+  public ReportController(
+      HtmlReportService service, dev.workbench.ownership.OwnershipService ownership) {
     this.service = service;
+    this.ownership = ownership;
   }
 
   @GetMapping(value = "/{id}/report", produces = MediaType.TEXT_HTML_VALUE)
   public ResponseEntity<byte[]> report(
       @PathVariable String id, @RequestParam(defaultValue = "FULL") ReportView view) {
+    ownership.requireRun(id);
     String html =
         switch (view) {
           case SUMMARY -> service.renderSummary(id);
