@@ -459,14 +459,6 @@ public class WorkflowExecutionService {
       if (!java.util.Objects.equals(task.bugId(), item.bugId())
           || !java.util.Objects.equals(task.workspaceId(), item.workspaceId()))
         throw new StaleEvidenceException("系统检查证据的 Bug 或工作区归属与当前任务不一致。");
-      String current;
-      try {
-        current = workspaces.verificationFingerprint(task.workspaceId());
-      } catch (RuntimeException e) {
-        throw new StaleEvidenceException("无法确认当前工作区版本，不能继续使用该检查证据。");
-      }
-      if (!java.util.Objects.equals(current, item.workspaceFingerprint()))
-        throw new StaleEvidenceException("系统检查后工作区已变化，旧检查证据不能继续放行下游节点。");
       evidence.add(
           new EvidenceSnapshot(
               checkId,
@@ -476,9 +468,16 @@ public class WorkflowExecutionService {
               item.workspaceFingerprint(),
               input.sourceRunId().toString()));
     }
+    // 证据比对和守卫基线必须共用同一次读取：先读当前指纹，再逐项比对，最后把同一值交给守卫。
+    // 否则“比对通过后、守卫建立前”的外部修改会被新读取值覆盖，下游会带着旧证据继续执行。
     WorkspaceGuard guard = null;
-    if (task.workspaceId() != null) {
-      guard = new WorkspaceGuard(task.workspaceId(), currentFingerprint(task.workspaceId()));
+    if (!evidence.isEmpty()) {
+      String verified = currentFingerprint(task.workspaceId());
+      for (var item : evidence) {
+        if (!java.util.Objects.equals(verified, item.fingerprint()))
+          throw new StaleEvidenceException("系统检查后工作区已变化，旧检查证据不能继续放行下游节点。");
+      }
+      guard = new WorkspaceGuard(task.workspaceId(), verified);
     }
     return new CheckEvidencePreflight(
         task.bugId(), task.workspaceId(), dependencies, List.copyOf(evidence), guard);
@@ -896,8 +895,16 @@ public class WorkflowExecutionService {
             if (!records.isRunningAttempt(runId, agentId.toString()))
               throw new IllegalStateException("工作流没有可结算的该尝试。");
 
-            agents.finishAgent(
-                agentId.toString(), InvocationStatus.fromRunStatus(cause.status()), null);
+            // 检查失败等阻塞原因没有对应的调用终态；已认领但尚未发起模型/工具调用的实例按失败结束。
+            InvocationStatus status =
+                switch (cause.status()) {
+                  case COMPLETED -> InvocationStatus.COMPLETED;
+                  case CANCELLED -> InvocationStatus.CANCELLED;
+                  case LIMITED -> InvocationStatus.LIMITED;
+                  case INTERRUPTED -> InvocationStatus.INTERRUPTED;
+                  default -> InvocationStatus.FAILED;
+                };
+            agents.finishAgent(agentId.toString(), status, null);
             recordAttemptStop(agentId.toString(), cause);
           }
           // 停止发生在检查结算前时，保留检查记录并标明结果未知，不能当作通过。

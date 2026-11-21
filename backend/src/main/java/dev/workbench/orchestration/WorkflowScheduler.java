@@ -184,9 +184,10 @@ class WorkflowScheduler {
             control.atBoundary(
                 stateLock,
                 () -> workflowRuns.claimWorkflowNode(runId, plan.id(), node.id(), task.goal()));
-        workflowRuns.requireWorkspaceCurrent(attempt.workspaceGuard());
         String id = attempt.agentId();
+        // 认领已提交 Agent、尝试和节点；守卫拒绝时也必须由同一结算事务结束它们。
         activeAgent = UUID.fromString(id);
+        workflowRuns.requireWorkspaceCurrent(attempt.workspaceGuard());
         var nodePolicy =
             attempt.node().budget() == null
                 ? null

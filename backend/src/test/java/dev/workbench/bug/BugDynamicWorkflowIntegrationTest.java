@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.AgentRole;
+import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.ModelMode;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
@@ -44,6 +45,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -71,7 +73,7 @@ import dev.workbench.store.RunRecordService;
 class BugDynamicWorkflowIntegrationTest {
   @Autowired RunService service;
   @Autowired RunRecordService repo;
-  @Autowired WorkspaceService workspaces;
+  @MockitoSpyBean WorkspaceService workspaces;
   @Autowired BugService bugs;
   @Autowired BugIntakeService intakes;
   @Autowired PlanService plans;
@@ -938,6 +940,98 @@ class BugDynamicWorkflowIntegrationTest {
     assertTrue(failure.getMessage().contains("工作区已变化"));
     assertTrue(plans.find(id).get(1).status() == PlanNodeStatus.PENDING, "过期证据不能启动下游节点");
     assertTrue(repo.agents(id).isEmpty());
+  }
+
+  @Test
+  void workspaceChangeBetweenEvidenceCheckAndGuardSettlesClaimWithoutExecution() throws Exception {
+    var fixture = failingPythonWorkspace();
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REPRODUCE,
+        BugService.CheckStatus.FAILURES_OBSERVED,
+        "Traceback: assertion failed");
+    var changed = new AtomicBoolean();
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              String value = (String) invocation.callRealMethod();
+              if (!changed.get()
+                  && calledFrom("prepareCheckEvidence")
+                  && changed.compareAndSet(false, true)) {
+                String workspaceId = invocation.getArgument(0);
+                var file = workspaces.read(workspaceId, "calculator.py");
+                workspaces.write(
+                    workspaceId,
+                    "calculator.py",
+                    file.sha256(),
+                    "def add(a,b):\n    return a-b\n# changed after evidence check\n");
+              }
+              return value;
+            })
+        .when(workspaces)
+        .verificationFingerprint(anyString());
+
+    String id = createBugTask(fixture.workspace().id(), true, null);
+    assertStaleClaimSettled(id);
+  }
+
+  @Test
+  void workspaceChangeAfterGuardEstablishedSettlesClaimWithoutExecution() throws Exception {
+    var fixture = failingPythonWorkspace();
+    stubBugCheck(
+        fixture.workspace().id(),
+        BugService.CheckKind.REPRODUCE,
+        BugService.CheckStatus.FAILURES_OBSERVED,
+        "Traceback: assertion failed");
+    var changed = new AtomicBoolean();
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              if (!changed.get()
+                  && calledFrom("requireWorkspaceCurrent")
+                  && changed.compareAndSet(false, true)) {
+                String workspaceId = invocation.getArgument(0);
+                var file = workspaces.read(workspaceId, "calculator.py");
+                workspaces.write(
+                    workspaceId,
+                    "calculator.py",
+                    file.sha256(),
+                    "def add(a,b):\n    return a-b\n# changed after guard established\n");
+              }
+              return invocation.callRealMethod();
+            })
+        .when(workspaces)
+        .verificationFingerprint(anyString());
+
+    String id = createBugTask(fixture.workspace().id(), true, null);
+    assertStaleClaimSettled(id);
+  }
+
+  private void assertStaleClaimSettled(String id) throws Exception {
+    var run = await(id);
+    assertEquals("BLOCKED", run.get("STATUS"), String.valueOf(run.get("REASON")));
+    assertEquals("CHECK_FAILED", run.get("STOP_CAUSE"));
+    assertEquals("EXECUTION_BLOCKED", run.get("BLOCK_CATEGORY"));
+    assertTrue(repo.models(id).isEmpty(), () -> repo.models(id).toString());
+    assertTrue(repo.tools(id).isEmpty(), () -> repo.tools(id).toString());
+    assertEquals(1, repo.agents(id).size());
+    assertEquals("FAILED", repo.agents(id).getFirst().get("STATUS"));
+    var attempts = workflowRuns.workflowAttempts(id);
+    assertEquals(1, attempts.size());
+    assertEquals(InvocationStatus.FAILED, attempts.getFirst().status());
+    assertEquals(StopCause.CHECK_FAILED, attempts.getFirst().stopCause());
+    var checks = workflowRuns.workflowChecks(id);
+    assertEquals(1, checks.size());
+    assertEquals(SystemCheckStatus.PASSED, checks.getFirst().status());
+    var nodes = plans.find(id);
+    assertEquals(PlanNodeStatus.COMPLETED, nodes.get(0).status());
+    assertEquals(PlanNodeStatus.FAILED, nodes.get(1).status());
+    assertTrue(
+        nodes.subList(2, nodes.size()).stream()
+            .allMatch(node -> node.status() == PlanNodeStatus.SKIPPED));
+  }
+
+  private static boolean calledFrom(String method) {
+    return java.util.Arrays.stream(new Throwable().getStackTrace())
+        .anyMatch(frame -> method.equals(frame.getMethodName()));
   }
 
   @Test
