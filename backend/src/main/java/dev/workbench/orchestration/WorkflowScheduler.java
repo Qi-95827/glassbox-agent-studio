@@ -141,6 +141,7 @@ class WorkflowScheduler {
           var claimed =
               control.atBoundary(
                   stateLock, () -> workflowRuns.claimWorkflowCheck(runId, plan.id(), node.id()));
+          workflowRuns.requireWorkspaceCurrent(claimed.workspaceGuard());
           SystemCheckResult result;
           try {
             result =
@@ -183,6 +184,7 @@ class WorkflowScheduler {
             control.atBoundary(
                 stateLock,
                 () -> workflowRuns.claimWorkflowNode(runId, plan.id(), node.id(), task.goal()));
+        workflowRuns.requireWorkspaceCurrent(attempt.workspaceGuard());
         String id = attempt.agentId();
         activeAgent = UUID.fromString(id);
         var nodePolicy =

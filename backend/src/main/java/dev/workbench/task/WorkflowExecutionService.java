@@ -145,14 +145,29 @@ public class WorkflowExecutionService {
                 startedRef);
           evidence.event(
               runId, EventType.AGENT_STARTED, node.label() + "已启动 Agent，实例：" + agentId, startedRef);
-          return new ClaimedNode(node, agentId, List.copyOf(upstream));
+          return new ClaimedNode(
+              node,
+              agentId,
+              List.copyOf(upstream),
+              preflight == null ? null : preflight.guard);
         });
   }
 
-  public record ClaimedNode(PlanNode node, String agentId, List<WorkflowInput> dependencies) {}
+  public record ClaimedNode(
+      PlanNode node,
+      String agentId,
+      List<WorkflowInput> dependencies,
+      WorkspaceGuard workspaceGuard) {}
+
+  /** 认领时的工作区指纹；执行前必须仍一致。 */
+  public record WorkspaceGuard(String workspaceId, String fingerprint) {}
 
   public record ClaimedCheck(
-      PlanNode node, String checkId, int attemptNo, List<SystemCheckInput> inputs) {}
+      PlanNode node,
+      String checkId,
+      int attemptNo,
+      List<SystemCheckInput> inputs,
+      WorkspaceGuard workspaceGuard) {}
 
   /**
    * 认领系统检查节点：节点、检查记录和输入引用在同一事务提交。
@@ -209,7 +224,11 @@ public class WorkflowExecutionService {
                   .withNode(node.id())
                   .withCheck(UUID.fromString(checkId)));
           return new ClaimedCheck(
-              node, checkId, number, upstream.stream().map(WorkflowInput::toCheckInput).toList());
+              node,
+              checkId,
+              number,
+              upstream.stream().map(WorkflowInput::toCheckInput).toList(),
+              preflight == null ? null : preflight.guard);
         });
   }
 
@@ -457,8 +476,31 @@ public class WorkflowExecutionService {
               item.workspaceFingerprint(),
               input.sourceRunId().toString()));
     }
+    WorkspaceGuard guard = null;
+    if (task.workspaceId() != null) {
+      guard = new WorkspaceGuard(task.workspaceId(), currentFingerprint(task.workspaceId()));
+    }
     return new CheckEvidencePreflight(
-        task.bugId(), task.workspaceId(), dependencies, List.copyOf(evidence));
+        task.bugId(), task.workspaceId(), dependencies, List.copyOf(evidence), guard);
+  }
+
+  private String currentFingerprint(String workspaceId) {
+    try {
+      return workspaces.verificationFingerprint(workspaceId);
+    } catch (RuntimeException e) {
+      throw new StaleEvidenceException("无法确认当前工作区版本，不能继续使用该检查证据。");
+    }
+  }
+
+  /**
+   * 认领后、节点实际执行前的最后一道工作区版本检查。
+   *
+   * <p>该检查在事务外执行，覆盖“指纹预检后、模型/工具/容器启动前”的外部编辑窗口。
+   */
+  public void requireWorkspaceCurrent(WorkspaceGuard guard) {
+    if (guard == null) return;
+    if (!java.util.Objects.equals(guard.fingerprint(), currentFingerprint(guard.workspaceId())))
+      throw new StaleEvidenceException("节点认领后工作区已变化，检查证据已失效，不能启动下游执行。");
   }
 
   /** 短事务内只做数据库复核；不再调用 Git，也不重新计算外部指纹。 */
@@ -505,7 +547,8 @@ public class WorkflowExecutionService {
       String bugId,
       String workspaceId,
       List<String> dependencies,
-      List<EvidenceSnapshot> evidence) {}
+      List<EvidenceSnapshot> evidence,
+      WorkspaceGuard guard) {}
 
   private List<PlanNode> lockWorkflowRun(String runId, UUID version) {
     if (!runRows.lockForUpdate(runId)) throw new IllegalArgumentException("运行不存在。");

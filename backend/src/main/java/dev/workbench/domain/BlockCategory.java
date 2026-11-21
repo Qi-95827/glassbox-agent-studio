@@ -15,7 +15,7 @@ public enum BlockCategory {
     return switch (stopCause) {
       case "CHECK_FAILED", "OUTPUT_MISSING", "VALIDATION_MISSING" -> EXECUTION_BLOCKED;
       case "USER_REVIEW" -> USER_REVIEW;
-      default -> USER_REVIEW;
+      default -> UNKNOWN;
     };
   }
 }
