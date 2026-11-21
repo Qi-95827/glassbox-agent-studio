@@ -1,5 +1,21 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Input, Spin, Typography } from 'antd';
+import { createContext, useContext, useEffect, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  CircularProgress,
+  FormControlLabel,
+  Stack,
+  TextField,
+  Typography
+} from '@mui/material';
+import { useSession } from '../../hooks/useTasks';
+import { authApi } from '../../api/auth';
+import { setUnauthorizedHandler, get } from '../../api/client';
+import AppLogo from '../../components/AppLogo';
+import { googleTokens } from '../../theme/googleTheme';
 
 const AuthContext = createContext(null);
 
@@ -7,148 +23,262 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
-async function call(path, options = {}) {
-  const method = (options.method || 'GET').toUpperCase();
-  const headers = { ...(options.headers || {}) };
-  if (options.body != null) headers['Content-Type'] = 'application/json';
-  if (!['GET', 'HEAD'].includes(method)) {
-    try {
-      const tokenResponse = await fetch('/api/auth/csrf');
-      const tokenBody = await tokenResponse.json();
-      if (tokenBody.token) headers['X-XSRF-TOKEN'] = tokenBody.token;
-    } catch { /* CSRF 初始化失败时让服务端返回明确错误 */ }
-  }
-  const response = await fetch('/api' + path, { ...options, headers });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.message || '请求失败');
-  return body;
+function Splash({ message }) {
+  return (
+    <Stack
+      spacing={2}
+      sx={{
+        minHeight: '100vh',
+        bgcolor: 'background.default',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <AppLogo size={40} />
+      <CircularProgress size={22} />
+      <Typography variant="body2" color="text.secondary">
+        {message}
+      </Typography>
+    </Stack>
+  );
 }
 
 /**
- * 本地账号入口。
+ * 本地账号入口：登录态只来自服务端会话。
  *
- * <p>初始化完成前保留旧单机访问；初始化后未登录请求由服务端拒绝。登录状态只来自服务端会话，
- * 页面不把请求体里的用户标识当作归属依据。
+ * <p>初始化完成前保留旧单机模式；初始化后 401 会清空本地登录态并回到登录页。
  */
 export default function AuthGate({ children }) {
-  const [status, setStatus] = useState(null);
+  const queryClient = useQueryClient();
+  const session = useSession();
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [claim, setClaim] = useState(true);
 
-  const refresh = async () => {
+  const status = session.data;
+  const user = status?.currentUser ?? null;
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      queryClient.setQueryData(['auth', 'status'], previous => ({
+        initialized: previous?.initialized ?? true,
+        currentUser: null
+      }));
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [queryClient]);
+
+  const finish = async () => {
+    setPassword('');
+    setError('');
+    // 登录会更换 Session ID；取消旧状态请求，并先发一个认证 GET 触发服务端完成轮换，
+    // 避免首屏多个并发请求带着旧 Session ID 得到 401。
+    await queryClient.cancelQueries({ queryKey: ['auth', 'status'] });
     try {
-      setStatus(await call('/auth/status'));
+      await get('/tasks');
+    } catch {
+      // 真正失效时由下面的状态确认与 401 回调处理。
+    }
+    try {
+      const latest = await authApi.status();
+      queryClient.setQueryData(['auth', 'status'], latest);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    } catch (failure) {
+      setError(failure.message);
+    }
+  };
+
+  const signIn = useMutation({
+    mutationFn: payload =>
+      status?.initialized ? authApi.login(payload) : authApi.initialize(payload),
+    onSuccess: finish,
+    onError: failure => setError(failure.message)
+  });
+
+  const signOut = useMutation({
+    mutationFn: authApi.logout,
+    onSuccess: () => {
+      queryClient.setQueryData(['auth', 'status'], previous => ({
+        initialized: previous?.initialized ?? true,
+        currentUser: null
+      }));
+      queryClient.clear();
       setError('');
-    } catch (failure) {
-      setError(failure.message);
-    }
-  };
-  useEffect(() => { refresh(); }, []);
-
-  const submit = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      if (!status.initialized) {
-        await call('/auth/initialize', {
-          method: 'POST',
-          body: JSON.stringify({ username, password, displayName, claimLegacyHistory: claim })
-        });
-      } else {
-        await call('/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({ username, password })
-        });
-      }
-      setPassword('');
-      globalThis.__workbenchCsrf = null;
-      await refresh();
-    } catch (failure) {
-      setError(failure.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const logout = async () => {
-    setError('');
-    setBusy(true);
-    let logoutSucceeded = false;
-    try {
-      await call('/auth/logout', { method: 'POST' });
-      logoutSucceeded = true;
-    } catch (failure) {
-      // 请求失败不代表服务端会话已失效；先复查状态，仍登录时保留页面并提示重试。
+    },
+    onError: async failure => {
       try {
-        const latest = await call('/auth/status');
+        const latest = await authApi.status();
         if (latest.currentUser) {
-          setStatus(latest);
-          setError('退出失败：' + failure.message + '。服务端会话可能仍有效，请重试。');
-          setBusy(false);
+          setError(`退出失败：${failure.message}。服务端会话可能仍有效，请重试。`);
           return;
         }
-        logoutSucceeded = true;
       } catch {
-        setError('退出失败：' + failure.message + '。无法确认会话状态，请检查网络后重试。');
-        setBusy(false);
+        setError(`退出失败：${failure.message}。无法确认会话状态，请检查网络后重试。`);
         return;
       }
+      queryClient.clear();
     }
-    if (!logoutSucceeded) {
-      setBusy(false);
-      return;
-    }
-    globalThis.__workbenchCsrf = null;
-    try {
-      setStatus(await call('/auth/status'));
-    } catch {
-      setStatus({ initialized: true, currentUser: null });
-    }
-    setBusy(false);
-  };
+  });
 
-  if (!status) return <div style={{ padding: 40 }}>{error
-    ? <Alert type="error" message={error} />
-    : <Spin tip="正在读取本地账号状态" />}</div>;
-
-  if (!status.currentUser) {
-    const setup = !status.initialized;
-    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#f5f7fb', padding: 20 }}>
-      <Card style={{ width: 460, maxWidth: '100%' }}>
-        <Typography.Title level={3}>{setup ? '初始化本地管理员' : '登录 Agent Studio'}</Typography.Title>
-        <Typography.Paragraph type="secondary">
-          {setup
-            ? '首次初始化会创建本地管理员。勾选领取后，旧 LOCAL 历史任务和工作区归入该管理员；不勾选可稍后在「我的 Agent · 账号」中领取。'
-            : '账号和密码只保存在本机数据库；页面通过服务端会话识别当前用户。'}
-        </Typography.Paragraph>
-        {error && <Alert type="error" message={error} style={{ marginBottom: 12 }} />}
-        <div style={{ marginBottom: 8 }}>账号</div>
-        <Input value={username} onChange={event => setUsername(event.target.value)} placeholder="3-32 位小写字母或数字" />
-        {setup && <>
-          <div style={{ margin: '12px 0 8px' }}>显示名称</div>
-          <Input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="例如：本地管理员" />
-          <div style={{ margin: '12px 0 8px' }}>领取旧 LOCAL 历史数据</div>
-          <Checkbox checked={claim} onChange={event => setClaim(event.target.checked)}>
-            把现有任务、工作区和运行归入此管理员
-          </Checkbox>
-        </>}
-        <div style={{ margin: '12px 0 8px' }}>密码</div>
-        <Input.Password value={password} onChange={event => setPassword(event.target.value)} placeholder="至少 8 位" onPressEnter={submit} />
-        <Button type="primary" block loading={busy} style={{ marginTop: 18 }} onClick={submit}>
-          {setup ? '初始化并登录' : '登录'}
-        </Button>
-      </Card>
-    </div>;
+  if (session.isLoading) return <Splash message="正在读取本地账号状态" />;
+  if (session.isError) {
+    return (
+      <Box sx={{ p: 4, maxWidth: 640, mx: 'auto' }}>
+        <Alert severity="error" action={<Button onClick={() => session.refetch()}>重试</Button>}>
+          {session.error.message}
+        </Alert>
+      </Box>
+    );
   }
 
-  return <AuthContext.Provider value={{ user: status.currentUser, refresh, logout }}>
-    {children}
-    {error && <Alert type="error" showIcon closable message={error} onClose={() => setError('')}
-      action={<Button size="small" loading={busy} onClick={logout}>重试退出</Button>}
-      style={{ position: 'fixed', top: 76, right: 12, zIndex: 3000, maxWidth: 520 }} />}
-  </AuthContext.Provider>;
+  if (!user) {
+    const setup = !status?.initialized;
+    const busy = signIn.isPending;
+    const submit = event => {
+      event.preventDefault();
+      if (!username.trim() || password.length < 8) {
+        setError('请输入账号，并至少填写 8 位密码。');
+        return;
+      }
+      signIn.mutate(
+        setup
+          ? {
+              username: username.trim(),
+              password,
+              displayName: displayName.trim() || username.trim(),
+              claimLegacyHistory: claim
+            }
+          : { username: username.trim(), password }
+      );
+    };
+
+    return (
+      <Box
+        sx={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          bgcolor: 'background.default',
+          px: 2,
+          py: 6,
+          backgroundImage:
+            'radial-gradient(circle at 20% 20%, rgba(26,115,232,.06), transparent 42%), radial-gradient(circle at 80% 80%, rgba(52,168,83,.06), transparent 45%)'
+        }}
+      >
+        <Box
+          component="form"
+          onSubmit={submit}
+          sx={{
+            width: 440,
+            maxWidth: '100%',
+            bgcolor: 'background.paper',
+            border: `1px solid ${googleTokens.outline}`,
+            borderRadius: 6,
+            p: { xs: 3, sm: 4.5 }
+          }}
+        >
+          <Stack direction="row" spacing={1.2} sx={{ mb: 3, alignItems: 'center' }}>
+            <AppLogo size={30} />
+            <Typography sx={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em' }}>
+              Agent Studio
+            </Typography>
+          </Stack>
+          <Typography sx={{ fontSize: 24, fontWeight: 500, lineHeight: 1.35 }}>
+            {setup ? '初始化本地管理员' : '登录工作台'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 3 }}>
+            {setup
+              ? '首次初始化会创建本机管理员。账号与密码只保存在本地数据库。'
+              : '使用本机账号继续查看任务、运行过程与交付结果。'}
+          </Typography>
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
+          <Stack spacing={2}>
+            <TextField
+              label="账号"
+              value={username}
+              onChange={event => setUsername(event.target.value)}
+              placeholder="3-32 位小写字母或数字"
+              autoComplete="username"
+              autoFocus
+              fullWidth
+              size="small"
+            />
+
+            {setup && (
+              <TextField
+                label="显示名称"
+                value={displayName}
+                onChange={event => setDisplayName(event.target.value)}
+                placeholder="例如：本地管理员"
+                fullWidth
+                size="small"
+              />
+            )}
+            <TextField
+              label="密码"
+              type="password"
+              value={password}
+              onChange={event => setPassword(event.target.value)}
+              placeholder="至少 8 位"
+              autoComplete={setup ? 'new-password' : 'current-password'}
+              fullWidth
+              size="small"
+            />
+
+            {setup && (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={claim}
+                    onChange={event => setClaim(event.target.checked)}
+                  />
+                }
+                label={
+                  <Typography variant="body2">把现有任务、工作区和运行归入该管理员</Typography>
+                }
+              />
+            )}
+            <Button type="submit" variant="contained" fullWidth loading={busy} sx={{ height: 42 }}>
+              {setup ? '初始化并登录' : '登录'}
+            </Button>
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2.5 }}>
+            身份只来自服务端会话；本页面不会把请求体里的用户标识当作归属依据。
+          </Typography>
+        </Box>
+      </Box>
+    );
+  }
+
+  return (
+    <AuthContext.Provider value={{ user, logout: signOut.mutate, loggingOut: signOut.isPending }}>
+      {children}
+      {error && (
+        <Alert
+          severity="error"
+          onClose={() => setError('')}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              loading={signOut.isPending}
+              onClick={() => signOut.mutate()}
+            >
+              重试退出
+            </Button>
+          }
+          sx={{ position: 'fixed', top: 68, right: 16, zIndex: 3000, maxWidth: 520 }}
+        >
+          {error}
+        </Alert>
+      )}
+    </AuthContext.Provider>
+  );
 }

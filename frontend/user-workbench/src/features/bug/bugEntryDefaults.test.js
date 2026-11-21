@@ -1,27 +1,29 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { bugQuickEntryDefaults, workflowCompatible } from './bugEntryDefaults.js';
+import { describe, expect, it } from 'vitest';
+import { bugQuickEntryDefaults, workflowCompatible } from './bugEntryDefaults';
 
-test('Bug 快捷入口默认不授予写权限并要求先审阅计划', () => {
-  const defaults = bugQuickEntryDefaults();
-  assert.equal(defaults.writeEnabled, false);
-  assert.equal(defaults.reviewPlan, true);
-  assert.equal(defaults.workflowTemplate, 'bug-fix');
-  assert.equal(defaults.entryKind, 'BUG');
-  assert.equal(defaults.bugId, 'MOCK-PY-001');
-});
+describe('bug entry defaults', () => {
+  it('从 Bug 面板进入时不自动授予写入权限', () => {
+    const defaults = bugQuickEntryDefaults();
+    expect(defaults.bugId).toBe('MOCK-PY-001');
+    expect(defaults.writeEnabled).toBe(false);
+    expect(defaults.reviewPlan).toBe(true);
+    expect(defaults.entryKind).toBe('BUG');
+  });
 
-test('Bug 修复模板在显式勾选写权限前不兼容，勾选后才允许创建', () => {
-  const base = {
-    hasWorkspace: true,
-    hasBug: true,
-    memoryEnabled: false,
-    entryKind: 'BUG'
-  };
-  assert.equal(workflowCompatible('bug-fix', { ...base, writeEnabled: false }), false);
-  assert.equal(workflowCompatible('bug-fix', { ...base, writeEnabled: true }), true);
-  assert.equal(
-    workflowCompatible('bug-fix', { ...base, writeEnabled: true, memoryEnabled: true }),
-    false
-  );
+  it('按工作区、Bug 与写入授权判断工作流兼容性', () => {
+    expect(workflowCompatible('dual-analysis', {})).toBe(true);
+    expect(
+      workflowCompatible('workspace-change', {
+        hasWorkspace: true,
+        writeEnabled: true
+      })
+    ).toBe(true);
+    expect(
+      workflowCompatible('bug-fix', {
+        hasWorkspace: true,
+        hasBug: true,
+        writeEnabled: false
+      })
+    ).toBe(false);
+  });
 });

@@ -1,0 +1,38 @@
+import { get, post } from './client';
+
+export function reportUrl(runId, view) {
+  return `/api/runs/${runId}/report${view ? `?view=${encodeURIComponent(view)}` : ''}`;
+}
+
+export const runsApi = {
+  get: (runId, includeEvents = false) =>
+    get(`/runs/${runId}?includeEvents=${includeEvents ? 'true' : 'false'}`),
+  executionView: runId => get(`/runs/${runId}/execution-view`),
+  nodeDetail: (runId, nodeId) =>
+    get(`/runs/${runId}/execution-view/nodes/${encodeURIComponent(nodeId)}`),
+  agentMetrics: runId => get(`/runs/${runId}/agent-metrics`),
+  skills: runId => get(`/runs/${runId}/skills`),
+  memoryLoad: runId => get(`/runs/${runId}/memory-load`),
+  agentSessions: runId => get(`/runs/${runId}/agent-sessions`),
+  toolGrants: runId => get(`/runs/${runId}/tool-grants`),
+  eventsPage: (runId, after, limit = 200, options) =>
+    get(`/runs/${runId}/events?after=${after}&limit=${limit}`, options),
+  pause: runId => post(`/runs/${runId}/pause`),
+  resume: runId => post(`/runs/${runId}/resume`),
+  cancel: runId => post(`/runs/${runId}/cancel`),
+  approvePlan: (runId, planVersionId) => post(`/runs/${runId}/plans/${planVersionId}/approve`),
+  recover: (runId, checkpointId) => post(`/runs/${runId}/recover/${checkpointId}`),
+  submitSupplement: (runId, requestId, payload) =>
+    post(`/runs/${runId}/supplements/${requestId}`, payload),
+  takeHandover: (runId, note) => post(`/runs/${runId}/handover`, { note }),
+  returnHandover: (runId, note) => post(`/runs/${runId}/handover/return`, { note }),
+  delivery: runId => get(`/runs/${runId}/delivery`),
+  deliveryFile: (runId, path) =>
+    get(`/runs/${runId}/delivery/files?path=${encodeURIComponent(path)}`),
+  planProposal: (runId, payload) => post(`/runs/${runId}/plan-proposals`, payload),
+  applyPlanProposal: (runId, proposalId) =>
+    post(`/runs/${runId}/plan-proposals/${proposalId}/apply`),
+  sourceArtifacts: (runId, payload) => post(`/runs/${runId}/source-artifacts`, payload),
+  revokeScope: (runId, directory) => post(`/runs/${runId}/workspace-scope/revoke`, { directory }),
+  reconcileExternalAction: actionId => post(`/external-actions/${actionId}/reconcile`)
+};

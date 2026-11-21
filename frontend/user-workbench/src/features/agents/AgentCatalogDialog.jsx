@@ -1,53 +1,70 @@
-import WorkbenchDialog from '../../layout/WorkbenchDialog.jsx';
-import React, { useEffect, useState } from 'react';
-import { Alert, Spin } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { Alert, Box, CircularProgress, Stack, Typography } from '@mui/material';
+import WorkbenchDialog, { TraceSection } from '../../components/WorkbenchDialog';
+import { agentsApi } from '../../api/agents';
+import { TOOL_NAMES } from '../../constants/labels';
 
-const toolLabels = {
-  SIMULATED_INSPECTION: '模拟检查工具',
-  WORKSPACE_READ: '读取授权文件',
-  WORKSPACE_SEARCH: '搜索授权文件',
-  WORKSPACE_WRITE: '修改授权文件',
-};
-
-/** 目录展示角色的声明上限；实际授权和调用记录以具体运行为准。 */
-export default function AgentCatalogDialog({ open, onClose, api }) {
-  const [roles, setRoles] = useState(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    let active = true;
-    setRoles(null);
-    setError(false);
-    api('/agents/catalog')
-      .then((data) => { if (active) setRoles(data); })
-      .catch(() => { if (active) setError(true); });
-    return () => { active = false; };
-  }, [open, api]);
+/** 内置 Agent 角色目录：展示能力声明，实际授权以运行记录为准。 */
+export default function AgentCatalogDialog({ open, onClose }) {
+  const catalog = useQuery({
+    queryKey: ['agent-catalog'],
+    queryFn: agentsApi.catalog,
+    enabled: open
+  });
 
   return (
-    <WorkbenchDialog title="内置 Agent 角色" open={open} onCancel={onClose} footer={null} width={760}>
-      <Alert
-        type="info"
-        showIcon
-        message="这里显示当前内置角色的能力声明；具体任务仍需用户授权，实际调用以运行记录为准。"
-      />
-      <p className="hint">当前为固定角色协作，暂不支持在页面创建角色或动态调整执行图。</p>
-      {error ? <Alert type="error" message="角色目录暂时不可用。" /> : !roles ? <Spin /> : roles.map((role) => (
-        <details className="agent-card handoff" key={role.role}>
-          <summary>{role.displayName} · 角色版本 {role.version}</summary>
-          <p>框架名称：{role.agentName}</p>
-          <p>声明的工具能力：{role.declaredTools.map((tool) => toolLabels[tool] || tool).join('、') || '无'}</p>
-          <p>角色指导：{role.systemPrompt}</p>
-          {role.skills.map((skill) => (
-            <div className="result-box" key={skill.id}>
-              <strong>{skill.name} · v{skill.version}</strong>
-              <p>{skill.guidance}</p>
-              <small>内容摘要：{skill.contentSha256}</small>
-            </div>
-          ))}
-        </details>
-      ))}
+    <WorkbenchDialog
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={760}
+      title="内置 Agent 角色"
+      subtitle="能力声明不等于执行记录；具体任务仍需用户授权。"
+    >
+      <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+        <Alert severity="info">
+          当前为固定角色协作，暂不支持在页面创建内置角色或动态调整执行图。
+        </Alert>
+        {catalog.isLoading && <CircularProgress size={18} />}
+        {catalog.isError && <Alert severity="error">角色目录暂时不可用。</Alert>}
+        {(catalog.data ?? []).map(role => (
+          <TraceSection
+            key={role.role}
+            title={`${role.displayName} · 角色版本 ${role.version}`}
+            subtitle={role.agentName}
+          >
+            <Stack spacing={0.75}>
+              <Typography variant="body2">
+                声明的工具能力：
+                {role.declaredTools.map(tool => TOOL_NAMES[tool] || tool).join('、') || '无'}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                角色指导：{role.systemPrompt}
+              </Typography>
+              {role.skills?.map(skill => (
+                <Box
+                  key={skill.id}
+                  sx={{
+                    p: 1.25,
+                    borderRadius: 2,
+                    bgcolor: '#F8F9FA',
+                    border: '1px solid',
+                    borderColor: 'divider'
+                  }}
+                >
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {skill.name} · v{skill.version}
+                  </Typography>
+                  <Typography variant="body2">{skill.guidance}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    内容摘要：{skill.contentSha256}
+                  </Typography>
+                </Box>
+              ))}
+            </Stack>
+          </TraceSection>
+        ))}
+      </Stack>
     </WorkbenchDialog>
   );
 }
