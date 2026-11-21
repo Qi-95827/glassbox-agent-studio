@@ -26,7 +26,7 @@ class MixedModelCostIntegrationTest {
     costs.publish("default", "deepseek-flash", "CNY", 2_000_000, 4_000_000, 100, 100, "test");
     String runId = UUID.randomUUID().toString();
     // Task default mode is mock; binding must not be rejected because a node later uses deepseek.
-    costs.bindLimit(runId, ModelMode.MOCK, 10_000L);
+    costs.bindLimit(runId, costs.requireBudgetPricing(java.util.List.of(ModelKind.MOCK, ModelKind.DEEPSEEK_FLASH), 10_000L));
 
     var reservation = costs.reserve(runId, ModelKind.DEEPSEEK_FLASH);
     var settlement = costs.settle(reservation, Integer.valueOf(100), Integer.valueOf(100));
@@ -60,7 +60,7 @@ class MixedModelCostIntegrationTest {
     costs.publish("default", "mock", "CNY", 0, 0, 100, 100, "test");
     costs.publish("default", "deepseek-flash", "CNY", 1_000_000, 1_000_000, 100, 100, "test");
     String runId = UUID.randomUUID().toString();
-    costs.bindLimit(runId, ModelMode.MOCK, 300L);
+    costs.bindLimit(runId, costs.requireBudgetPricing(java.util.List.of(ModelKind.MOCK, ModelKind.DEEPSEEK_FLASH), 300L));
 
     costs.reserve(runId, ModelKind.DEEPSEEK_FLASH);
     var error =

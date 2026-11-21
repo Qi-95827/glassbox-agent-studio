@@ -213,15 +213,31 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
   /** 已确认运行固定使用绑定价格；仅旧运行缺少绑定映射时回退到原默认价格/当前生效价格。 */
   private ProviderPriceVersionEntity boundPrice(RunCostLimitEntity limit, ModelKind model) {
     var bindings = readModelPrices(limit.getModelPriceVersionsJson());
-    String priceId = bindings.get(model.code());
-    if (priceId == null && bindings.isEmpty()) priceId = limit.getPriceVersionId();
-    if (priceId != null) {
-      var bound = prices.findById(priceId);
-      if (bound.isPresent() && bound.get().getModel().equals(model.code())) return bound.get();
-      if (!bindings.isEmpty())
+    if (!bindings.isEmpty()) {
+      String priceId = bindings.get(model.code());
+      if (priceId == null)
         throw new StopExecution(
             StopCause.COST_LIMIT,
             "运行未绑定模型 " + model.code() + " 的确认价格版本，不能继续派发。");
+      var bound =
+          prices
+              .findById(priceId)
+              .orElseThrow(
+                  () ->
+                      new StopExecution(
+                          StopCause.COST_LIMIT,
+                          "运行绑定的模型价格版本已不存在，不能继续派发。"));
+      if (!bound.getModel().equals(model.code()))
+        throw new StopExecution(
+            StopCause.COST_LIMIT,
+            "运行绑定的价格版本与模型 " + model.code() + " 不匹配，不能继续派发。");
+      return bound;
+    }
+    // 旧账本没有逐模型映射：沿用默认价格，模型不匹配时才回退到当前生效价格。
+    String legacyId = limit.getPriceVersionId();
+    if (legacyId != null) {
+      var legacy = prices.findById(legacyId);
+      if (legacy.isPresent() && legacy.get().getModel().equals(model.code())) return legacy.get();
     }
     return priceFor(model);
   }

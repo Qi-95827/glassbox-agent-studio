@@ -28,6 +28,8 @@ public enum StopCause {
   OUTPUT_MISSING(RunStatus.BLOCKED),
   /** 兼容 Bug 流程缺少可执行验证条件，暂停自动修改并等待用户补充。 */
   VALIDATION_MISSING(RunStatus.BLOCKED),
+  /** 执行已完成，正常等待用户核对交付物或验收条件。 */
+  USER_REVIEW(RunStatus.BLOCKED),
   RECOVERY_PRECONDITION_FAILED(RunStatus.FAILED),
   UNCLASSIFIED_FAILURE(RunStatus.FAILED);
 

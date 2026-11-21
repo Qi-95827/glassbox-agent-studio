@@ -198,8 +198,7 @@ class PrivateAgentModelBudgetIntegrationTest {
     assertEquals("FIXED", summary.get("modelStrategy"));
     assertEquals("mock", summary.get("modelMode"));
 
-    // 预算核对会纳入请求模型 deepseek-flash；同币种价格存在时混合模型可继续。
-    costs.publish("default", "deepseek-flash", "CNY", 2_000_000, 4_000_000, 100, 100, "test");
+    // 预算只核对实际节点模型；请求模型 deepseek 在全部节点固定时不会执行，不需要价格。
 
     // 运行模型选择 deepseek，但两个私有节点都固定 mock；混合校验只按实际节点模型计算。
     var confirmed =

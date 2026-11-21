@@ -542,27 +542,37 @@ public class WorkflowExecutionService {
     if (result.length() > 1900) result.setLength(1900);
     var scope = plans.workflowPlan(runId).scope();
     String reason = null;
+    StopCause cause = null;
     if (scope == WorkflowTemplate.Scope.WORKSPACE_BUG_FIX) {
       reason = "回归检查通过，仍需用户核对代码差异、原问题与验收条件；系统不会自动合并或关闭 Bug。";
+      cause = StopCause.USER_REVIEW;
     } else if (scope.allowsWrite()) {
       boolean confirmedWrite =
           outputs.stream()
               .flatMap(output -> output.toolEvidence().stream())
               .anyMatch(evidence -> evidence.tool() == ToolKind.WORKSPACE_WRITE);
-      reason = confirmedWrite ? "已保存写入记录，等待核对工作区差异和验收条件。" : "尚无成功写入记录，请核对修改结果和验收条件。";
+      if (confirmedWrite) {
+        reason = "已保存写入记录，等待核对工作区差异和验收条件。";
+        cause = StopCause.USER_REVIEW;
+      } else {
+        reason = "尚无成功写入记录，请核对修改结果和验收条件。";
+        cause = StopCause.OUTPUT_MISSING;
+      }
     } else if (scope.hasWorkspace()
         && outputs.stream().allMatch(output -> output.toolEvidence().isEmpty())) {
       reason = "尚无成功的授权文件读取或搜索记录，分析结果需要核实。";
+      cause = StopCause.OUTPUT_MISSING;
     }
-    boolean blocked = reason != null;
     runs.update(
         runId,
-        blocked ? RunStatus.BLOCKED : RunStatus.COMPLETED,
+        cause != null ? RunStatus.BLOCKED : RunStatus.COMPLETED,
         reason,
         result.toString().stripTrailing(),
         rounds,
         tools,
-        elapsed);
+        elapsed,
+        cause);
+    boolean blocked = cause != null;
     runs.event(
         runId,
         blocked ? EventType.BLOCKED : EventType.RUN_COMPLETED,

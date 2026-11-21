@@ -35,6 +35,15 @@ class ConfirmedRunPricePinIntegrationTest {
     assertEquals(200L, first.settledMicros());
     var evidence = (Map<?, ?>) ((List<?>) costs.estimate(confirmed).get("RESERVATIONS")).getFirst();
     assertEquals(v1.id(), evidence.get("PRICE_VERSION_ID"));
+    int reservationsBefore = ((List<?>) costs.estimate(confirmed).get("RESERVATIONS")).size();
+    var unbound =
+        assertThrows(
+            dev.workbench.framework.control.StopExecution.class,
+            () -> costs.reserve(confirmed, ModelKind.DEEPSEEK_FLASH));
+    assertEquals(dev.workbench.domain.StopCause.COST_LIMIT, unbound.stopCause());
+    assertEquals(
+        reservationsBefore, ((List<?>) costs.estimate(confirmed).get("RESERVATIONS")).size());
+
 
     String recovered = UUID.randomUUID().toString();
     costs.inheritLimit(confirmed, recovered);

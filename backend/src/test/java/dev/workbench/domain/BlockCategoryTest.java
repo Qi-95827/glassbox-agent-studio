@@ -17,6 +17,9 @@ class BlockCategoryTest {
     assertEquals(
         BlockCategory.EXECUTION_BLOCKED,
         BlockCategory.from(RunStatus.BLOCKED, StopCause.VALIDATION_MISSING.name()));
+    assertEquals(
+        BlockCategory.USER_REVIEW,
+        BlockCategory.from(RunStatus.BLOCKED, StopCause.USER_REVIEW.name()));
     assertEquals(BlockCategory.USER_REVIEW, BlockCategory.from(RunStatus.BLOCKED, "SOMETHING_ELSE"));
     assertEquals(BlockCategory.UNKNOWN, BlockCategory.from(RunStatus.BLOCKED, null));
     assertEquals(BlockCategory.UNKNOWN, BlockCategory.from(RunStatus.BLOCKED, " "));

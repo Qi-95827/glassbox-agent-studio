@@ -210,7 +210,8 @@ class PlanCandidateConfirmationService {
       LinkedHashSet<ModelMode> actualModes, ModelMode requestedMode) {
     var actualModels = new LinkedHashSet<ModelKind>();
     for (ModelMode actualMode : actualModes) actualModels.add(ModelKind.forMode(actualMode));
-    actualModels.add(ModelKind.forMode(requestedMode));
+    // 只有实际节点模型需要价格；用户选择的运行模型在全部节点固定时不会执行。
+    if (actualModels.isEmpty()) actualModels.add(ModelKind.forMode(requestedMode));
     return actualModels;
   }
 

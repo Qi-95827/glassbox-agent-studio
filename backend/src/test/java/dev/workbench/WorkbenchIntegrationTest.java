@@ -766,6 +766,8 @@ class WorkbenchIntegrationTest {
     service.approvePlan(id, plan.id());
     var completed = await(id);
     assertEquals("BLOCKED", completed.get("STATUS"));
+    assertEquals("USER_REVIEW", completed.get("STOP_CAUSE"));
+    assertEquals("USER_REVIEW", completed.get("BLOCK_CATEGORY"));
     assertTrue(completed.get("REASON").toString().contains("等待核对"));
     Path written = Path.of(workspace.workspacePath()).resolve("authorized.txt");
     assertEquals("文件由受控写入用例更新", Files.readString(written));
@@ -861,6 +863,8 @@ class WorkbenchIntegrationTest {
     service.approvePlan(id, plans.workflowPlan(id).id());
     var completed = await(id);
     assertEquals("BLOCKED", completed.get("STATUS"));
+    assertEquals("OUTPUT_MISSING", completed.get("STOP_CAUSE"));
+    assertEquals("EXECUTION_BLOCKED", completed.get("BLOCK_CATEGORY"));
     assertTrue(completed.get("REASON").toString().contains("尚无成功写入记录"));
     assertTrue(
         repo.tools(id).stream()
