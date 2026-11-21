@@ -131,14 +131,21 @@ final class RunReviewCoordinator {
                 + "\n\n审查结果：\n"
                 + outcome.review().substring(0, Math.min(700, outcome.review().length()));
         if (verificationBlocked) {
-          String reason =
-              state.task.bugId() == null
-                  ? "开发流程已结束，仍需用户检查差异并验证验收条件。"
-                  : state.regression == null
-                      ? "仅完成分析，未执行本次回归；尚不能报告 Bug 已修复。"
-                      : state.regression.status() == BugService.CheckStatus.PASSED
-                          ? "回归测试通过，仍需用户结合差异与原问题审查。"
-                          : "回归检查未通过或无法执行；不得报告 Bug 已修复。";
+          String reason;
+          StopCause cause;
+          if (state.task.bugId() == null) {
+            reason = "开发流程已结束，仍需用户检查差异并验证验收条件。";
+            cause = StopCause.USER_REVIEW;
+          } else if (state.regression == null) {
+            reason = "仅完成分析，未执行本次回归；尚不能报告 Bug 已修复。";
+            cause = StopCause.VALIDATION_MISSING;
+          } else if (state.regression.status() == BugService.CheckStatus.PASSED) {
+            reason = "回归测试通过，仍需用户结合差异与原问题审查。";
+            cause = StopCause.USER_REVIEW;
+          } else {
+            reason = "回归检查未通过或无法执行；不得报告 Bug 已修复。";
+            cause = StopCause.CHECK_FAILED;
+          }
           repository.finishReviewedRun(
               new ReviewCompletion(
                   java.util.UUID.fromString(state.runId),
@@ -146,6 +153,7 @@ final class RunReviewCoordinator {
                   outcome.review(),
                   outcome.reviewResult(),
                   RunStatus.BLOCKED,
+                  cause,
                   reason,
                   finalMessage,
                   state.control.rounds(),
@@ -159,6 +167,7 @@ final class RunReviewCoordinator {
                   outcome.review(),
                   outcome.reviewResult(),
                   RunStatus.COMPLETED,
+                  null,
                   null,
                   finalMessage,
                   state.control.rounds(),

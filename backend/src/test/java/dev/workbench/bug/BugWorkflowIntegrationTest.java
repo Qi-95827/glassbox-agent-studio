@@ -93,6 +93,8 @@ class BugWorkflowIntegrationTest {
     }
     assertNotNull(run);
     assertEquals("BLOCKED", run.get("STATUS"), String.valueOf(run.get("REASON")));
+    assertEquals("VALIDATION_MISSING", run.get("STOP_CAUSE"));
+    assertEquals("EXECUTION_BLOCKED", run.get("BLOCK_CATEGORY"));
     assertTrue(run.get("REASON").toString().contains("未执行"));
     assertTrue(
         repository.events(id).stream()
@@ -232,6 +234,8 @@ class BugWorkflowIntegrationTest {
     }
     assertNotNull(writeStatus);
     assertEquals("BLOCKED", writeStatus.get("STATUS"), String.valueOf(writeStatus.get("REASON")));
+    assertEquals("CHECK_FAILED", writeStatus.get("STOP_CAUSE"));
+    assertEquals("EXECUTION_BLOCKED", writeStatus.get("BLOCK_CATEGORY"));
     var checks = bugs.checksForRun(writeRun);
     assertEquals(2, checks.size());
     var checkIds =

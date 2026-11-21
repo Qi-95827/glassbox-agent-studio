@@ -77,6 +77,7 @@ public class WorkflowExecutionService {
 
   /** 固定图上的认领、尝试、实例和多来源交接一起提交。 */
   public ClaimedNode claimWorkflowNode(String runId, UUID version, UUID nodeId, String goal) {
+    CheckEvidencePreflight preflight = prepareCheckEvidence(runId, nodeId);
     return tx.execute(
         ignored -> {
           var nodes = lockWorkflowRun(runId, version);
@@ -99,7 +100,7 @@ public class WorkflowExecutionService {
           if (upstream.size() != node.dependencyIds().size()
               || upstream.stream().anyMatch(input -> input.result().isBlank()))
             throw new IllegalStateException("计划依赖缺少可用于交接的已完成结果。");
-          requireCurrentCheckEvidence(runId, upstream);
+          verifyCheckEvidence(preflight, upstream);
           for (var input : upstream) {
             if (input.kind() == PlanNodeKind.SYSTEM_CHECK) {
               // 检查结果没有 Agent 尝试，使用独立接收收据；正文仍以检查记录为权威。
@@ -143,6 +144,7 @@ public class WorkflowExecutionService {
    * <p>不创建 Agent 实例或尝试，因此模型和工具调用为零；依赖结果仍从原权威表读取，检查冻结本次判定所见的来源版本。
    */
   public ClaimedCheck claimWorkflowCheck(String runId, UUID version, UUID nodeId) {
+    CheckEvidencePreflight preflight = prepareCheckEvidence(runId, nodeId);
     return tx.execute(
         ignored -> {
           var nodes = lockWorkflowRun(runId, version);
@@ -160,7 +162,7 @@ public class WorkflowExecutionService {
               || upstream.stream()
                   .anyMatch(input -> input.result() == null || input.result().isBlank()))
             throw new IllegalStateException("计划依赖缺少可用于交接的已完成结果。");
-          requireCurrentCheckEvidence(runId, upstream);
+          verifyCheckEvidence(preflight, upstream);
           String time = dev.workbench.domain.WorkbenchTime.now();
           plans.startCheckNode(runId, nodeId, time);
           String checkId = dev.workbench.domain.WorkbenchIds.newId();
@@ -398,22 +400,27 @@ public class WorkflowExecutionService {
   }
 
   /**
-   * 消费系统检查结果前再次核对当前工作区版本。
+   * 事务外预检：读取直接依赖和检查证据，并计算当前 Git 指纹。
    *
-   * <p>只复核直接依赖中的检查证据。Bug 复现检查在写节点前仍应保持一致；回归检查在审查前必须对应当前代码。证据缺失、归属不符或工作区变化时拒绝启动下游节点，并保留原检查记录。
+   * <p>Git 调用不持有运行行锁；随后短事务内重新读取依赖与证据，只有预检内容仍一致时才认领。
    */
-  private void requireCurrentCheckEvidence(String runId, List<WorkflowInput> upstream) {
-    if (upstream.stream().noneMatch(input -> input.kind() == PlanNodeKind.SYSTEM_CHECK)) return;
+  private CheckEvidencePreflight prepareCheckEvidence(String runId, UUID nodeId) {
+    var upstream = results(runId, nodeId);
+    if (upstream.stream().noneMatch(input -> input.kind() == PlanNodeKind.SYSTEM_CHECK)) return null;
     var task = runs.taskDefinition(runs.runSnapshot(runId).taskId().toString());
+    var dependencies =
+        upstream.stream().map(input -> input.dependencyNodeId().toString()).toList();
+    var evidence = new java.util.ArrayList<EvidenceSnapshot>();
     for (var input : upstream) {
-      if (input.kind() != PlanNodeKind.SYSTEM_CHECK) continue;
-      if (input.checkId() == null) continue;
-      String external = records.findExternalReference(input.checkId().toString());
+      if (input.kind() != PlanNodeKind.SYSTEM_CHECK || input.checkId() == null) continue;
+      String checkId = input.checkId().toString();
+      String external = records.findExternalReference(checkId);
       if (external == null || external.isBlank()) continue;
-      var evidence = records.findExternalEvidence(external);
-
-      if (evidence.isEmpty()) throw new StaleEvidenceException("系统检查的外部证据已缺失，不能继续依赖。");
-      var item = evidence.get();
+      var item =
+          records
+              .findExternalEvidence(external)
+              .orElseThrow(
+                  () -> new StaleEvidenceException("系统检查的外部证据已缺失，不能继续依赖。"));
       if (!java.util.Objects.equals(task.bugId(), item.bugId())
           || !java.util.Objects.equals(task.workspaceId(), item.workspaceId()))
         throw new StaleEvidenceException("系统检查证据的 Bug 或工作区归属与当前任务不一致。");
@@ -425,8 +432,64 @@ public class WorkflowExecutionService {
       }
       if (!java.util.Objects.equals(current, item.workspaceFingerprint()))
         throw new StaleEvidenceException("系统检查后工作区已变化，旧检查证据不能继续放行下游节点。");
+      evidence.add(
+          new EvidenceSnapshot(
+              checkId,
+              external,
+              item.bugId(),
+              item.workspaceId(),
+              item.workspaceFingerprint(),
+              input.sourceRunId().toString()));
+    }
+    return new CheckEvidencePreflight(
+        task.bugId(), task.workspaceId(), dependencies, List.copyOf(evidence));
+  }
+
+  /** 短事务内只做数据库复核；不再调用 Git，也不重新计算外部指纹。 */
+  private void verifyCheckEvidence(CheckEvidencePreflight preflight, List<WorkflowInput> upstream) {
+    if (preflight == null) return;
+    var dependencies =
+        upstream.stream().map(input -> input.dependencyNodeId().toString()).toList();
+    if (!dependencies.equals(preflight.dependencies))
+      throw new StaleEvidenceException("节点直接依赖在预检后发生变化，请重新认领。");
+    for (var expected : preflight.evidence) {
+      var input =
+          upstream.stream()
+              .filter(item -> expected.checkId.equals(text(item.checkId())))
+              .findFirst()
+              .orElseThrow(() -> new StaleEvidenceException("预检的检查依赖已不在当前交接中。"));
+      if (!expected.sourceRunId.equals(input.sourceRunId().toString()))
+        throw new StaleEvidenceException("检查来源运行在预检后发生变化。");
+      String external = records.findExternalReference(expected.checkId);
+      if (!java.util.Objects.equals(external, expected.externalId))
+        throw new StaleEvidenceException("检查外部证据引用在预检后发生变化。");
+      var current =
+          records
+              .findExternalEvidence(external)
+              .orElseThrow(
+                  () -> new StaleEvidenceException("系统检查的外部证据已缺失，不能继续依赖。"));
+      if (!java.util.Objects.equals(preflight.bugId, current.bugId())
+          || !java.util.Objects.equals(preflight.workspaceId, current.workspaceId())
+          || !java.util.Objects.equals(expected.bugId, current.bugId())
+          || !java.util.Objects.equals(expected.workspaceId, current.workspaceId())
+          || !java.util.Objects.equals(expected.fingerprint, current.workspaceFingerprint()))
+        throw new StaleEvidenceException("系统检查证据在预检后发生变化，不能继续认领。");
     }
   }
+
+  private record EvidenceSnapshot(
+      String checkId,
+      String externalId,
+      String bugId,
+      String workspaceId,
+      String fingerprint,
+      String sourceRunId) {}
+
+  private record CheckEvidencePreflight(
+      String bugId,
+      String workspaceId,
+      List<String> dependencies,
+      List<EvidenceSnapshot> evidence) {}
 
   private List<PlanNode> lockWorkflowRun(String runId, UUID version) {
     if (!runRows.lockForUpdate(runId)) throw new IllegalArgumentException("运行不存在。");

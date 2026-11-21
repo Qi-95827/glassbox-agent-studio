@@ -300,6 +300,7 @@ public class RunStateStore {
               completion.rounds(),
               completion.tools(),
               completion.elapsedMs(),
+              completion.stopCause(),
               RecordSupport.now()))
             throw new IllegalStateException("运行已暂停或不在执行中，不能提交审查终态。");
           plans.settle(runId, RecordSupport.now());

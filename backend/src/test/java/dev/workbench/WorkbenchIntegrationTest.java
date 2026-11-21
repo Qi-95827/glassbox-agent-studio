@@ -1558,7 +1558,10 @@ class WorkbenchIntegrationTest {
         new CreateTaskRequest(
             "开发任务", "normal", 6, 3, 30, "mock", workspace.id(), "sample.txt", true, null);
     String id = service.create(request);
-    assertEquals("BLOCKED", await(id).get("STATUS"));
+    var reviewed = await(id);
+    assertEquals("BLOCKED", reviewed.get("STATUS"));
+    assertEquals("USER_REVIEW", reviewed.get("STOP_CAUSE"));
+    assertEquals("USER_REVIEW", reviewed.get("BLOCK_CATEGORY"));
     assertTrue(
         repo.events(id).stream()
             .anyMatch(
@@ -3814,6 +3817,7 @@ class WorkbenchIntegrationTest {
             "审查摘要",
             result,
             RunStatus.COMPLETED,
+            null,
             null,
             "最终结果",
             2,

@@ -386,22 +386,21 @@ public class ManagedEvaluationDatasetService {
     long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MINUTES.toNanos(5);
     var future = completionWaiter.register(runId);
     try {
-      while (true) {
-        RunStatus status = records.runSnapshot(runId).status();
-        if (!status.canCancel()) return status;
-        long remaining = deadline - System.nanoTime();
-        if (remaining <= 0) {
-          try {
-            runs.cancel(runId);
-          } catch (IllegalStateException ignored) {
-            /* 可能已经结束。 */
-          }
-          throw new IllegalStateException("评测等待运行超过五分钟。");
-        }
+      RunStatus status = records.runSnapshot(runId).status();
+      if (!status.canCancel()) return status;
+      long remaining = deadline - System.nanoTime();
+      if (remaining > 0) {
         completionWaiter.await(
-            future,
-            Math.min(200, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remaining)));
+            future, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remaining));
+        status = records.runSnapshot(runId).status();
+        if (!status.canCancel()) return status;
       }
+      try {
+        runs.cancel(runId);
+      } catch (IllegalStateException ignored) {
+        /* 可能已经结束。 */
+      }
+      throw new IllegalStateException("评测等待运行超过五分钟。");
     } finally {
       completionWaiter.remove(runId, future);
     }

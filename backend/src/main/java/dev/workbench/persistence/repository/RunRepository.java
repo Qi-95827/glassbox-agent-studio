@@ -109,8 +109,43 @@ public interface RunRepository extends JpaRepository<RunEntity, String> {
       int tools,
       long elapsed,
       String time) {
+    return finishReview(id, status, reason, result, rounds, tools, elapsed, null, time);
+  }
+
+  default boolean finishReview(
+      String id,
+      RunStatus status,
+      String reason,
+      String result,
+      int rounds,
+      int tools,
+      long elapsed,
+      StopCause cause,
+      String time) {
+    return finishReview(id, status.name(), reason, result, rounds, tools, elapsed, cause, time);
+  }
+
+  default boolean finishReview(
+      String id,
+      String status,
+      String reason,
+      String result,
+      int rounds,
+      int tools,
+      long elapsed,
+      StopCause cause,
+      String time) {
     return updateIfInStatus(
-            id, status, reason, result, rounds, tools, elapsed, null, time, List.of(RUNNING))
+            id,
+            status,
+            reason,
+            result,
+            rounds,
+            tools,
+            elapsed,
+            cause == null ? null : cause.name(),
+            time,
+            List.of(RUNNING))
         == 1;
   }
 

@@ -12,6 +12,7 @@ public record ReviewCompletion(
     String review,
     Handoff resultHandoff,
     RunStatus status,
+    dev.workbench.domain.StopCause stopCause,
     String reason,
     String result,
     int rounds,
@@ -24,6 +25,10 @@ public record ReviewCompletion(
     Objects.requireNonNull(resultHandoff, "审查交接不能为空");
     if (status != RunStatus.COMPLETED && status != RunStatus.BLOCKED)
       throw new IllegalArgumentException("审查终态只能是已完成或待处理。");
+    if ((status == RunStatus.BLOCKED
+            && (stopCause == null || stopCause.status() != RunStatus.BLOCKED))
+        || (status == RunStatus.COMPLETED && stopCause != null))
+      throw new IllegalArgumentException("审查终态与停止原因不一致。");
     if ((status == RunStatus.BLOCKED && (reason == null || reason.isBlank()))
         || (status == RunStatus.COMPLETED && reason != null)
         || result == null

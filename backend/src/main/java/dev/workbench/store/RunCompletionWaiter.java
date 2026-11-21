@@ -2,6 +2,7 @@ package dev.workbench.store;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -10,20 +11,33 @@ import org.springframework.stereotype.Component;
 /**
  * 运行终态完成通知。
  *
- * <p>等待方注册一个 Future 后按有界超时等待；运行进入终态时由 {@link RunRecordService} 通知。
- * 超时后等待方应重新读取数据库状态，避免丢失通知与数据库提交之间的竞态。
+ * <p>等待方注册后先读取持久化状态，再有界等待通知；通知在事务提交后发出。多个消费者各自持有 Future，
+ * 任一消费者退出不会移除其他消费者的等待。
  */
 @Component
 public class RunCompletionWaiter {
-  private final ConcurrentHashMap<String, CompletableFuture<Void>> waiters =
+  private final ConcurrentHashMap<String, CopyOnWriteArrayList<CompletableFuture<Void>>> waiters =
       new ConcurrentHashMap<>();
 
   public CompletableFuture<Void> register(String runId) {
-    return waiters.computeIfAbsent(runId, ignored -> new CompletableFuture<>());
+    var future = new CompletableFuture<Void>();
+    waiters.compute(
+        runId,
+        (ignored, list) -> {
+          var current = list == null ? new CopyOnWriteArrayList<CompletableFuture<Void>>() : list;
+          current.add(future);
+          return current;
+        });
+    return future;
   }
 
   public void remove(String runId, CompletableFuture<Void> future) {
-    waiters.remove(runId, future);
+    waiters.computeIfPresent(
+        runId,
+        (ignored, list) -> {
+          list.remove(future);
+          return list.isEmpty() ? null : list;
+        });
   }
 
   /** @return true 表示收到终态通知；false 表示超时。 */
@@ -39,7 +53,8 @@ public class RunCompletionWaiter {
   }
 
   public void signal(String runId) {
-    CompletableFuture<Void> future = waiters.remove(runId);
-    if (future != null) future.complete(null);
+    var futures = waiters.remove(runId);
+    if (futures == null) return;
+    for (var future : futures) future.complete(null);
   }
 }
