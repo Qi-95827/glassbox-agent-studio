@@ -17,6 +17,11 @@ public final class AgentScopeModelClient implements ModelClient {
   }
 
   @Override
+  public Object nativeClient() {
+    return delegate;
+  }
+
+  @Override
   public String modelName() {
     return delegate.getModelName();
   }

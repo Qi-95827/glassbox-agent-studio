@@ -35,6 +35,24 @@ class MixedModelCostIntegrationTest {
     assertEquals(600L, settlement.settledMicros());
     assertEquals(0L, settlement.overBudgetMicros());
     assertFalse(settlement.unknown());
+    var reservations = (java.util.List<?>) costs.estimate(runId).get("RESERVATIONS");
+    var evidence = (java.util.Map<?, ?>) reservations.getFirst();
+    assertEquals("deepseek-flash", evidence.get("PRICE_MODEL"));
+    assertEquals("CNY", evidence.get("CURRENCY"));
+    assertEquals(2_000_000L, evidence.get("INPUT_MICROS_PER_MILLION"));
+  }
+
+  @Test
+  void mixedCurrencyOrMissingPriceIsRejectedBeforeCreatingARun() {
+    costs.publish("default", "mock", "CNY", 0, 0, 100, 100, "test");
+    costs.publish("default", "deepseek-flash", "USD", 1_000_000, 1_000_000, 100, 100, "test");
+    var mixedCurrency =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                costs.requireBudgetPricing(
+                    java.util.List.of(ModelKind.MOCK, ModelKind.DEEPSEEK_FLASH), 10_000L));
+    assertTrue(mixedCurrency.getMessage().contains("币种"));
   }
 
   @Test

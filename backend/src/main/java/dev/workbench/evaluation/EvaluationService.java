@@ -4,6 +4,7 @@ import dev.workbench.audit.AuditService;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
+import dev.workbench.store.RunCompletionWaiter;
 import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import jakarta.annotation.PostConstruct;
@@ -30,6 +31,7 @@ public class EvaluationService {
   private final com.fasterxml.jackson.databind.ObjectMapper json;
   private final AuditService audit;
   private final ExecutorService executor;
+  private final RunCompletionWaiter completionWaiter;
   private final AtomicBoolean active = new AtomicBoolean();
   private String activeBatch;
   private String currentRun;
@@ -45,7 +47,8 @@ public class EvaluationService {
       com.fasterxml.jackson.databind.ObjectMapper json,
       AuditService audit,
       @org.springframework.beans.factory.annotation.Qualifier("evaluationExecutor")
-          ExecutorService executor) {
+          ExecutorService executor,
+      RunCompletionWaiter completionWaiter) {
     this.evaluations = evaluations;
     this.runs = runs;
     this.records = records;
@@ -55,6 +58,7 @@ public class EvaluationService {
     this.json = json;
     this.audit = audit;
     this.executor = executor;
+    this.completionWaiter = completionWaiter;
   }
 
   @PostConstruct
@@ -259,18 +263,26 @@ public class EvaluationService {
 
   private RunStatus waitForRun(String runId) throws InterruptedException {
     long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MINUTES.toNanos(5);
-    while (true) {
-      RunStatus status = records.runSnapshot(runId).status();
-      if (!status.canCancel()) return status;
-      if (System.nanoTime() >= deadline) {
-        try {
-          runs.cancel(runId);
-        } catch (IllegalStateException ignored) {
-          /* 可能恰好已经终止。 */
+    var future = completionWaiter.register(runId);
+    try {
+      while (true) {
+        RunStatus status = records.runSnapshot(runId).status();
+        if (!status.canCancel()) return status;
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+          try {
+            runs.cancel(runId);
+          } catch (IllegalStateException ignored) {
+            /* 可能恰好已经终止。 */
+          }
+          throw new IllegalStateException("评测等待运行超过五分钟，已请求取消。");
         }
-        throw new IllegalStateException("评测等待运行超过五分钟，已请求取消。");
+        completionWaiter.await(
+            future,
+            Math.min(200, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remaining)));
       }
-      dev.workbench.framework.concurrent.AsyncDelay.await(100);
+    } finally {
+      completionWaiter.remove(runId, future);
     }
   }
 }

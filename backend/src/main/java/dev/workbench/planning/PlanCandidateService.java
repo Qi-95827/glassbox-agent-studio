@@ -32,6 +32,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import dev.workbench.domain.ExecutionScope;
+import dev.workbench.domain.ModelKind;
 import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.domain.ExecutionScopeResolver;
 import dev.workbench.framework.workflow.plan.PlanningRunReader;
@@ -77,6 +78,7 @@ public class PlanCandidateService {
   private final TransactionTemplate tx;
   private final dev.workbench.ownership.OwnershipService ownership;
   private final dev.workbench.privateagent.PrivateAgentCatalog privateAgents;
+  private final CandidateBudgetValidator budgetValidator;
   private final ExecutorService executor;
 
   /** 排队或生成中的候选任务；取消时同时中断队列中的任务，避免无谓的模型调用。 */
@@ -97,6 +99,7 @@ public class PlanCandidateService {
       TransactionTemplate tx,
       dev.workbench.ownership.OwnershipService ownership,
       dev.workbench.privateagent.PrivateAgentCatalog privateAgents,
+      CandidateBudgetValidator budgetValidator,
       @org.springframework.beans.factory.annotation.Qualifier("planningExecutor")
           ExecutorService executor) {
     this.store = store;
@@ -112,6 +115,7 @@ public class PlanCandidateService {
     this.tx = tx;
     this.ownership = ownership;
     this.privateAgents = privateAgents;
+    this.budgetValidator = budgetValidator;
     this.executor = executor;
   }
 
@@ -211,7 +215,20 @@ public class PlanCandidateService {
               return null;
             });
     pending.put(created.id(), task);
-    executor.execute(task);
+    try {
+      executor.execute(task);
+    } catch (RuntimeException e) {
+      pending.remove(created.id());
+      settle(
+          created.id(),
+          PlanCandidateStatus.FAILED,
+          null,
+          null,
+          null,
+          List.of("执行队列已满，候选未开始生成；同组旧候选已因新输入版本变为 STALE，可直接重试。"),
+          null);
+      throw new IllegalStateException("规划执行队列已满，候选已标记失败，请稍后重试。", e);
+    }
     return created;
   }
 
@@ -271,11 +288,11 @@ public class PlanCandidateService {
               ? ModelMode.fromCode(binding.modelMode())
               : requestedMode);
     }
-    if (request.maxCostMicros() != null && actualModes.size() > 1)
-      throw new IllegalStateException(
-          "当前费用账本只支持一种模型价格；该计划包含 "
-              + actualModes
-              + " 多种实际模型，请取消费用硬预算或统一节点模型后再确认。");
+    var actualModels = new java.util.LinkedHashSet<ModelKind>();
+    for (ModelMode actualMode : actualModes) actualModels.add(ModelKind.forMode(actualMode));
+    actualModels.add(ModelKind.forMode(requestedMode));
+    if (request.maxCostMicros() != null)
+      budgetValidator.requireBudgetPricing(actualModels, request.maxCostMicros());
     ModelMode mode = actualModes.size() == 1 ? actualModes.iterator().next() : requestedMode;
     String workspaceId = prepareWorkspace(row, input);
     var prepared =
@@ -449,7 +466,7 @@ public class PlanCandidateService {
         return prepareWorkspace(latest, input);
       if (!active(latest.getPreparationStartedAt())) break;
       if (System.nanoTime() > deadline) throw new IllegalStateException("独立工作区仍在准备，请稍后重试确认。");
-      dev.workbench.framework.concurrent.AsyncDelay.await(100);
+      dev.workbench.framework.concurrent.BoundedWait.pause(100);
       latest = reload(row);
     }
     String expected = latest.getPreparationId();

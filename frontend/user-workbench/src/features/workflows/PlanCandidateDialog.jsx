@@ -299,7 +299,7 @@ export default function PlanCandidateDialog({ api, input, onClose, onRun, maxCos
               <Button variant="contained" loading={phase === 'run'} onClick={startRun}>确认并创建运行</Button>
             </Stack>
             <Typography variant="caption" color="text.secondary">
-              固定模型节点使用发布时保存的模型，不受「运行模型」覆盖。带费用硬预算的混合模型计划会在创建运行前被拒绝。费用硬预算会随确认请求提交；留空表示不限额。
+              固定模型节点使用发布时保存的模型，不受「运行模型」覆盖。混合模型计划按每次实际调用计价；启用硬预算时必须为所有实际模型配置同币种价格，缺价或跨币种会在确认时给出原因。费用硬预算会随确认请求提交；留空表示不限额。
             </Typography>
           </Stack>
         </Alert>}

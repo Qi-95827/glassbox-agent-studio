@@ -93,7 +93,7 @@ class LegacyH2DoubleStartupIntegrationTest {
                 "--spring.datasource.url=" + url,
                 "--spring.datasource.username=sa",
                 "--spring.datasource.password=",
-                "--spring.sql.init.mode=always",
+                "--spring.sql.init.mode=never",
                 "--spring.jpa.hibernate.ddl-auto=none",
                 "--workbench.workspace-root=" + dir.resolve("workspaces"));
     assertUsesIsolatedCopy(context, databaseFile);

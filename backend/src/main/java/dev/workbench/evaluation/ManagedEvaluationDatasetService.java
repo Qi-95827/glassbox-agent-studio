@@ -17,6 +17,7 @@ import dev.workbench.persistence.repository.EvaluationDatasetVersionRepository;
 import dev.workbench.persistence.repository.ManagedEvaluationBatchRepository;
 import dev.workbench.persistence.repository.ManagedEvaluationCaseRepository;
 import dev.workbench.report.SensitiveTextRedactor;
+import dev.workbench.store.RunCompletionWaiter;
 import dev.workbench.store.RunRecordService;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
@@ -51,6 +52,7 @@ public class ManagedEvaluationDatasetService {
   private final ObjectMapper json;
   private final AuditService audit;
   private final ExecutorService executor;
+  private final RunCompletionWaiter completionWaiter;
 
   public ManagedEvaluationDatasetService(
       EvaluationDatasetSampleRepository samples,
@@ -62,7 +64,8 @@ public class ManagedEvaluationDatasetService {
       ObjectMapper json,
       AuditService audit,
       @org.springframework.beans.factory.annotation.Qualifier("evaluationExecutor")
-          ExecutorService executor) {
+          ExecutorService executor,
+      RunCompletionWaiter completionWaiter) {
     this.samples = samples;
     this.versions = versions;
     this.batches = batches;
@@ -72,6 +75,7 @@ public class ManagedEvaluationDatasetService {
     this.json = json;
     this.audit = audit;
     this.executor = executor;
+    this.completionWaiter = completionWaiter;
   }
 
   @PreDestroy
@@ -303,7 +307,20 @@ public class ManagedEvaluationDatasetService {
               "PENDING",
               Instant.now().toString()));
     }
-    executor.submit(() -> execute(batch.getId(), snapshot, config == null ? BatchConfig.defaults() : config));
+    try {
+      executor.submit(
+          () -> execute(batch.getId(), snapshot, config == null ? BatchConfig.defaults() : config));
+    } catch (RuntimeException e) {
+      batch.finish("FAILED", Instant.now().toString());
+      batches.save(batch);
+      audit.record(
+          "EVALUATION_DATASET_BATCH",
+          "EVALUATION_BATCH",
+          batch.getId(),
+          "FAILED",
+          "执行队列已满");
+      throw new IllegalStateException("评测执行队列已满，批次已标记失败，请稍后重试。", e);
+    }
     audit.record(
         "EVALUATION_DATASET_BATCH",
         "EVALUATION_BATCH",
@@ -367,18 +384,26 @@ public class ManagedEvaluationDatasetService {
 
   private RunStatus waitFor(String runId) throws InterruptedException {
     long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MINUTES.toNanos(5);
-    while (true) {
-      RunStatus status = records.runSnapshot(runId).status();
-      if (!status.canCancel()) return status;
-      if (System.nanoTime() >= deadline) {
-        try {
-          runs.cancel(runId);
-        } catch (IllegalStateException ignored) {
-          /* 可能已经结束。 */
+    var future = completionWaiter.register(runId);
+    try {
+      while (true) {
+        RunStatus status = records.runSnapshot(runId).status();
+        if (!status.canCancel()) return status;
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+          try {
+            runs.cancel(runId);
+          } catch (IllegalStateException ignored) {
+            /* 可能已经结束。 */
+          }
+          throw new IllegalStateException("评测等待运行超过五分钟。");
         }
-        throw new IllegalStateException("评测等待运行超过五分钟。");
+        completionWaiter.await(
+            future,
+            Math.min(200, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remaining)));
       }
-      dev.workbench.framework.concurrent.AsyncDelay.await(100);
+    } finally {
+      completionWaiter.remove(runId, future);
     }
   }
 

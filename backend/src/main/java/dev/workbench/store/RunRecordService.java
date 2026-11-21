@@ -61,6 +61,7 @@ public class RunRecordService implements dev.workbench.framework.control.RunCont
   private final TaskRoleBudgetRepository roleBudgetRows;
   private final TaskToolBudgetRepository toolBudgetRows;
   private final dev.workbench.framework.ownership.OwnershipStamper ownership;
+  private final RunCompletionWaiter completionWaiter;
 
   public RunRecordService(
       AgentConfigurationRepository agentConfiguration,
@@ -76,7 +77,8 @@ public class RunRecordService implements dev.workbench.framework.control.RunCont
       TaskRepository taskRows,
       TaskRoleBudgetRepository roleBudgetRows,
       TaskToolBudgetRepository toolBudgetRows,
-      dev.workbench.framework.ownership.OwnershipStamper ownership) {
+      dev.workbench.framework.ownership.OwnershipStamper ownership,
+      RunCompletionWaiter completionWaiter) {
     this.agentConfiguration = agentConfiguration;
     this.handoffRows = handoffRows;
     this.checkpointRows = checkpointRows;
@@ -91,6 +93,7 @@ public class RunRecordService implements dev.workbench.framework.control.RunCont
     this.roleBudgetRows = roleBudgetRows;
     this.toolBudgetRows = toolBudgetRows;
     this.ownership = ownership;
+    this.completionWaiter = completionWaiter;
   }
 
   public static String id() {
@@ -150,7 +153,12 @@ public class RunRecordService implements dev.workbench.framework.control.RunCont
   }
 
   public Map<String, Object> run(String id) {
-    return findRun(id).apiFields();
+    var fields = new java.util.LinkedHashMap<String, Object>(findRun(id).apiFields());
+    var status = RunStatus.valueOf(String.valueOf(fields.get("STATUS")));
+    var category =
+        dev.workbench.domain.BlockCategory.from(status, (String) fields.get("STOP_CAUSE"));
+    if (category != null) fields.put("BLOCK_CATEGORY", category.name());
+    return fields;
   }
 
   public RunSnapshot runSnapshot(String id) {
@@ -655,6 +663,7 @@ public class RunRecordService implements dev.workbench.framework.control.RunCont
             event(runId, EventType.BLOCKED, completion.reason());
           else event(runId, EventType.RUN_COMPLETED, "Agent 协作已结束；代码修改和测试需以实际证据为准。");
         });
+    if (!completion.status().canCancel()) completionWaiter.signal(completion.runId().toString());
   }
 
   /** 受控停止与 Agent、运行终态、事件和系统交接一起提交。 */
@@ -1368,6 +1377,7 @@ public class RunRecordService implements dev.workbench.framework.control.RunCont
             throw new IllegalStateException("运行不存在或已进入终态，不能再更新。");
           if (!status.canCancel()) plans.settle(id, now());
         });
+    if (!status.canCancel()) completionWaiter.signal(id);
   }
 
   public void checkpoint(

@@ -97,9 +97,14 @@ public class AgentScopeExecutor implements AgentExecutor {
             ? tools.assemble(assembly.toolVersions(), toolContext)
             : tools.assemblePrivate(assembly.privateTools(), toolContext);
     var selectedModel = models.select(effectiveRequest);
+    if (!(selectedModel.client().nativeClient() instanceof Model nativeModel))
+      throw new IllegalStateException(
+          "模型提供者 "
+              + selectedModel.client().getClass().getSimpleName()
+              + " 未返回 AgentScope 可执行适配器，不能装配本次运行。");
     Model controlled =
         new ControlledModel(
-            ((AgentScopeModelClient) selectedModel.client()).model(),
+            nativeModel,
             effectiveMode,
             runtime,
             failure,

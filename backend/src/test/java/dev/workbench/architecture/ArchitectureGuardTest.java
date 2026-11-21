@@ -85,5 +85,9 @@ class ArchitectureGuardTest {
           .areAnnotatedWith(RestController.class)
           .should()
           .dependOnClassesThat()
-          .resideInAnyPackage("org.springframework.data.repository..", "jakarta.persistence..");
+          .resideInAnyPackage(
+              "org.springframework.data.repository..",
+              "jakarta.persistence..",
+              "dev.workbench.persistence.repository..",
+              "dev.workbench.persistence.entity..");
 }

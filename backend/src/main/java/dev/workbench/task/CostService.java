@@ -28,7 +28,7 @@ import dev.workbench.store.RunRecordService;
  * <p>派发模型调用前按价格版本的可计价上界预留；完成后按实际 Token 结算。未知用量不会按零处理，会保留预留并标记人工核对。并发调用通过运行费用行锁串行化。
  */
 @Service
-public class CostService {
+public class CostService implements dev.workbench.planning.CandidateBudgetValidator {
   private static final String PROVIDER = "default";
   private final ProviderPriceVersionRepository prices;
   private final RunCostLimitRepository limits;
@@ -158,6 +158,32 @@ public class CostService {
                     "模型 " + model.code() + " 未配置生效价格版本，无法继续执行费用硬预算。"));
   }
 
+  /**
+   * 确认前核对实际模型集合：每个模型都必须有生效价格，且硬预算只能在一个币种内汇总。
+   *
+   * <p>不同模型可以有不同的输入/输出单价与版本；拒绝的只是缺价和跨币种直接相加。
+   */
+  @Override
+  public void requireBudgetPricing(
+      java.util.Collection<ModelKind> models, long maxCostMicros) {
+    if (maxCostMicros < 1 || maxCostMicros > 1_000_000_000L)
+      throw new IllegalArgumentException("费用硬预算须在 1 到 1000000000 微单位之间。");
+    var missing = new java.util.ArrayList<String>();
+    var currencies = new java.util.LinkedHashSet<String>();
+    for (ModelKind model : models) {
+      var price = prices.findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(
+          PROVIDER, model.code());
+      if (price.isEmpty()) missing.add(model.code());
+      else currencies.add(price.get().getCurrency());
+    }
+    if (!missing.isEmpty())
+      throw new IllegalArgumentException(
+          "以下实际模型缺少生效价格，不能启用费用硬预算：" + String.join(", ", missing));
+    if (currencies.size() > 1)
+      throw new IllegalArgumentException(
+          "实际模型价格币种不一致（" + String.join(", ", currencies) + "），不能汇总到同一硬预算。");
+  }
+
   /** 派发前预留可计价上界；额度不足时抛出受控停止，不启动模型调用。 */
   public Reservation reserve(String runId, ModelKind model) {
     return tx.execute(
@@ -165,6 +191,12 @@ public class CostService {
           RunCostLimitEntity limit = limits.lockByRunId(runId).orElse(null);
           if (limit == null) return Reservation.NONE;
           ProviderPriceVersionEntity price = priceFor(model);
+          var base = prices.findById(limit.getPriceVersionId()).orElse(null);
+          if (base != null && !base.getCurrency().equals(price.getCurrency()))
+            throw new StopExecution(
+                StopCause.COST_LIMIT,
+                "本次模型价格币种 " + price.getCurrency() + " 与运行预算币种 " + base.getCurrency()
+                    + " 不一致，已停止派发。");
           long estimate = price.upperBoundMicros();
           long committed = Math.addExact(limit.getReservedMicros(), limit.getSettledMicros());
           if (Math.addExact(committed, estimate) > limit.getMaxCostMicros())
@@ -296,6 +328,10 @@ public class CostService {
   }
 
   private Map<String, Object> map(CostReservationEntity row) {
+    var price =
+        row.getPriceVersionId() == null
+            ? null
+            : prices.findById(row.getPriceVersionId()).orElse(null);
     Map<String, Object> item = new LinkedHashMap<>();
     item.put("ID", row.getId());
     item.put("RESERVED_MICROS", row.getReservedMicros());
@@ -303,6 +339,12 @@ public class CostService {
     item.put("OVER_BUDGET_MICROS", row.getOverBudgetMicros());
     item.put("STATUS", row.getStatus());
     item.put("CREATED_AT", row.getCreatedAt());
+    item.put("PRICE_VERSION_ID", row.getPriceVersionId());
+    item.put("PRICE_MODEL", price == null ? null : price.getModel());
+    item.put("CURRENCY", price == null ? null : price.getCurrency());
+    item.put("INPUT_MICROS_PER_MILLION", price == null ? null : price.getInputMicrosPerMillion());
+    item.put("OUTPUT_MICROS_PER_MILLION", price == null ? null : price.getOutputMicrosPerMillion());
+    item.put("PRICE_VERSION", price == null ? null : price.getVersion());
     return item;
   }
 
