@@ -110,7 +110,7 @@ class PrivateAgentVersionPinIntegrationTest {
             .publishTool(
                 components
                     .createTool(
-                        new PrivateComponentService.ToolRequest(
+                        new PrivateComponentModels.ToolRequest(
                             "Pin 搜索", "只读搜索", "SEARCH", List.of(".jsx", ".tsx")))
                     .id())
             .id();
@@ -125,7 +125,7 @@ class PrivateAgentVersionPinIntegrationTest {
     // 模型仍在等待时发布 v2；同一响应必须继续绑定 v1。
     components.updateAgent(
         agent.id(),
-        new PrivateComponentService.AgentRequest(
+        new PrivateComponentModels.AgentRequest(
             "Pin 检查 v2",
             "第二版简介",
             "第二版职责",
@@ -134,7 +134,7 @@ class PrivateAgentVersionPinIntegrationTest {
             true,
             "mock",
             List.of(),
-            List.of(new PrivateComponentService.ComponentRef(tool, null)),
+            List.of(new PrivateComponentModels.ComponentRef(tool, null)),
             "INHERIT_TASK"));
     components.publishAgent(agent.id());
     RELEASE.get().countDown();
@@ -163,7 +163,7 @@ class PrivateAgentVersionPinIntegrationTest {
             .publishTool(
                 components
                     .createTool(
-                        new PrivateComponentService.ToolRequest(
+                        new PrivateComponentModels.ToolRequest(
                             "归档搜索", "只读搜索", "SEARCH", List.of(".jsx", ".tsx")))
                     .id())
             .id();
@@ -181,10 +181,10 @@ class PrivateAgentVersionPinIntegrationTest {
     assertThrows(IllegalStateException.class, () -> candidates.confirm(view.id(), confirm(view)));
   }
 
-  private PrivateComponentService.AgentView publishAgent(String toolId, String name, String duty) {
+  private PrivateComponentModels.AgentView publishAgent(String toolId, String name, String duty) {
     var created =
         components.createAgent(
-            new PrivateComponentService.AgentRequest(
+            new PrivateComponentModels.AgentRequest(
                 name,
                 "只读检查",
                 duty,
@@ -193,7 +193,7 @@ class PrivateAgentVersionPinIntegrationTest {
                 true,
                 "mock",
                 List.of(),
-                List.of(new PrivateComponentService.ComponentRef(toolId, null)),
+                List.of(new PrivateComponentModels.ComponentRef(toolId, null)),
                 "INHERIT_TASK"));
     return components.publishAgent(created.id());
   }

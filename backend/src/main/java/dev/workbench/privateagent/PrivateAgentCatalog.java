@@ -129,16 +129,16 @@ public class PrivateAgentCatalog implements PrivateAgentDefinitionSource {
   public Components components(PrivateAgentVersionEntity row) {
     try {
       var node = json.readTree(row.getComponentsJson());
-      List<PrivateComponentService.PinnedSkill> skills =
+      List<PrivateComponentModels.PinnedSkill> skills =
           json.convertValue(
               node.path("skills"),
               json.getTypeFactory()
-                  .constructCollectionType(List.class, PrivateComponentService.PinnedSkill.class));
-      List<PrivateComponentService.PinnedTool> tools =
+                  .constructCollectionType(List.class, PrivateComponentModels.PinnedSkill.class));
+      List<PrivateComponentModels.PinnedTool> tools =
           json.convertValue(
               node.path("tools"),
               json.getTypeFactory()
-                  .constructCollectionType(List.class, PrivateComponentService.PinnedTool.class));
+                  .constructCollectionType(List.class, PrivateComponentModels.PinnedTool.class));
       return new Components(
           skills.stream()
               .map(

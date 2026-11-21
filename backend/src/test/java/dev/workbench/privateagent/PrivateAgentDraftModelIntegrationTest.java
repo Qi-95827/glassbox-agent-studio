@@ -73,7 +73,7 @@ class PrivateAgentDraftModelIntegrationTest {
             .publishSkill(
                 components
                     .createSkill(
-                        new PrivateComponentService.SkillRequest(
+                        new PrivateComponentModels.SkillRequest(
                             "草稿建议 Skill",
                             "模型可见 Skill",
                             null,
@@ -87,14 +87,14 @@ class PrivateAgentDraftModelIntegrationTest {
             .publishTool(
                 components
                     .createTool(
-                        new PrivateComponentService.ToolRequest(
+                        new PrivateComponentModels.ToolRequest(
                             "模型策略搜索", "只读搜索", "SEARCH", List.of(".jsx", ".tsx")))
                     .id())
             .id();
 
     components.updateSkill(
         skill,
-        new PrivateComponentService.SkillRequest(
+        new PrivateComponentModels.SkillRequest(
             "未发布 Skill 名称",
             "未发布摘要",
             null,
@@ -103,7 +103,7 @@ class PrivateAgentDraftModelIntegrationTest {
             "# 未发布正文"));
     components.updateTool(
         tool,
-        new PrivateComponentService.ToolRequest(
+        new PrivateComponentModels.ToolRequest(
             "未发布工具名称", "未发布工具说明", "SEARCH", List.of(".css")));
 
     var draft = components.draftFromIdea("检查前端可访问性，并给出覆盖范围", "MODEL");
@@ -134,7 +134,7 @@ class PrivateAgentDraftModelIntegrationTest {
 
     var created =
         components.createAgent(
-            new PrivateComponentService.AgentRequest(
+            new PrivateComponentModels.AgentRequest(
                 draft.name(),
                 draft.description(),
                 draft.responsibility(),

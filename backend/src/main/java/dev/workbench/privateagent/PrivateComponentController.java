@@ -1,5 +1,13 @@
 package dev.workbench.privateagent;
 
+import dev.workbench.privateagent.PrivateComponentModels.AgentRequest;
+import dev.workbench.privateagent.PrivateComponentModels.AgentVersionView;
+import dev.workbench.privateagent.PrivateComponentModels.AgentView;
+import dev.workbench.privateagent.PrivateComponentModels.Draft;
+import dev.workbench.privateagent.PrivateComponentModels.SkillRequest;
+import dev.workbench.privateagent.PrivateComponentModels.SkillView;
+import dev.workbench.privateagent.PrivateComponentModels.ToolRequest;
+import dev.workbench.privateagent.PrivateComponentModels.ToolView;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,105 +28,99 @@ public class PrivateComponentController {
   }
 
   @GetMapping("/skills")
-  List<PrivateComponentService.SkillView> skills() {
+  List<SkillView> skills() {
     return components.skills();
   }
 
   @PostMapping("/skills")
-  PrivateComponentService.SkillView createSkill(
-      @RequestBody PrivateComponentService.SkillRequest request) {
+  SkillView createSkill(@RequestBody SkillRequest request) {
     return components.createSkill(request);
   }
 
   @PutMapping("/skills/{id}")
-  PrivateComponentService.SkillView updateSkill(
-      @PathVariable String id, @RequestBody PrivateComponentService.SkillRequest request) {
+  SkillView updateSkill(@PathVariable String id, @RequestBody SkillRequest request) {
     return components.updateSkill(id, request);
   }
 
   @PostMapping("/skills/{id}/publish")
-  PrivateComponentService.SkillView publishSkill(@PathVariable String id) {
+  SkillView publishSkill(@PathVariable String id) {
     return components.publishSkill(id);
   }
 
   @PostMapping("/skills/{id}/archive")
-  PrivateComponentService.SkillView archiveSkill(@PathVariable String id) {
+  SkillView archiveSkill(@PathVariable String id) {
     return components.archiveSkill(id);
   }
 
   @GetMapping("/skills/{id}/versions")
-  List<PrivateComponentService.SkillView> skillVersions(@PathVariable String id) {
+  List<SkillView> skillVersions(@PathVariable String id) {
     return components.skillVersions(id);
   }
 
   @GetMapping("/tools")
-  List<PrivateComponentService.ToolView> tools() {
+  List<ToolView> tools() {
     return components.tools();
   }
 
   @PostMapping("/tools")
-  PrivateComponentService.ToolView createTool(
-      @RequestBody PrivateComponentService.ToolRequest request) {
+  ToolView createTool(@RequestBody ToolRequest request) {
     return components.createTool(request);
   }
 
   @PutMapping("/tools/{id}")
-  PrivateComponentService.ToolView updateTool(
-      @PathVariable String id, @RequestBody PrivateComponentService.ToolRequest request) {
+  ToolView updateTool(@PathVariable String id, @RequestBody ToolRequest request) {
     return components.updateTool(id, request);
   }
 
   @PostMapping("/tools/{id}/publish")
-  PrivateComponentService.ToolView publishTool(@PathVariable String id) {
+  ToolView publishTool(@PathVariable String id) {
     return components.publishTool(id);
   }
 
   @PostMapping("/tools/{id}/archive")
-  PrivateComponentService.ToolView archiveTool(@PathVariable String id) {
+  ToolView archiveTool(@PathVariable String id) {
     return components.archiveTool(id);
   }
 
   @GetMapping("/tools/{id}/versions")
-  List<PrivateComponentService.ToolView> toolVersions(@PathVariable String id) {
+  List<ToolView> toolVersions(@PathVariable String id) {
     return components.toolVersions(id);
   }
 
   @GetMapping("/agents")
-  List<PrivateComponentService.AgentView> agents() {
+  List<AgentView> agents() {
     return components.agents();
   }
 
   @PostMapping("/agents")
-  PrivateComponentService.AgentView createAgent(
-      @RequestBody PrivateComponentService.AgentRequest request) {
+  AgentView createAgent(@RequestBody AgentRequest request) {
     return components.createAgent(request);
   }
 
   @PutMapping("/agents/{id}")
-  PrivateComponentService.AgentView updateAgent(
-      @PathVariable String id, @RequestBody PrivateComponentService.AgentRequest request) {
+  AgentView updateAgent(@PathVariable String id, @RequestBody AgentRequest request) {
     return components.updateAgent(id, request);
   }
 
   @PostMapping("/agents/{id}/publish")
-  PrivateComponentService.AgentView publishAgent(@PathVariable String id) {
+  AgentView publishAgent(@PathVariable String id) {
     return components.publishAgent(id);
   }
 
   @PostMapping("/agents/{id}/archive")
-  PrivateComponentService.AgentView archiveAgent(@PathVariable String id) {
+  AgentView archiveAgent(@PathVariable String id) {
     return components.archiveAgent(id);
   }
 
   @GetMapping("/agents/{id}/versions")
-  List<PrivateComponentService.AgentVersionView> agentVersions(@PathVariable String id) {
+  List<AgentVersionView> agentVersions(@PathVariable String id) {
     return components.agentVersions(id);
   }
 
   public record DraftRequest(String idea, String mode) {}
 
   @PostMapping("/agents/draft")
-  PrivateComponentService.Draft draft(@RequestBody DraftRequest request) {
+  Draft draft(@RequestBody DraftRequest request) {
     return components.draftFromIdea(request.idea(), request.mode());
   }
 }

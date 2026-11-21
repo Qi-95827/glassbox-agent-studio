@@ -11,6 +11,7 @@ import dev.workbench.planning.PlanCandidateInput;
 import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.planning.PlanCandidateService;
 import dev.workbench.store.RunRecordService;
+import dev.workbench.task.CostService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -86,6 +87,7 @@ class PrivateAgentFlowIntegrationTest {
   @Autowired RunRecordService records;
   @Autowired dev.workbench.task.WorkflowExecutionService workflowRuns;
   @Autowired WorkspaceService workspaces;
+  @Autowired CostService costs;
   @Autowired dev.workbench.workspace.WorkspaceAuthorizationService authorization;
 
   @Test
@@ -94,7 +96,7 @@ class PrivateAgentFlowIntegrationTest {
         components.publishSkill(
             components
                 .createSkill(
-                    new PrivateComponentService.SkillRequest(
+                    new PrivateComponentModels.SkillRequest(
                         "前端交付检查",
                         "检查前端交互和可访问性",
                         null,
@@ -106,14 +108,14 @@ class PrivateAgentFlowIntegrationTest {
         components.publishTool(
             components
                 .createTool(
-                    new PrivateComponentService.ToolRequest(
+                    new PrivateComponentModels.ToolRequest(
                         "前端标签搜索", "只搜索前端组件文件", "SEARCH", List.of(".jsx", ".tsx")))
                 .id());
     var agent =
         components.publishAgent(
             components
                 .createAgent(
-                    new PrivateComponentService.AgentRequest(
+                    new PrivateComponentModels.AgentRequest(
                         "前端交付检查 Agent",
                         "只读核对前端文件",
                         "核对页面交互与可访问性，只引用实际搜索到的文件。",
@@ -121,8 +123,8 @@ class PrivateAgentFlowIntegrationTest {
                         "ANALYST",
                         true,
                         "mock",
-                        List.of(new PrivateComponentService.ComponentRef(skill.id(), null)),
-                        List.of(new PrivateComponentService.ComponentRef(tool.id(), null))))
+                        List.of(new PrivateComponentModels.ComponentRef(skill.id(), null)),
+                        List.of(new PrivateComponentModels.ComponentRef(tool.id(), null))))
                 .id());
     assertEquals(1, agent.currentVersion());
     assertTrue(agent.specSha256().matches("[0-9a-f]{64}"));
@@ -160,7 +162,7 @@ class PrivateAgentFlowIntegrationTest {
     // 已发布 v2 后，旧运行仍固定 v1。
     components.updateAgent(
         agent.id(),
-        new PrivateComponentService.AgentRequest(
+        new PrivateComponentModels.AgentRequest(
             "前端交付检查 Agent",
             "第二版简介",
             "第二版职责",
@@ -168,8 +170,8 @@ class PrivateAgentFlowIntegrationTest {
             "ANALYST",
             true,
             "mock",
-            List.of(new PrivateComponentService.ComponentRef(skill.id(), null)),
-            List.of(new PrivateComponentService.ComponentRef(tool.id(), null))));
+            List.of(new PrivateComponentModels.ComponentRef(skill.id(), null)),
+            List.of(new PrivateComponentModels.ComponentRef(tool.id(), null))));
     var v2 = components.publishAgent(agent.id());
     assertEquals(2, v2.currentVersion());
     assertEquals(1, plans.find(confirmed.runId()).getFirst().definitionRef().version());
@@ -205,7 +207,7 @@ class PrivateAgentFlowIntegrationTest {
             .publishTool(
                 components
                     .createTool(
-                        new PrivateComponentService.ToolRequest(
+                        new PrivateComponentModels.ToolRequest(
                             "费用检查搜索", "只读搜索", "SEARCH", List.of(".jsx", ".tsx")))
                     .id())
             .id();
@@ -214,7 +216,7 @@ class PrivateAgentFlowIntegrationTest {
             .publishAgent(
                 components
                     .createAgent(
-                        new PrivateComponentService.AgentRequest(
+                        new PrivateComponentModels.AgentRequest(
                             "固定 DeepSeek 检查",
                             "只读",
                             "检查",
@@ -223,7 +225,7 @@ class PrivateAgentFlowIntegrationTest {
                             true,
                             "deepseek",
                             List.of(),
-                            List.of(new PrivateComponentService.ComponentRef(tool, null)),
+                            List.of(new PrivateComponentModels.ComponentRef(tool, null)),
                             "FIXED"))
                     .id());
     String workspace =
@@ -237,10 +239,13 @@ class PrivateAgentFlowIntegrationTest {
     assertEquals("FIXED", binding.get("modelStrategy"));
     assertEquals("deepseek", binding.get("modelMode"));
 
+    // 混合币种（deepseek 为 USD、mock 为 CNY）带硬预算时应在创建运行前拒绝。
+    costs.publish("default", "deepseek-flash", "USD", 1_000_000, 1_000_000, 100, 100, "test");
+
     int tasks = records.tasks().size();
     var failure =
         assertThrows(
-            IllegalStateException.class,
+            IllegalArgumentException.class,
             () ->
                 candidates.confirm(
                     view.id(),
@@ -250,7 +255,7 @@ class PrivateAgentFlowIntegrationTest {
                         view.inputVersion(),
                         "mock",
                         1_000_000L)));
-    assertTrue(failure.getMessage().contains("费用账本") || failure.getMessage().contains("多种实际模型"));
+    assertTrue(failure.getMessage().contains("币种"), failure.getMessage());
     assertEquals(tasks, records.tasks().size(), "拒绝发生在创建运行之前");
   }
 
@@ -258,7 +263,7 @@ class PrivateAgentFlowIntegrationTest {
   void unpublishedAgentCannotEnterPlan() {
     var agent =
         components.createAgent(
-            new PrivateComponentService.AgentRequest(
+            new PrivateComponentModels.AgentRequest(
                 "未发布检查", "只读", "检查", "列出文件", "ANALYST", true, "mock", List.of(), List.of()));
     String workspace =
         workspaces.createIdeaWorkspace(List.of("App.jsx", "util.tsx", "notes.md")).id();
@@ -294,7 +299,7 @@ class PrivateAgentFlowIntegrationTest {
             .publishTool(
                 components
                     .createTool(
-                        new PrivateComponentService.ToolRequest(
+                        new PrivateComponentModels.ToolRequest(
                             "变化检查搜索", "只读搜索", "SEARCH", List.of(".jsx", ".tsx")))
                     .id())
             .id();
@@ -302,7 +307,7 @@ class PrivateAgentFlowIntegrationTest {
         components.publishAgent(
             components
                 .createAgent(
-                    new PrivateComponentService.AgentRequest(
+                    new PrivateComponentModels.AgentRequest(
                         "变化检查",
                         "只读",
                         "检查",
@@ -311,7 +316,7 @@ class PrivateAgentFlowIntegrationTest {
                         true,
                         "mock",
                         List.of(),
-                        List.of(new PrivateComponentService.ComponentRef(tool, null))))
+                        List.of(new PrivateComponentModels.ComponentRef(tool, null))))
                 .id());
     String workspace =
         workspaces.createIdeaWorkspace(List.of("App.jsx", "util.tsx", "notes.md")).id();
@@ -335,14 +340,14 @@ class PrivateAgentFlowIntegrationTest {
         components.publishTool(
             components
                 .createTool(
-                    new PrivateComponentService.ToolRequest(
+                    new PrivateComponentModels.ToolRequest(
                         "只搜样式", "只允许 css", "SEARCH", List.of(".css")))
                 .id());
     var agent =
         components.publishAgent(
             components
                 .createAgent(
-                    new PrivateComponentService.AgentRequest(
+                    new PrivateComponentModels.AgentRequest(
                         "前端检查",
                         "只读",
                         "检查前端",
@@ -351,7 +356,7 @@ class PrivateAgentFlowIntegrationTest {
                         true,
                         "mock",
                         List.of(),
-                        List.of(new PrivateComponentService.ComponentRef(tool.id(), null))))
+                        List.of(new PrivateComponentModels.ComponentRef(tool.id(), null))))
                 .id());
     String workspace =
         workspaces.createIdeaWorkspace(List.of("App.jsx", "util.tsx", "notes.md")).id();

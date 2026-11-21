@@ -154,7 +154,7 @@ class PrivateAgentModelBudgetIntegrationTest {
             .publishTool(
                 components
                     .createTool(
-                        new PrivateComponentService.ToolRequest(
+                        new PrivateComponentModels.ToolRequest(
                             "费用模型搜索", "只读搜索", "SEARCH", List.of(".jsx", ".tsx")))
                     .id())
             .id();
@@ -164,7 +164,7 @@ class PrivateAgentModelBudgetIntegrationTest {
             "ANALYST",
             "检查",
             "列出文件",
-            List.of(new PrivateComponentService.ComponentRef(tool, null)));
+            List.of(new PrivateComponentModels.ComponentRef(tool, null)));
     var reviewer =
         publishAgent("固定 Mock 审查", "REVIEWER", "审查", "给出结论", List.of());
     String workspace = workspaces.createIdeaWorkspace(List.of("App.jsx", "notes.md")).id();
@@ -198,6 +198,9 @@ class PrivateAgentModelBudgetIntegrationTest {
     assertEquals("FIXED", summary.get("modelStrategy"));
     assertEquals("mock", summary.get("modelMode"));
 
+    // 预算核对会纳入请求模型 deepseek-flash；同币种价格存在时混合模型可继续。
+    costs.publish("default", "deepseek-flash", "CNY", 2_000_000, 4_000_000, 100, 100, "test");
+
     // 运行模型选择 deepseek，但两个私有节点都固定 mock；混合校验只按实际节点模型计算。
     var confirmed =
         candidates.confirm(
@@ -227,15 +230,15 @@ class PrivateAgentModelBudgetIntegrationTest {
     assertEquals(1_000_000L, estimate.get("MAX_COST_MICROS"));
   }
 
-  private PrivateComponentService.AgentView publishAgent(
+  private PrivateComponentModels.AgentView publishAgent(
       String name,
       String role,
       String duty,
       String output,
-      List<PrivateComponentService.ComponentRef> tools) {
+      List<PrivateComponentModels.ComponentRef> tools) {
     var created =
         components.createAgent(
-            new PrivateComponentService.AgentRequest(
+            new PrivateComponentModels.AgentRequest(
                 name,
                 "桩模型测试",
                 duty,
