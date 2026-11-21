@@ -27,6 +27,7 @@ import dev.workbench.persistence.repository.PlanGraphRepository;
 import dev.workbench.persistence.repository.RunRepository;
 import dev.workbench.persistence.repository.SupplementRepository;
 import dev.workbench.persistence.repository.WorkflowExecutionRepository;
+import dev.workbench.persistence.repository.view.CheckReceipt;
 import dev.workbench.workspace.WorkspaceService;
 import java.time.Instant;
 import java.util.List;
@@ -710,7 +711,7 @@ public class WorkflowExecutionService {
         .toList();
   }
 
-  public List<WorkflowExecutionRepository.CheckReceipt> workflowCheckReceipts(
+  public List<CheckReceipt> workflowCheckReceipts(
       String runId, UUID nodeId) {
     return records.findCheckReceipts(runId, nodeId.toString());
   }
