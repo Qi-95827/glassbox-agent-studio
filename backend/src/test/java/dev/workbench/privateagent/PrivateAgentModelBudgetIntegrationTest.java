@@ -9,12 +9,12 @@ import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.framework.workflow.plan.PlanNode;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.planning.PlanCandidateInput;
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.planning.PlanCandidateService;
 import dev.workbench.task.CostService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.TextBlock;
@@ -33,6 +33,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import reactor.core.publisher.Flux;
+import dev.workbench.framework.planning.PlanCandidateModel;
+import dev.workbench.planning.PlanService;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.store.RunRecordService;
 
 /** 固定模型节点在确认页、装配和费用记录中使用同一模型，并用桩提供者避免真实调用。 */
 @SpringBootTest(
@@ -103,8 +107,8 @@ class PrivateAgentModelBudgetIntegrationTest {
         }
 
         @Override
-        public Model create(AgentExecutionRequest request) {
-          return factory.create(request);
+        public dev.workbench.framework.model.ModelClient create(AgentExecutionRequest request) {
+          return new AgentScopeModelClient(factory.create(request));
         }
       };
     }
@@ -182,7 +186,7 @@ class PrivateAgentModelBudgetIntegrationTest {
     var created =
         candidates.generate(
             new PlanCandidateService.GenerateRequest(
-                RunRecordService.id().replace("-", ""), input, null, "budget-key-0001"));
+                dev.workbench.domain.WorkbenchIds.newId().replace("-", ""), input, null, "budget-key-0001"));
     var view = wait(created);
     assertEquals("READY", view.status(), view.errors().toString());
     @SuppressWarnings("unchecked")

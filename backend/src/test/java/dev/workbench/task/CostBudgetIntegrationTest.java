@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.store.RunRecordService;
 
 /** 费用估算与硬预算：可计价上界预留、并发预留、未知用量和停止原因。 */
 @SpringBootTest(

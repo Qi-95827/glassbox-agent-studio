@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.planning.EntryPolicyService;
+import dev.workbench.store.RunRecordService;
 
 /** 任务 8 第一段：四类入口校验、交付物、默认验收条件和持久化。 */
 @SpringBootTest(

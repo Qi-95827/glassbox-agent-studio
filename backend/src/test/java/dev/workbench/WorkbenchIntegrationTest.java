@@ -21,28 +21,28 @@ import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
-import dev.workbench.evaluation.CaseStatus;
+import dev.workbench.domain.CaseStatus;
 import dev.workbench.evaluation.EvaluationRepository;
 import dev.workbench.evaluation.EvaluationService;
 import dev.workbench.evaluation.EvaluationStatus;
 import dev.workbench.framework.agent.assembly.AgentAssemblyPlanner;
-import dev.workbench.framework.event.EventQueryService;
+import dev.workbench.observability.EventQueryService;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.framework.workflow.check.SystemCheckRef;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanService;
-import dev.workbench.framework.workflow.view.ExecutionViewService;
-import dev.workbench.memory.MemoryCategory;
+import dev.workbench.planning.PlanService;
+import dev.workbench.delivery.ExecutionViewService;
+import dev.workbench.domain.MemoryCategory;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.MonitoringService;
 import dev.workbench.observability.RunMetricsService;
 import dev.workbench.orchestration.CreateTaskRequest;
-import dev.workbench.orchestration.Handoff;
+import dev.workbench.domain.Handoff;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.report.HtmlReportService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.GitActionStatus;
@@ -75,6 +75,16 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
+import dev.workbench.delivery.ExecutionViewService;
+import dev.workbench.domain.RunLimits;
+import dev.workbench.domain.TaskEntryKind;
+import dev.workbench.planning.PlanService;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.domain.CaseStatus;
+import dev.workbench.domain.Handoff;
+import dev.workbench.domain.MemoryCategory;
+import dev.workbench.domain.MemoryStatus;
+import dev.workbench.store.RunRecordService;
 
 @AutoConfigureMockMvc
 @AutoConfigureObservability
@@ -391,7 +401,7 @@ class WorkbenchIntegrationTest {
         };
     org.mockito.Mockito.doReturn(
             new AgentModelRegistry.SelectedModel(
-                delayed,
+                new AgentScopeModelClient(delayed),
                 new AgentModelRegistry.ModelReference(
                     dev.workbench.domain.ModelMode.MOCK, delayed.getModelName(), 1)))
         .when(workflowModelRegistry)
@@ -619,7 +629,7 @@ class WorkbenchIntegrationTest {
         };
     org.mockito.Mockito.doReturn(
             new AgentModelRegistry.SelectedModel(
-                model,
+                new AgentScopeModelClient(model),
                 new AgentModelRegistry.ModelReference(
                     dev.workbench.domain.ModelMode.MOCK, model.getModelName(), 1)))
         .when(workflowModelRegistry)
@@ -730,7 +740,7 @@ class WorkbenchIntegrationTest {
     var model = workflowWriterFixture("文件由受控写入用例更新");
     org.mockito.Mockito.doReturn(
             new AgentModelRegistry.SelectedModel(
-                model,
+                new AgentScopeModelClient(model),
                 new AgentModelRegistry.ModelReference(
                     dev.workbench.domain.ModelMode.MOCK, "workflow-write-fixture", 1)))
         .when(workflowModelRegistry)
@@ -801,7 +811,7 @@ class WorkbenchIntegrationTest {
     var model = workflowWriterFixture("写入结果未知的内容");
     org.mockito.Mockito.doReturn(
             new AgentModelRegistry.SelectedModel(
-                model,
+                new AgentScopeModelClient(model),
                 new AgentModelRegistry.ModelReference(
                     dev.workbench.domain.ModelMode.MOCK, "workflow-write-fixture", 1)))
         .when(workflowModelRegistry)
@@ -978,7 +988,7 @@ class WorkbenchIntegrationTest {
         };
     org.mockito.Mockito.doReturn(
             new AgentModelRegistry.SelectedModel(
-                model,
+                new AgentScopeModelClient(model),
                 new AgentModelRegistry.ModelReference(
                     dev.workbench.domain.ModelMode.MOCK, model.getModelName(), 1),
                 RateLimitException.class::isInstance))
@@ -1162,7 +1172,7 @@ class WorkbenchIntegrationTest {
     var plan = plans.workflowPlan(original);
     var nodes = plans.find(original);
     var first = workflowRuns.claimWorkflowNode(original, plan.id(), nodes.getFirst().id(), "工作流测试");
-    String modelId = RunRecordService.id();
+    String modelId = dev.workbench.domain.WorkbenchIds.newId();
     repo.recordAgentDefinition(
         original, first.agentId(), first.node().definitionRef(), first.node().definitionSha256());
     repo.startModel(modelId, original, first.agentId(), ModelKind.MOCK);
@@ -1170,7 +1180,7 @@ class WorkbenchIntegrationTest {
     repo.update(original, RunStatus.RUNNING, null, null, 1, 0, 20);
     workflowRuns.finishWorkflowNode(original, plan.id(), first.agentId(), "已保存的分析", 1, 0, 20);
     repo.finishStoppedRun(
-        new dev.workbench.task.StopCompletion(
+        new dev.workbench.store.StopCompletion(
             java.util.UUID.fromString(original),
             null,
             dev.workbench.domain.StopCause.INTERRUPTED,
@@ -1966,7 +1976,7 @@ class WorkbenchIntegrationTest {
     var newest = memories.history(first, entry.id().toString(), null, 2);
     assertEquals(
         java.util.List.of(3, 2), newest.items().stream().map(item -> item.version()).toList());
-    assertEquals(dev.workbench.memory.MemoryStatus.DELETED, newest.items().getFirst().status());
+    assertEquals(dev.workbench.domain.MemoryStatus.DELETED, newest.items().getFirst().status());
     assertEquals(2, newest.nextBeforeVersion());
     var oldest = memories.history(first, entry.id().toString(), newest.nextBeforeVersion(), 2);
     assertEquals(
@@ -3697,7 +3707,7 @@ class WorkbenchIntegrationTest {
             java.util.List.of(),
             dev.workbench.domain.TaskEntryKind.GENERAL);
     repo.createTaskAndFirstRun(
-        task, runId, new dev.workbench.task.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
+        task, runId, new dev.workbench.domain.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
     repo.update(runId.toString(), RunStatus.RUNNING, null, null, 0, 0, 0);
     repo.startAgent(analystId.toString(), runId.toString(), goal, AgentRole.ANALYST);
     var handoff =
@@ -3716,7 +3726,7 @@ class WorkbenchIntegrationTest {
             HandoffSource.SYSTEM,
             null);
     var completion =
-        new dev.workbench.task.StopCompletion(
+        new dev.workbench.store.StopCompletion(
             runId,
             analystId,
             dev.workbench.domain.StopCause.USER_CANCELLED,
@@ -3773,7 +3783,7 @@ class WorkbenchIntegrationTest {
             java.util.List.of(),
             dev.workbench.domain.TaskEntryKind.GENERAL);
     repo.createTaskAndFirstRun(
-        task, runId, new dev.workbench.task.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
+        task, runId, new dev.workbench.domain.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
     repo.update(runId.toString(), RunStatus.RUNNING, null, null, 0, 0, 0);
     repo.startAgent(analyst, runId.toString(), goal, AgentRole.ANALYST);
     repo.finishAgent(analyst, InvocationStatus.COMPLETED, "分析");
@@ -3794,7 +3804,7 @@ class WorkbenchIntegrationTest {
             HandoffSource.MOCK_MODEL,
             null);
     var completion =
-        new dev.workbench.task.ReviewCompletion(
+        new dev.workbench.store.ReviewCompletion(
             runId,
             java.util.UUID.fromString(reviewer),
             "审查摘要",
@@ -3874,7 +3884,7 @@ class WorkbenchIntegrationTest {
             java.util.List.of(),
             dev.workbench.domain.TaskEntryKind.GENERAL);
     repo.createTaskAndFirstRun(
-        task, runId, new dev.workbench.task.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
+        task, runId, new dev.workbench.domain.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
     repo.startAgent(analyst, runId.toString(), goal, AgentRole.ANALYST);
     var result =
         new Handoff(
@@ -3934,7 +3944,7 @@ class WorkbenchIntegrationTest {
             java.util.List.of(),
             dev.workbench.domain.TaskEntryKind.GENERAL);
     repo.createTaskAndFirstRun(
-        task, runId, new dev.workbench.task.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
+        task, runId, new dev.workbench.domain.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
     var delegation =
         new Handoff(
             taskId.toString(),
@@ -3993,7 +4003,7 @@ class WorkbenchIntegrationTest {
             java.util.List.of(),
             dev.workbench.domain.TaskEntryKind.GENERAL);
     repo.createTaskAndFirstRun(
-        task, runId, new dev.workbench.task.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
+        task, runId, new dev.workbench.domain.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
     repo.startAgent(analyst, runId.toString(), goal, AgentRole.ANALYST);
     var handoff =
         new Handoff(
@@ -4089,7 +4099,7 @@ class WorkbenchIntegrationTest {
             java.util.List.of(),
             dev.workbench.domain.TaskEntryKind.GENERAL);
     repo.createTaskAndFirstRun(
-        task, runId, new dev.workbench.task.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
+        task, runId, new dev.workbench.domain.RunLimits(4, 2, 2, null, null, 30, null, null), "测试");
     repo.startAgent(analyst, runId.toString(), goal, AgentRole.ANALYST);
     repo.finishAgent(analyst, InvocationStatus.COMPLETED, "分析完成");
     repo.startAgent(coder, runId.toString(), goal, AgentRole.CODER);
@@ -4400,7 +4410,7 @@ class WorkbenchIntegrationTest {
         .andExpect(jsonPath("$.cases[0].checks.length()").value(6))
         .andExpect(jsonPath("$.cases[1].checks.length()").value(6));
 
-    String baseline = RunRecordService.id();
+    String baseline = dev.workbench.domain.WorkbenchIds.newId();
     evaluationRecords.create(baseline);
     evaluationRecords.finishBatch(baseline, EvaluationStatus.INTERRUPTED);
     mvc.perform(get("/api/evaluations/compare").param("baseline", baseline).param("candidate", id))

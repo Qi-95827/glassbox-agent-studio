@@ -2,7 +2,6 @@ package dev.workbench.framework.model;
 
 import dev.workbench.domain.ModelMode;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
-import io.agentscope.core.model.Model;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -25,17 +24,16 @@ public final class AgentModelRegistry {
     providers = Map.copyOf(checked);
   }
 
-  public Model create(AgentExecutionRequest request) {
+  public ModelClient create(AgentExecutionRequest request) {
     return createChecked(providerFor(request.modelMode()), request);
   }
 
   public SelectedModel select(AgentExecutionRequest request) {
     var provider = providerFor(request.modelMode());
-    Model model = createChecked(provider, request);
+    ModelClient model = createChecked(provider, request);
     return new SelectedModel(
         model,
-        new ModelReference(
-            request.modelMode(), model.getModelName(), provider.configurationVersion()),
+        new ModelReference(request.modelMode(), model.modelName(), provider.configurationVersion()),
         provider::isRateLimitRejection);
   }
 
@@ -45,16 +43,17 @@ public final class AgentModelRegistry {
     return provider;
   }
 
-  private static Model createChecked(AgentModelProvider provider, AgentExecutionRequest request) {
-    Model model = provider.create(request);
+  private static ModelClient createChecked(
+      AgentModelProvider provider, AgentExecutionRequest request) {
+    ModelClient model = provider.create(request);
     if (model == null) throw new IllegalStateException("模型提供者未创建模型。");
     return model;
   }
 
   public record SelectedModel(
-      Model model, ModelReference reference, Predicate<Throwable> rateLimitRejection) {
-    public SelectedModel(Model model, ModelReference reference) {
-      this(model, reference, error -> false);
+      ModelClient client, ModelReference reference, Predicate<Throwable> rateLimitRejection) {
+    public SelectedModel(ModelClient client, ModelReference reference) {
+      this(client, reference, error -> false);
     }
   }
 

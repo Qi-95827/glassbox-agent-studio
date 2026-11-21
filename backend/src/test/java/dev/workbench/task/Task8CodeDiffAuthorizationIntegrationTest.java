@@ -21,6 +21,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.planning.PlanService;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.planning.SourceArtifactService;
 
 /** 代码差异只绑定来源运行实际写过的授权文件，预览和装配前复验当前授权。 */
 @SpringBootTest(
@@ -35,7 +38,7 @@ class Task8CodeDiffAuthorizationIntegrationTest {
   @Autowired SourceArtifactService sources;
   @Autowired WorkspaceService workspaces;
   @Autowired WorkspaceAuthorizationService authorization;
-  @Autowired dev.workbench.framework.workflow.plan.PlanService plans;
+  @Autowired dev.workbench.planning.PlanService plans;
   @TempDir Path temp;
 
   @Test
@@ -127,7 +130,7 @@ class Task8CodeDiffAuthorizationIntegrationTest {
 
   private void recordWrite(String runId, Map<String, String> versions) {
     String agentId = records.agents(runId).stream().findFirst().orElseThrow().get("ID").toString();
-    String toolId = RunRecordService.id();
+    String toolId = dev.workbench.domain.WorkbenchIds.newId();
     records.startTool(toolId, runId, agentId, ToolKind.WORKSPACE_WRITE.recordName(), 1);
     records.finishTool(
         toolId,
@@ -159,7 +162,7 @@ class Task8CodeDiffAuthorizationIntegrationTest {
     workspaces.write(workspace.id(), "src/allowed.txt", allowed.sha256(), "allowed-v2\n");
     String allowedSha = workspaces.read(workspace.id(), "src/allowed.txt").sha256();
     String agentId = records.agents(source).stream().findFirst().orElseThrow().get("ID").toString();
-    String toolId = RunRecordService.id();
+    String toolId = dev.workbench.domain.WorkbenchIds.newId();
     records.startTool(toolId, source, agentId, ToolKind.WORKSPACE_WRITE.recordName(), 1);
     records.finishTool(
         toolId,
@@ -218,7 +221,7 @@ class Task8CodeDiffAuthorizationIntegrationTest {
     String sourceTask = records.runSnapshot(source).taskId().toString();
     var restricted = workspaces.read(workspace.id(), "src/restricted.txt");
     String agentId = records.agents(source).stream().findFirst().orElseThrow().get("ID").toString();
-    String toolId = RunRecordService.id();
+    String toolId = dev.workbench.domain.WorkbenchIds.newId();
     records.startTool(toolId, source, agentId, ToolKind.WORKSPACE_WRITE.recordName(), 1);
     records.finishTool(
         toolId,

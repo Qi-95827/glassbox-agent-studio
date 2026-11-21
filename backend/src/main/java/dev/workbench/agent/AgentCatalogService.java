@@ -2,6 +2,7 @@ package dev.workbench.agent;
 
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ToolKind;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 import dev.workbench.framework.skill.SkillId;
 import dev.workbench.framework.skill.SkillRegistry;
 import java.util.Arrays;

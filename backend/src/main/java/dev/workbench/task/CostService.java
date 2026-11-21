@@ -20,6 +20,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.store.RunRecordService;
 
 /**
  * 费用估算与硬预算。
@@ -93,7 +94,7 @@ public class CostService {
     var saved =
         prices.saveAndFlush(
             new ProviderPriceVersionEntity(
-                RunRecordService.id(),
+                dev.workbench.domain.WorkbenchIds.newId(),
                 provider,
                 model,
                 version,
@@ -113,11 +114,9 @@ public class CostService {
     if (maxCostMicros == null) return;
     if (maxCostMicros < 1 || maxCostMicros > 1_000_000_000L)
       throw new IllegalArgumentException("费用硬预算须在 1 至 1000000000 微单位之间。");
-    String model = ModelKind.forMode(mode).code();
-    ProviderPriceVersionEntity price =
-        prices
-            .findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(PROVIDER, model)
-            .orElseThrow(() -> new IllegalArgumentException("该模型没有生效价格版本，不能启用费用硬预算。"));
+    ProviderPriceVersionEntity price = defaultPrice(mode);
+    if (price == null)
+      throw new IllegalArgumentException("至少配置一个生效价格版本，才能启用费用硬预算。");
     if (limits.existsById(runId)) throw new IllegalStateException("运行已绑定费用预算。");
     String time = Instant.now().toString();
     limits.saveAndFlush(new RunCostLimitEntity(runId, maxCostMicros, price.getId(), time, time));
@@ -137,18 +136,35 @@ public class CostService {
         new RunCostLimitEntity(childRunId, remaining, parent.getPriceVersionId(), time, time));
   }
 
+  /** 任务级预算只绑定默认价格；每次实际调用仍按 modelId 查表计价。 */
+  private ProviderPriceVersionEntity defaultPrice(ModelMode mode) {
+    String model = ModelKind.forMode(mode).code();
+    var exact = prices.findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(PROVIDER, model);
+    if (exact.isPresent()) return exact.get();
+    return prices.findAllByOrderByProviderAscModelAscVersionDesc().stream()
+        .filter(ProviderPriceVersionEntity::isActive)
+        .findFirst()
+        .orElse(null);
+  }
+
+  /** 每次 ModelCall 使用实际模型的价格版本，支持同一运行混用不同模型。 */
+  private ProviderPriceVersionEntity priceFor(ModelKind model) {
+    return prices
+        .findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(PROVIDER, model.code())
+        .orElseThrow(
+            () ->
+                new StopExecution(
+                    StopCause.COST_LIMIT,
+                    "模型 " + model.code() + " 未配置生效价格版本，无法继续执行费用硬预算。"));
+  }
+
   /** 派发前预留可计价上界；额度不足时抛出受控停止，不启动模型调用。 */
   public Reservation reserve(String runId, ModelKind model) {
     return tx.execute(
         ignored -> {
           RunCostLimitEntity limit = limits.lockByRunId(runId).orElse(null);
           if (limit == null) return Reservation.NONE;
-          ProviderPriceVersionEntity price =
-              prices
-                  .findById(limit.getPriceVersionId())
-                  .orElseThrow(() -> new IllegalStateException("已绑定的价格版本不存在。"));
-          if (!price.getModel().equals(model.code()))
-            throw new IllegalStateException("模型来源与费用价格版本不一致。");
+          ProviderPriceVersionEntity price = priceFor(model);
           long estimate = price.upperBoundMicros();
           long committed = Math.addExact(limit.getReservedMicros(), limit.getSettledMicros());
           if (Math.addExact(committed, estimate) > limit.getMaxCostMicros())
@@ -167,7 +183,13 @@ public class CostService {
           var row =
               reservations.save(
                   new CostReservationEntity(
-                      RunRecordService.id(), runId, estimate, "RESERVED", time, time));
+                      dev.workbench.domain.WorkbenchIds.newId(),
+                      runId,
+                      estimate,
+                      price.getId(),
+                      "RESERVED",
+                      time,
+                      time));
           limit.reserve(estimate, time);
           limits.save(limit);
           return new Reservation(
@@ -194,9 +216,13 @@ public class CostService {
                   limits
                       .lockByRunId(row.getRunId())
                       .orElseThrow(() -> new IllegalStateException("费用预算记录缺失。"));
+              String priceId =
+                  row.getPriceVersionId() == null
+                      ? limit.getPriceVersionId()
+                      : row.getPriceVersionId();
               ProviderPriceVersionEntity price =
                   prices
-                      .findById(limit.getPriceVersionId())
+                      .findById(priceId)
                       .orElseThrow(() -> new IllegalStateException("价格版本缺失。"));
               boolean unknown = input == null || output == null;
               Long actual = unknown ? null : price.cost(Math.max(0, input), Math.max(0, output));

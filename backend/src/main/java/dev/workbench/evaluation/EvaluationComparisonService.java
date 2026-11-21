@@ -2,13 +2,14 @@ package dev.workbench.evaluation;
 
 import dev.workbench.observability.AgentMetrics;
 import dev.workbench.observability.RunMetricsService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
+import dev.workbench.domain.CaseStatus;
 
 /** 根据已保存案例做快照对照；不会启动评测或推断差异原因。 */
 @Service

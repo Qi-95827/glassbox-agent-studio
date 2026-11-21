@@ -1,8 +1,8 @@
 package dev.workbench.ownership;
 
 import dev.workbench.auth.AuthService;
-import dev.workbench.planning.ExecutionScope;
-import dev.workbench.planning.ExecutionScopeResolver;
+import dev.workbench.domain.ExecutionScope;
+import dev.workbench.domain.ExecutionScopeResolver;
 import dev.workbench.persistence.entity.ResourceOwnershipEntity;
 import dev.workbench.persistence.repository.ResourceOwnershipRepository;
 import dev.workbench.persistence.repository.RunRepository;
@@ -20,7 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>运行与证据从任务继承归属；旧记录没有归属登记时只在管理员显式领取后可见。任何列表、按 ID 查询、 确认、报告和下载都必须经过这里，不能把请求体里的用户标识当作授权依据。
  */
 @Service
-public class OwnershipService {
+public class OwnershipService implements dev.workbench.framework.ownership.OwnershipStamper {
   public static final String TASK = "TASK";
   public static final String WORKSPACE = "WORKSPACE";
 
@@ -65,7 +65,7 @@ public class OwnershipService {
             resourceType,
             resourceId,
             scopes.current().ownerScopeKey(),
-            dev.workbench.task.RunRecordService.now()));
+            java.time.Instant.now().toString()));
   }
 
   public Optional<String> owner(String resourceType, String resourceId) {

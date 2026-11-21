@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,6 +15,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.domain.Handoff;
+import dev.workbench.store.RunRecordService;
 
 /** 检查模拟 Bug 任务不会把只读分析当成已修复。 */
 @EnabledIfEnvironmentVariable(named = "RUN_DOCKER_TESTS", matches = "true")
@@ -133,7 +135,7 @@ class BugWorkflowIntegrationTest {
             .filter(row -> "AGENT_TRANSFER".equals(row.get("DIRECTION")))
             .findFirst()
             .orElseThrow();
-    var transfer = (dev.workbench.orchestration.Handoff) transferRow.get("PAYLOAD");
+    var transfer = (dev.workbench.domain.Handoff) transferRow.get("PAYLOAD");
     var checkId = java.util.UUID.fromString(evidence.getFirst().get("ID").toString());
     assertEquals(2, transfer.schemaVersion());
     assertEquals(java.util.List.of(checkId), transfer.testCheckIds());
@@ -239,7 +241,7 @@ class BugWorkflowIntegrationTest {
     var transfers =
         repository.handoffs(writeRun).stream()
             .filter(row -> "AGENT_TRANSFER".equals(row.get("DIRECTION")))
-            .map(row -> (dev.workbench.orchestration.Handoff) row.get("PAYLOAD"))
+            .map(row -> (dev.workbench.domain.Handoff) row.get("PAYLOAD"))
             .toList();
     var coding =
         transfers.stream()

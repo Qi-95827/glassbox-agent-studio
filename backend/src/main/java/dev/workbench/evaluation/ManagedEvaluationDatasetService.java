@@ -17,7 +17,7 @@ import dev.workbench.persistence.repository.EvaluationDatasetVersionRepository;
 import dev.workbench.persistence.repository.ManagedEvaluationBatchRepository;
 import dev.workbench.persistence.repository.ManagedEvaluationCaseRepository;
 import dev.workbench.report.SensitiveTextRedactor;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -50,7 +50,7 @@ public class ManagedEvaluationDatasetService {
   private final RunRecordService records;
   private final ObjectMapper json;
   private final AuditService audit;
-  private final ExecutorService executor = Executors.newSingleThreadExecutor();
+  private final ExecutorService executor;
 
   public ManagedEvaluationDatasetService(
       EvaluationDatasetSampleRepository samples,
@@ -60,7 +60,9 @@ public class ManagedEvaluationDatasetService {
       RunService runs,
       RunRecordService records,
       ObjectMapper json,
-      AuditService audit) {
+      AuditService audit,
+      @org.springframework.beans.factory.annotation.Qualifier("evaluationExecutor")
+          ExecutorService executor) {
     this.samples = samples;
     this.versions = versions;
     this.batches = batches;
@@ -69,6 +71,7 @@ public class ManagedEvaluationDatasetService {
     this.records = records;
     this.json = json;
     this.audit = audit;
+    this.executor = executor;
   }
 
   @PreDestroy
@@ -94,7 +97,7 @@ public class ManagedEvaluationDatasetService {
       var saved =
           samples.saveAndFlush(
               new EvaluationDatasetSampleEntity(
-                  RunRecordService.id(),
+                  dev.workbench.domain.WorkbenchIds.newId(),
                   datasetKey,
                   input.code(),
                   input.title().strip(),
@@ -174,7 +177,7 @@ public class ManagedEvaluationDatasetService {
     var saved =
         versions.saveAndFlush(
             new EvaluationDatasetVersionEntity(
-                RunRecordService.id(),
+                dev.workbench.domain.WorkbenchIds.newId(),
                 datasetKey,
                 version,
                 definition,
@@ -231,7 +234,7 @@ public class ManagedEvaluationDatasetService {
       var saved =
           samples.saveAndFlush(
               new EvaluationDatasetSampleEntity(
-                  RunRecordService.id(),
+                  dev.workbench.domain.WorkbenchIds.newId(),
                   datasetKey,
                   code,
                   title,
@@ -281,7 +284,7 @@ public class ManagedEvaluationDatasetService {
     var batch =
         batches.saveAndFlush(
             new ManagedEvaluationBatchEntity(
-                RunRecordService.id(),
+                dev.workbench.domain.WorkbenchIds.newId(),
                 datasetKey,
                 resolved.getId(),
                 resolved.getDefinitionSha256(),
@@ -292,7 +295,7 @@ public class ManagedEvaluationDatasetService {
     for (var sample : snapshot) {
       cases.save(
           new ManagedEvaluationCaseEntity(
-              RunRecordService.id(),
+              dev.workbench.domain.WorkbenchIds.newId(),
               batch.getId(),
               sample.code(),
               sample.title(),
@@ -375,7 +378,7 @@ public class ManagedEvaluationDatasetService {
         }
         throw new IllegalStateException("评测等待运行超过五分钟。");
       }
-      Thread.sleep(100);
+      dev.workbench.framework.concurrent.AsyncDelay.await(100);
     }
   }
 

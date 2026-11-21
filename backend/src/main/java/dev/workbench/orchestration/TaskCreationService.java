@@ -1,17 +1,19 @@
 package dev.workbench.orchestration;
 
 import dev.workbench.bug.BugIntakeService;
-import dev.workbench.domain.EntryPolicyService;
-import dev.workbench.domain.EntryRouteService;
+import dev.workbench.planning.EntryPolicyService;
+import dev.workbench.planning.EntryRouteService;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.task.CostService;
-import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.domain.RunLimits;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import dev.workbench.framework.workflow.plan.CandidateRunPlan;
+import dev.workbench.framework.workflow.plan.CandidateRunPlan;
 
 /**
  * 创建任务的唯一业务提交边界。
@@ -20,7 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 调用方必须在本方法返回（事务已提交）后再派发执行；任一写入失败时全部回滚，不留下可执行的半成品。
  */
 @Service
-public class TaskCreationService {
+public class TaskCreationService implements dev.workbench.planning.CandidateRunPersister {
   private final RunRecordService runs;
   private final BugIntakeService intakes;
   private final EntryPolicyService entryPolicies;

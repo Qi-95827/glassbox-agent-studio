@@ -1,6 +1,6 @@
 package dev.workbench.infrastructure.model;
 
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import io.agentscope.core.formatter.ResponseFormat;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;

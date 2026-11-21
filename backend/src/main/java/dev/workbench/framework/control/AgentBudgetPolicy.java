@@ -3,7 +3,7 @@ package dev.workbench.framework.control;
 import dev.workbench.domain.RoleBudget;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.workflow.plan.WorkflowNodeBudget;
-import dev.workbench.task.RunLimits;
+import dev.workbench.domain.RunLimits;
 import java.util.Map;
 
 /** 运行控制器实际应用于当前实例的限额及策略版本。 */

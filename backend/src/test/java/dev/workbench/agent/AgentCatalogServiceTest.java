@@ -7,6 +7,7 @@ import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.skill.SkillRegistry;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 
 /** 目录必须来自实际装配定义，声明不等于任务权限。 */
 class AgentCatalogServiceTest {

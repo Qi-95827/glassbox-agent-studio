@@ -6,7 +6,8 @@ import dev.workbench.framework.agent.definition.AgentDefinitionCatalog;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.context.AgentInput;
 import dev.workbench.framework.model.AgentModelProvider;
-import io.agentscope.core.model.Model;
+import dev.workbench.framework.model.ModelClient;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -20,7 +21,7 @@ class BuiltInModelProviders {
         return ModelMode.MOCK;
       }
 
-      public Model create(AgentExecutionRequest request) {
+      public ModelClient create(AgentExecutionRequest request) {
         boolean workflowInput =
             request.context().sources().stream()
                 .anyMatch(source -> source.kind() == AgentInput.Kind.WORKFLOW_NODE);
@@ -28,13 +29,14 @@ class BuiltInModelProviders {
             (request.role() == AgentRole.ANALYST || workflowInput)
                 && request.definitionRef() != null
                 && definitions.resolve(request.definitionRef()).tools().isEmpty();
-        return new DemoModel(
-            request.role(),
-            request.workspaceId() != null,
-            request.scenario(),
-            request.fileScopes(),
-            textOnly,
-            workflowInput);
+        return new AgentScopeModelClient(
+            new DemoModel(
+                request.role(),
+                request.workspaceId() != null,
+                request.scenario(),
+                request.fileScopes(),
+                textOnly,
+                workflowInput));
       }
     };
   }
@@ -46,8 +48,8 @@ class BuiltInModelProviders {
         return ModelMode.DEEPSEEK;
       }
 
-      public Model create(AgentExecutionRequest request) {
-        return DeepSeekModelFactory.deepSeekModel();
+      public ModelClient create(AgentExecutionRequest request) {
+        return new AgentScopeModelClient(DeepSeekModelFactory.deepSeekModel());
       }
 
       @Override

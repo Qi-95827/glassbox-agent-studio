@@ -9,7 +9,7 @@ import dev.workbench.domain.Scenario;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.tool.AgentToolContext;
-import dev.workbench.framework.tool.AgentToolRegistry;
+import dev.workbench.infrastructure.agentscope.AgentToolRegistry;
 import dev.workbench.framework.tool.ToolEffect;
 import dev.workbench.framework.tool.ToolGateway;
 import dev.workbench.workspace.WorkspaceService;
@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import dev.workbench.domain.WorkspaceVersionConflict;
 
 /** 验证统一结果与实际调用 ID 对齐，失败不能伪装成成功结果。 */
 class ToolGatewayTest {
@@ -98,7 +99,7 @@ class ToolGatewayTest {
                 "开始",
                 value -> "摘要",
                 () -> {
-                  throw new dev.workbench.workspace.WorkspaceVersionConflict("版本不一致");
+                  throw new dev.workbench.domain.WorkspaceVersionConflict("版本不一致");
                 }));
     assertEquals("STALE_VERSION", stale.path("error").path("code").asText());
   }

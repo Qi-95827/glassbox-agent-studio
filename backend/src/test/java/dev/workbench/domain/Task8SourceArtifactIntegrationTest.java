@@ -3,11 +3,11 @@ package dev.workbench.domain;
 import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
-import dev.workbench.task.SourceArtifactService;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.planning.SourceArtifactService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.store.RunRecordService;
 
 /** 既有需求文档接续设计任务：授权正文进入输入，结束运行拒绝再接成果。 */
 @SpringBootTest(

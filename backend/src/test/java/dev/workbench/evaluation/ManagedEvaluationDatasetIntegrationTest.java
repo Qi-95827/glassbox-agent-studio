@@ -5,12 +5,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.store.RunRecordService;
 
 /** 可管理评测数据集：草稿、发布、失败案例脱敏、批次绑定和结果回溯。 */
 @SpringBootTest(

@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.framework.workflow.plan.PlanService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.planning.PlanService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.task.WorkflowExecutionService;
 import java.util.List;
 import java.util.UUID;
@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.store.RunRecordService;
 
 /** 计划确认使用 JPA 条件更新，并在同一事务内读到新状态。 */
 @SpringBootTest(
@@ -91,7 +92,7 @@ class TaskPlanApprovalIntegrationTest {
         withoutRun,
         "历史任务无运行",
         "normal",
-        RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
     assertNull(listRow(withoutRun).get("RUN_ID"));
     assertEquals(false, listRow(withoutRun).get("PLAN_REVIEW_PENDING"));
 

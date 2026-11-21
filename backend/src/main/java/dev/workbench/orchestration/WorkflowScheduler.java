@@ -17,11 +17,11 @@ import dev.workbench.framework.workflow.check.StaleEvidenceException;
 import dev.workbench.framework.workflow.check.SystemCheckRegistry;
 import dev.workbench.framework.workflow.check.SystemCheckRequest;
 import dev.workbench.framework.workflow.check.SystemCheckResult;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
-import dev.workbench.task.RunRecordService;
-import dev.workbench.task.SourceArtifactService;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.planning.SourceArtifactService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.task.WorkflowRecoveryService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
@@ -31,6 +31,9 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
+import dev.workbench.store.HandoffValidator;
+import dev.workbench.store.ReviewCompletion;
+import dev.workbench.store.StopCompletion;
 
 /** 按持久化依赖顺序执行受控计划；整个运行共享一个控制器。 */
 @Component

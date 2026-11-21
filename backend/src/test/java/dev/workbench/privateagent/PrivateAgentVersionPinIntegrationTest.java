@@ -5,11 +5,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.framework.workflow.plan.PlanNode;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.planning.PlanCandidateInput;
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.planning.PlanCandidateService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.WorkspaceService;
 import java.time.Duration;
@@ -25,6 +25,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import dev.workbench.store.RunRecordService;
 
 /** 规划器等待期间发布新版本，不得把同一 P1 建议从 v1 改成 v2。 */
 @SpringBootTest(
@@ -215,7 +216,7 @@ class PrivateAgentVersionPinIntegrationTest {
             true);
     return candidates.generate(
         new PlanCandidateService.GenerateRequest(
-            RunRecordService.id().replace("-", ""), input, null, "pin-" + agentId));
+            dev.workbench.domain.WorkbenchIds.newId().replace("-", ""), input, null, "pin-" + agentId));
   }
 
   private PlanCandidateService.CandidateView wait(PlanCandidateService.CandidateView created) {

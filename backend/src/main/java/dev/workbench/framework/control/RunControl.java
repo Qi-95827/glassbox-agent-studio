@@ -10,8 +10,8 @@ import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.workflow.plan.WorkflowNodeBudget;
-import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.domain.RunLimits;
+
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -21,7 +21,7 @@ import java.util.function.Supplier;
 /** 单次运行的计数器与调用状态；执行时长仅计算进程运行期间。 */
 public final class RunControl {
   private static final long MODEL_RETRY_DELAY_MS = 1000;
-  private final RunRecordService repository;
+  private final RunControlStore repository;
   private final Set<String> paused, cancelled;
   private final String runId;
   private final long previousMs;
@@ -41,7 +41,7 @@ public final class RunControl {
   public RunControl(
       String runId,
       RunSnapshot run,
-      RunRecordService repository,
+      RunControlStore repository,
       Object pauseMonitor,
       Set<String> paused,
       Set<String> cancelled,
@@ -264,7 +264,7 @@ public final class RunControl {
 
   private synchronized UUID startTool(
       String agentId, ToolKind kind, int version, String fingerprint) {
-    toolId = RunRecordService.id();
+    toolId = UUID.randomUUID().toString();
     toolStartedNanos = System.nanoTime();
     if (maxIdenticalTools == null)
       repository.startTool(toolId, runId, agentId, kind.recordName(), version);
@@ -292,7 +292,7 @@ public final class RunControl {
   }
 
   private synchronized void startModel(String agentId, ModelKind model) {
-    modelId = RunRecordService.id();
+    modelId = UUID.randomUUID().toString();
     lastModelId = modelId;
     modelStartedNanos = System.nanoTime();
     repository.startModel(modelId, runId, agentId, model);

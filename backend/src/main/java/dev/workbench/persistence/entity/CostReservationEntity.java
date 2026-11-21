@@ -16,6 +16,10 @@ public class CostReservationEntity {
   @Column(name = "run_id", nullable = false, length = 36)
   private String runId;
 
+  /** 本次调用实际使用的价格版本；混合模型按调用计价。 */
+  @Column(name = "price_version_id", length = 36)
+  private String priceVersionId;
+
   @Column(name = "reserved_micros", nullable = false)
   private long reservedMicros;
 
@@ -43,9 +47,21 @@ public class CostReservationEntity {
       String status,
       String createdAt,
       String updatedAt) {
+    this(id, runId, reservedMicros, null, status, createdAt, updatedAt);
+  }
+
+  public CostReservationEntity(
+      String id,
+      String runId,
+      long reservedMicros,
+      String priceVersionId,
+      String status,
+      String createdAt,
+      String updatedAt) {
     this.id = id;
     this.runId = runId;
     this.reservedMicros = reservedMicros;
+    this.priceVersionId = priceVersionId;
     this.status = status;
     this.overBudgetMicros = 0;
     this.createdAt = createdAt;
@@ -62,6 +78,10 @@ public class CostReservationEntity {
 
   public long getReservedMicros() {
     return reservedMicros;
+  }
+
+  public String getPriceVersionId() {
+    return priceVersionId;
   }
 
   public Long getSettledMicros() {

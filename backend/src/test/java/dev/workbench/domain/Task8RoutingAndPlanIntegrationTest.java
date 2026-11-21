@@ -3,18 +3,20 @@ package dev.workbench.domain;
 import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.PlanProposalService;
-import dev.workbench.task.RunRecordService;
-import dev.workbench.task.SourceArtifactService;
+import dev.workbench.planning.PlanProposalService;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.planning.SourceArtifactService;
 import java.time.Duration;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.planning.EntryRouteService;
+import dev.workbench.store.RunRecordService;
 
 /** 任务 8：规则路由、候选计划校验/调整和既有成果来源校验。 */
 @SpringBootTest(

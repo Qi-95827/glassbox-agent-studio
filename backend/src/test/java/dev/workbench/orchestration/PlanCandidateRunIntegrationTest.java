@@ -11,12 +11,12 @@ import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.framework.workflow.plan.PlanNode;
 import dev.workbench.framework.workflow.plan.PlanNodeSpec;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.persistence.repository.PlanCandidateRepository;
 import dev.workbench.planning.PlanCandidateInput;
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.planning.PlanCandidateService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.WorkspaceService;
 import java.time.Duration;
@@ -34,6 +34,10 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.framework.planning.PlanCandidateModel;
+import dev.workbench.planning.PlanService;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.store.RunRecordService;
 
 /** 确认候选后只创建一个运行，并按节点规格装配 Agent 与工具范围。 */
 @SpringBootTest(
@@ -66,12 +70,12 @@ class PlanCandidateRunIntegrationTest {
                 }
 
                 @Override
-                public io.agentscope.core.model.Model create(AgentExecutionRequest request) {
-                  return new ScriptedWriteModel(
+                public dev.workbench.framework.model.ModelClient create(AgentExecutionRequest request) {
+                  return new AgentScopeModelClient(new ScriptedWriteModel(
                       request.role(),
                       request.fileScopes(),
                       request.writeFiles(),
-                      BubbleSortFixture.contents());
+                      BubbleSortFixture.contents()));
                 }
               }));
     }

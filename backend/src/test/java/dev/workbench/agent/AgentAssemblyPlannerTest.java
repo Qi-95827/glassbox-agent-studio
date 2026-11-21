@@ -9,6 +9,7 @@ import dev.workbench.framework.skill.SkillId;
 import dev.workbench.framework.skill.SkillRegistry;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 
 /** 装配计划必须同时满足角色与任务授权，并固定实际工具版本。 */
 class AgentAssemblyPlannerTest {

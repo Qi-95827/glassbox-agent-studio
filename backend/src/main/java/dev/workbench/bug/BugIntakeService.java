@@ -15,6 +15,7 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import dev.workbench.store.RunRecordService;
 
 /**
  * 模拟 Bug 的原始描述、来源版本与分诊状态。
@@ -78,7 +79,7 @@ public class BugIntakeService {
     String duplicateOf = sameRows.isEmpty() ? null : sameRows.getFirst().getId();
     BugIntakeEntity row =
         new BugIntakeEntity(
-            dev.workbench.task.RunRecordService.id(),
+            dev.workbench.domain.WorkbenchIds.newId(),
             bug.id(),
             bug.source(),
             bug.version(),
@@ -94,7 +95,7 @@ public class BugIntakeService {
             duplicateOf,
             previousId,
             TriageStatus.PENDING.name(),
-            dev.workbench.task.RunRecordService.now());
+            dev.workbench.domain.WorkbenchTime.now());
     intakes.saveAndFlush(row);
     return toIntake(row);
   }
@@ -109,7 +110,7 @@ public class BugIntakeService {
         status.name(),
         status.reason(check.status()),
         check.id(),
-        dev.workbench.task.RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
   }
 
   /** 回归结果只记录实际执行的目标用例结论，不改变原始描述。 */
@@ -120,7 +121,7 @@ public class BugIntakeService {
         check.runId(),
         check.status().name(),
         check.id(),
-        dev.workbench.task.RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
   }
 
   public Intake findByRun(String runId) {

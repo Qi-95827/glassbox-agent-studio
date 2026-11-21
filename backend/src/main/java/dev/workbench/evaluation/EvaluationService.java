@@ -4,7 +4,7 @@ import dev.workbench.audit.AuditService;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -16,6 +16,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Service;
+import dev.workbench.domain.CaseStatus;
 
 /** 运行固定种子集；实际模型和工具仍由现有 AgentScope 链路调用。 */
 @Service
@@ -28,7 +29,7 @@ public class EvaluationService {
   private final EvaluationSuiteService suites;
   private final com.fasterxml.jackson.databind.ObjectMapper json;
   private final AuditService audit;
-  private final ExecutorService executor = Executors.newSingleThreadExecutor();
+  private final ExecutorService executor;
   private final AtomicBoolean active = new AtomicBoolean();
   private String activeBatch;
   private String currentRun;
@@ -42,7 +43,9 @@ public class EvaluationService {
       WorkspaceService workspaces,
       EvaluationSuiteService suites,
       com.fasterxml.jackson.databind.ObjectMapper json,
-      AuditService audit) {
+      AuditService audit,
+      @org.springframework.beans.factory.annotation.Qualifier("evaluationExecutor")
+          ExecutorService executor) {
     this.evaluations = evaluations;
     this.runs = runs;
     this.records = records;
@@ -51,6 +54,7 @@ public class EvaluationService {
     this.suites = suites;
     this.json = json;
     this.audit = audit;
+    this.executor = executor;
   }
 
   @PostConstruct
@@ -84,7 +88,7 @@ public class EvaluationService {
     }
     var version = suites.resolve(suite, config.version());
     if (!active.compareAndSet(false, true)) throw new IllegalStateException("已有评测正在运行。");
-    String id = RunRecordService.id();
+    String id = dev.workbench.domain.WorkbenchIds.newId();
     boolean created = false;
     try {
       String configJson;
@@ -266,7 +270,7 @@ public class EvaluationService {
         }
         throw new IllegalStateException("评测等待运行超过五分钟，已请求取消。");
       }
-      Thread.sleep(100);
+      dev.workbench.framework.concurrent.AsyncDelay.await(100);
     }
   }
 }

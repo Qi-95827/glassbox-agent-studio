@@ -3,7 +3,7 @@ package dev.workbench.workspace;
 import dev.workbench.audit.AuditService;
 import dev.workbench.persistence.entity.GitActionEntity;
 import dev.workbench.persistence.repository.GitActionRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.util.List;
@@ -34,7 +34,7 @@ public class WorkspaceCommitService {
     actions.markStartedUnknown(
         GitActionStatus.STARTED.name(),
         GitActionStatus.UNKNOWN.name(),
-        RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
   }
 
   public List<GitAction> list(String workspaceId) {
@@ -62,7 +62,7 @@ public class WorkspaceCommitService {
                           && "APPROVED".equals(a.get("STATUS"))
                           && fingerprint.equals(a.get("FINGERPRINT")));
       if (!approved) throw new IllegalStateException("需要绑定当前代码状态的有效批准。");
-      String actionId = RunRecordService.id(), time = RunRecordService.now();
+      String actionId = dev.workbench.domain.WorkbenchIds.newId(), time = dev.workbench.domain.WorkbenchTime.now();
       actions.save(
           new GitActionEntity(
               actionId,
@@ -82,7 +82,7 @@ public class WorkspaceCommitService {
             GitActionStatus.CONFIRMED.name(),
             commit,
             null,
-            RunRecordService.now());
+            dev.workbench.domain.WorkbenchTime.now());
         audit.record(
             "GIT_LOCAL_COMMIT",
             "WORKSPACE",
@@ -95,7 +95,7 @@ public class WorkspaceCommitService {
             GitActionStatus.UNKNOWN.name(),
             null,
             null,
-            RunRecordService.now());
+            dev.workbench.domain.WorkbenchTime.now());
         audit.record(
             "GIT_LOCAL_COMMIT",
             "WORKSPACE",

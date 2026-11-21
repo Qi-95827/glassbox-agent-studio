@@ -3,7 +3,7 @@ package dev.workbench.task;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.tool.ResourceVersion;
 import dev.workbench.framework.workflow.plan.PlanNode;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import dev.workbench.workspace.WorkspaceService;
@@ -13,6 +13,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.store.ReviewCompletion;
+import dev.workbench.store.StopCompletion;
 
 /**
  * 运行级交付投影：按已结算节点汇总文本结果、实际写入文件、审查收到的交接和检查结论。

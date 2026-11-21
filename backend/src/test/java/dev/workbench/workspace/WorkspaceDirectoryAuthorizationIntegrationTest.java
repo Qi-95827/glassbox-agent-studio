@@ -6,7 +6,7 @@ import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.store.RunRecordService;
 
 /** 目录授权、排除规则、服务端复验和撤权后重试。 */
 @SpringBootTest(

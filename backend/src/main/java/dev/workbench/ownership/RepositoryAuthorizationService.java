@@ -78,12 +78,12 @@ public class RepositoryAuthorizationService {
     var saved =
         authorizations.saveAndFlush(
             new RepositoryAuthorizationEntity(
-                dev.workbench.task.RunRecordService.id(),
+                java.util.UUID.randomUUID().toString(),
                 owner,
                 root.toString(),
                 key,
                 admin.getId(),
-                dev.workbench.task.RunRecordService.now()));
+                java.time.Instant.now().toString()));
     return view(saved, user.getUsername());
   }
 

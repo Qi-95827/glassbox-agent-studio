@@ -36,8 +36,8 @@ public class HandoffEvidenceRepository {
             .setParameter(
                 "kinds",
                 List.of(
-                    dev.workbench.bug.BugService.CheckKind.REPRODUCE.name(),
-                    dev.workbench.bug.BugService.CheckKind.REGRESSION.name()))
+                    "REPRODUCE",
+                    "REGRESSION"))
             .getResultList().stream().findFirst().orElse(null)
         != null;
   }

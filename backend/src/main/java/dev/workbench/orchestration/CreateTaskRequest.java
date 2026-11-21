@@ -1,5 +1,6 @@
 package dev.workbench.orchestration;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.RoleBudget;
 import dev.workbench.domain.TaskEntryKind;
@@ -42,523 +43,255 @@ public record CreateTaskRequest(
     List<String> directoryScopes,
     List<String> excludedPaths,
     Long maxCostMicros) {
-  /** 兼容尚未提供目录授权、排除规则和费用预算的完整请求。 */
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      TaskEntryKind entryKind,
-      Integer maxAgentRounds,
-      Integer maxAgentTools,
-      List<String> fileScopes,
-      Map<AgentRole, RoleBudget> roleBudgets,
-      Map<ToolKind, Integer> toolBudgets,
-      String workflowTemplate,
-      Boolean reviewPlan,
-      Map<String, WorkflowNodeBudget> nodeBudgets) {
+
+  /**
+   * 兼容历史调用点的前缀参数写法。
+   *
+   * <p>所有旧构造器都是规范参数的“前缀 + 默认 null”，这里按长度统一收敛；新代码应使用 builder。
+   */
+  @JsonIgnore
+  @SuppressWarnings("unchecked")
+  public CreateTaskRequest(Object... values) {
     this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        maxIdenticalTools,
-        entryKind,
-        maxAgentRounds,
-        maxAgentTools,
-        fileScopes,
-        roleBudgets,
-        toolBudgets,
-        workflowTemplate,
-        reviewPlan,
-        nodeBudgets,
-        null,
-        null,
-        null);
+        text(values, 0),
+        text(values, 1),
+        integer(values, 2),
+        integer(values, 3),
+        integer(values, 4),
+        text(values, 5),
+        text(values, 6),
+        text(values, 7),
+        bool(values, 8),
+        text(values, 9),
+        bool(values, 10),
+        integer(values, 11),
+        (List<String>) value(values, 12),
+        (List<String>) value(values, 13),
+        longValue(values, 14),
+        integer(values, 15),
+        (TaskEntryKind) value(values, 16),
+        integer(values, 17),
+        integer(values, 18),
+        (List<String>) value(values, 19),
+        (Map<AgentRole, RoleBudget>) value(values, 20),
+        (Map<ToolKind, Integer>) value(values, 21),
+        text(values, 22),
+        bool(values, 23),
+        (Map<String, WorkflowNodeBudget>) value(values, 24),
+        (List<String>) value(values, 25),
+        (List<String>) value(values, 26),
+        longValue(values, 27));
   }
 
-  /** 兼容原有任务创建调用。 */
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      TaskEntryKind entryKind,
-      Integer maxAgentRounds,
-      Integer maxAgentTools,
-      List<String> fileScopes,
-      Map<AgentRole, RoleBudget> roleBudgets,
-      Map<ToolKind, Integer> toolBudgets) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        maxIdenticalTools,
-        entryKind,
-        maxAgentRounds,
-        maxAgentTools,
-        fileScopes,
-        roleBudgets,
-        toolBudgets,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null);
+  public static Builder builder() {
+    return new Builder();
   }
 
-  /** 兼容尚未提供工具类型限额的请求。 */
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      TaskEntryKind entryKind,
-      Integer maxAgentRounds,
-      Integer maxAgentTools,
-      List<String> fileScopes,
-      Map<AgentRole, RoleBudget> roleBudgets) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        maxIdenticalTools,
-        entryKind,
-        maxAgentRounds,
-        maxAgentTools,
-        fileScopes,
-        roleBudgets,
-        null);
+  private static Object value(Object[] values, int index) {
+    return values != null && index < values.length ? values[index] : null;
   }
 
-  /** 兼容不含角色限额的多文件请求。 */
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      TaskEntryKind entryKind,
-      Integer maxAgentRounds,
-      Integer maxAgentTools,
-      List<String> fileScopes) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        maxIdenticalTools,
-        entryKind,
-        maxAgentRounds,
-        maxAgentTools,
-        fileScopes,
-        null);
+  private static String text(Object[] values, int index) {
+    return (String) value(values, index);
   }
 
-  /** 兼容原有单文件请求。 */
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      TaskEntryKind entryKind,
-      Integer maxAgentRounds,
-      Integer maxAgentTools) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        maxIdenticalTools,
-        entryKind,
-        maxAgentRounds,
-        maxAgentTools,
-        null);
+  private static Integer integer(Object[] values, int index) {
+    return (Integer) value(values, index);
   }
 
-  /** 兼容未配置单实例限额的调用。 */
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      TaskEntryKind entryKind) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        maxIdenticalTools,
-        entryKind,
-        null,
-        null);
+  private static Long longValue(Object[] values, int index) {
+    return (Long) value(values, index);
   }
 
-  /** 兼容已有内部调用；没有指定时使用通用入口。 */
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        maxIdenticalTools,
-        null);
+  private static Boolean bool(Object[] values, int index) {
+    return (Boolean) value(values, index);
   }
 
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria,
-      Long maxReportedTokens) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        maxReportedTokens,
-        null);
-  }
+  /** 显式 builder，避免继续增加位置参数构造器。 */
+  public static final class Builder {
+    private String goal;
+    private String scenario;
+    private Integer maxRounds;
+    private Integer maxTools;
+    private Integer maxSeconds;
+    private String modelMode;
+    private String workspaceId;
+    private String fileScope;
+    private Boolean writeEnabled;
+    private String bugId;
+    private Boolean memoryEnabled;
+    private Integer maxPerTool;
+    private List<String> constraints;
+    private List<String> acceptanceCriteria;
+    private Long maxReportedTokens;
+    private Integer maxIdenticalTools;
+    private TaskEntryKind entryKind;
+    private Integer maxAgentRounds;
+    private Integer maxAgentTools;
+    private List<String> fileScopes;
+    private Map<AgentRole, RoleBudget> roleBudgets;
+    private Map<ToolKind, Integer> toolBudgets;
+    private String workflowTemplate;
+    private Boolean reviewPlan;
+    private Map<String, WorkflowNodeBudget> nodeBudgets;
+    private List<String> directoryScopes;
+    private List<String> excludedPaths;
+    private Long maxCostMicros;
 
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool,
-      List<String> constraints,
-      List<String> acceptanceCriteria) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        constraints,
-        acceptanceCriteria,
-        null);
-  }
+    public Builder goal(String value) {
+      goal = value;
+      return this;
+    }
 
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled,
-      Integer maxPerTool) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        maxPerTool,
-        List.of(),
-        List.of());
-  }
+    public Builder scenario(String value) {
+      scenario = value;
+      return this;
+    }
 
-  public CreateTaskRequest(
-      String goal, String scenario, Integer maxRounds, Integer maxTools, Integer maxSeconds) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        "mock",
-        null,
-        null,
-        false,
-        null,
-        false,
-        null);
-  }
+    public Builder limits(Integer rounds, Integer tools, Integer seconds) {
+      maxRounds = rounds;
+      maxTools = tools;
+      maxSeconds = seconds;
+      return this;
+    }
 
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        null,
-        null,
-        false,
-        null,
-        false,
-        null);
-  }
+    public Builder modelMode(String value) {
+      modelMode = value;
+      return this;
+    }
 
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        false,
-        null);
-  }
+    public Builder workspace(String id, String scope) {
+      workspaceId = id;
+      fileScope = scope;
+      return this;
+    }
 
-  public CreateTaskRequest(
-      String goal,
-      String scenario,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxSeconds,
-      String modelMode,
-      String workspaceId,
-      String fileScope,
-      Boolean writeEnabled,
-      String bugId,
-      Boolean memoryEnabled) {
-    this(
-        goal,
-        scenario,
-        maxRounds,
-        maxTools,
-        maxSeconds,
-        modelMode,
-        workspaceId,
-        fileScope,
-        writeEnabled,
-        bugId,
-        memoryEnabled,
-        null);
+    public Builder writeEnabled(Boolean value) {
+      writeEnabled = value;
+      return this;
+    }
+
+    public Builder bugId(String value) {
+      bugId = value;
+      return this;
+    }
+
+    public Builder memoryEnabled(Boolean value) {
+      memoryEnabled = value;
+      return this;
+    }
+
+    public Builder maxPerTool(Integer value) {
+      maxPerTool = value;
+      return this;
+    }
+
+    public Builder constraints(List<String> value) {
+      constraints = value;
+      return this;
+    }
+
+    public Builder acceptanceCriteria(List<String> value) {
+      acceptanceCriteria = value;
+      return this;
+    }
+
+    public Builder maxReportedTokens(Long value) {
+      maxReportedTokens = value;
+      return this;
+    }
+
+    public Builder maxIdenticalTools(Integer value) {
+      maxIdenticalTools = value;
+      return this;
+    }
+
+    public Builder entryKind(TaskEntryKind value) {
+      entryKind = value;
+      return this;
+    }
+
+    public Builder agentLimits(Integer rounds, Integer tools) {
+      maxAgentRounds = rounds;
+      maxAgentTools = tools;
+      return this;
+    }
+
+    public Builder fileScopes(List<String> value) {
+      fileScopes = value;
+      return this;
+    }
+
+    public Builder roleBudgets(Map<AgentRole, RoleBudget> value) {
+      roleBudgets = value;
+      return this;
+    }
+
+    public Builder toolBudgets(Map<ToolKind, Integer> value) {
+      toolBudgets = value;
+      return this;
+    }
+
+    public Builder workflowTemplate(String value) {
+      workflowTemplate = value;
+      return this;
+    }
+
+    public Builder reviewPlan(Boolean value) {
+      reviewPlan = value;
+      return this;
+    }
+
+    public Builder nodeBudgets(Map<String, WorkflowNodeBudget> value) {
+      nodeBudgets = value;
+      return this;
+    }
+
+    public Builder directoryScopes(List<String> value) {
+      directoryScopes = value;
+      return this;
+    }
+
+    public Builder excludedPaths(List<String> value) {
+      excludedPaths = value;
+      return this;
+    }
+
+    public Builder maxCostMicros(Long value) {
+      maxCostMicros = value;
+      return this;
+    }
+
+    public CreateTaskRequest build() {
+      return new CreateTaskRequest(
+          goal,
+          scenario,
+          maxRounds,
+          maxTools,
+          maxSeconds,
+          modelMode,
+          workspaceId,
+          fileScope,
+          writeEnabled,
+          bugId,
+          memoryEnabled,
+          maxPerTool,
+          constraints,
+          acceptanceCriteria,
+          maxReportedTokens,
+          maxIdenticalTools,
+          entryKind,
+          maxAgentRounds,
+          maxAgentTools,
+          fileScopes,
+          roleBudgets,
+          toolBudgets,
+          workflowTemplate,
+          reviewPlan,
+          nodeBudgets,
+          directoryScopes,
+          excludedPaths,
+          maxCostMicros);
+    }
   }
 }

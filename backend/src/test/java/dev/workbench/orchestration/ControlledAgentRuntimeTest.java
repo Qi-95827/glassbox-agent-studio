@@ -14,12 +14,13 @@ import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.control.AgentBudgetPolicy;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.model.AgentModelRegistry.ModelReference;
-import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.domain.RunLimits;
+import dev.workbench.store.RunRecordService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import dev.workbench.store.RunRecordService;
 
 /** 未完成装配或版本不符时，绝不能进入工具调用。 */
 class ControlledAgentRuntimeTest {

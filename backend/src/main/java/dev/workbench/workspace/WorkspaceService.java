@@ -4,7 +4,7 @@ import dev.workbench.persistence.entity.WorkspaceDeclaredFileEntity;
 import dev.workbench.persistence.entity.WorkspaceEntity;
 import dev.workbench.persistence.repository.WorkspaceDeclaredFileRepository;
 import dev.workbench.persistence.repository.WorkspaceRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -21,6 +21,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
+import dev.workbench.domain.ExecutionScope;
+import dev.workbench.domain.WorkspaceVersionConflict;
 
 /** 个人本地仓库工作区；Git 隔离不等于不可信代码执行沙箱。 */
 @Service
@@ -62,7 +64,7 @@ public class WorkspaceService {
 
   private String ownerScope() {
     return ownership == null
-        ? dev.workbench.planning.ExecutionScope.LOCAL.ownerScopeKey()
+        ? dev.workbench.domain.ExecutionScope.LOCAL.ownerScopeKey()
         : ownership.scope().ownerScopeKey();
   }
 
@@ -103,7 +105,7 @@ public class WorkspaceService {
     if (!root.equals(repo)) throw new IllegalArgumentException("请填写仓库根目录，而不是子目录或非仓库目录。");
     String commit = runGit(root, "rev-parse", "--verify", branchRef + "^{commit}").strip();
     if (!commit.matches("[0-9a-fA-F]{40,64}")) throw new IllegalStateException("无法确定基础提交。");
-    String id = RunRecordService.id();
+    String id = dev.workbench.domain.WorkbenchIds.newId();
     String name = "agent/work-" + id.substring(0, 12);
     Path target = workspaceRoot.resolve(id).normalize();
     if (!target.startsWith(workspaceRoot)) throw new IllegalStateException("工作区路径越界。");
@@ -116,7 +118,7 @@ public class WorkspaceService {
     runGit(root, "worktree", "add", "-b", name, "--", target.toString(), commit);
     workspaceRows.save(
         new WorkspaceEntity(
-            id, root.toString(), target.toString(), branch, commit, name, RunRecordService.now()));
+            id, root.toString(), target.toString(), branch, commit, name, dev.workbench.domain.WorkbenchTime.now()));
     stampOwner(id);
     return get(id);
   }

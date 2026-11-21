@@ -2,6 +2,7 @@ package dev.workbench.memory;
 
 import java.util.List;
 import org.springframework.web.bind.annotation.*;
+import dev.workbench.domain.MemoryCategory;
 
 /** 本地用户管理已确认项目背景；版本用于防止并发覆盖。 */
 @RestController

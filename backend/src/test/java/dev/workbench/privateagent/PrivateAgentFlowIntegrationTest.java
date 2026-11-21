@@ -6,11 +6,11 @@ import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.framework.workflow.plan.PlanNode;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.planning.PlanCandidateInput;
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.planning.PlanCandidateService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -25,6 +25,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import dev.workbench.store.RunRecordService;
 
 /** 私有只读 Agent 从发布、推荐、确认到实际搜索和交接的闭环。 */
 @SpringBootTest(
@@ -279,7 +280,7 @@ class PrivateAgentFlowIntegrationTest {
     var created =
         this.candidates.generate(
             new PlanCandidateService.GenerateRequest(
-                RunRecordService.id().replace("-", ""), input, null, "unpublished"));
+                dev.workbench.domain.WorkbenchIds.newId().replace("-", ""), input, null, "unpublished"));
     var view = wait(created);
     assertEquals("INVALID", view.status(), view.errors().toString());
     assertTrue(
@@ -383,7 +384,7 @@ class PrivateAgentFlowIntegrationTest {
     var created =
         this.candidates.generate(
             new PlanCandidateService.GenerateRequest(
-                RunRecordService.id().replace("-", ""), input, null, "private-" + agentId));
+                dev.workbench.domain.WorkbenchIds.newId().replace("-", ""), input, null, "private-" + agentId));
     long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
     var view = created;
     while (view.status().equals("GENERATING")) {

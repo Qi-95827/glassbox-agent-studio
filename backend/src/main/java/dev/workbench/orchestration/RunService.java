@@ -15,8 +15,8 @@ import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.control.StopExecution;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
-import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.domain.RunLimits;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.RunHandoverService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
@@ -29,10 +29,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.springframework.stereotype.Service;
+import dev.workbench.planning.EntryPolicyService;
+import dev.workbench.planning.EntryRouteService;
+import dev.workbench.store.ReviewCompletion;
+import dev.workbench.store.StopCompletion;
 
 /** 负责 0.1 单进程任务的创建、调度、取消和检查点恢复。 安全和额度检查由执行器实施，Agent 本身不能授予工具权限。 */
 @Service
-public class RunService {
+public class RunService implements dev.workbench.planning.CandidateRunDispatcher {
   private final RunRecordService repository;
   private final TaskCreationService taskCreations;
   private final AgentExecutor agent;
@@ -47,7 +51,7 @@ public class RunService {
   private final dev.workbench.task.CostService costs;
   private final EntryRouteService entryRoutes;
   private final WorkspaceAuthorizationService workspaceAuthorization;
-  private final ExecutorService executor = Executors.newSingleThreadExecutor();
+  private final ExecutorService executor;
   private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
   private final Set<String> paused = ConcurrentHashMap.newKeySet();
   private final java.util.Map<String, Object> pauseMonitors = new ConcurrentHashMap<>();
@@ -73,7 +77,9 @@ public class RunService {
       WorkflowScheduler workflows,
       dev.workbench.task.CostService costs,
       EntryRouteService entryRoutes,
-      WorkspaceAuthorizationService workspaceAuthorization) {
+      WorkspaceAuthorizationService workspaceAuthorization,
+      @org.springframework.beans.factory.annotation.Qualifier("workflowRunExecutor")
+          ExecutorService executor) {
     this.repository = repository;
     this.taskCreations = taskCreations;
     this.agent = agent;
@@ -88,6 +94,7 @@ public class RunService {
     this.costs = costs;
     this.entryRoutes = entryRoutes;
     this.workspaceAuthorization = workspaceAuthorization;
+    this.executor = executor;
   }
 
   /** 兼容只构造队列控制边界的单元测试；入口路由、目录授权和费用在完整上下文中由 Spring 注入。 */
@@ -102,7 +109,8 @@ public class RunService {
       RunHandoverService handovers,
       EntryPolicyService entryPolicies,
       AgentContextAssembler contexts,
-      WorkflowScheduler workflows) {
+      WorkflowScheduler workflows,
+      ExecutorService executor) {
     this(
         repository,
         taskCreations,
@@ -117,7 +125,8 @@ public class RunService {
         workflows,
         null,
         null,
-        null);
+        null,
+        executor);
   }
 
   /** 重启后不能假设此前未结束的调用已经成功。 */
@@ -251,8 +260,8 @@ public class RunService {
         request.workflowTemplate() != null
             ? request.workflowTemplate()
             : routeDecision == null ? null : routeDecision.templateId();
-    String taskId = RunRecordService.id();
-    String runId = RunRecordService.id();
+    String taskId = dev.workbench.domain.WorkbenchIds.newId();
+    String runId = dev.workbench.domain.WorkbenchIds.newId();
     var task =
         new TaskDefinition(
             java.util.UUID.fromString(taskId),
@@ -369,7 +378,7 @@ public class RunService {
     } catch (java.util.concurrent.RejectedExecutionException e) {
       String reason = "运行未能加入执行队列，尚未启动 Agent。";
       repository.finishStoppedRun(
-          new dev.workbench.task.StopCompletion(
+          new dev.workbench.store.StopCompletion(
               java.util.UUID.fromString(runId),
               null,
               dev.workbench.domain.StopCause.UNCLASSIFIED_FAILURE,
@@ -388,7 +397,7 @@ public class RunService {
     repository.event(id, EventType.CANCEL_REQUESTED, "用户请求取消。");
     if (run.status() == RunStatus.PENDING) {
       repository.finishStoppedRun(
-          new dev.workbench.task.StopCompletion(
+          new dev.workbench.store.StopCompletion(
               java.util.UUID.fromString(id),
               null,
               dev.workbench.domain.StopCause.USER_CANCELLED,
@@ -437,7 +446,7 @@ public class RunService {
     RunSnapshot original = repository.runSnapshot(oldId);
     if (original.status() != RunStatus.INTERRUPTED) throw new IllegalStateException("只有中断的运行可以恢复。");
     if (workflows.plan(oldId) != null) {
-      String nextId = RunRecordService.id();
+      String nextId = dev.workbench.domain.WorkbenchIds.newId();
       workflows.recover(
           oldId, java.util.UUID.fromString(checkpointId), java.util.UUID.fromString(nextId));
       dispatchRecovery(nextId, CheckpointStage.BEFORE_TOOL, null);
@@ -457,7 +466,7 @@ public class RunService {
     }
     if (repository.hasRecovery(oldId)) throw new IllegalStateException("此运行已经发起恢复。");
 
-    String nextId = RunRecordService.id();
+    String nextId = dev.workbench.domain.WorkbenchIds.newId();
     repository.createRecoveryRun(java.util.UUID.fromString(nextId), original, checkpoint);
     if (costs != null) costs.inheritLimit(oldId, nextId);
     dispatchRecovery(nextId, checkpoint.stage(), checkpoint.toolResult());
@@ -485,7 +494,7 @@ public class RunService {
         workflow = workflows.plan(id);
       } catch (RuntimeException invalid) {
         repository.finishStoppedRun(
-            new dev.workbench.task.StopCompletion(
+            new dev.workbench.store.StopCompletion(
                 java.util.UUID.fromString(id),
                 null,
                 StopCause.UNCLASSIFIED_FAILURE,
@@ -518,7 +527,7 @@ public class RunService {
       }
       return;
     }
-    String agentId = RunRecordService.id();
+    String agentId = dev.workbench.domain.WorkbenchIds.newId();
     boolean agentStarted = false;
     AgentRole activeRole = AgentRole.ANALYST;
     try {
@@ -605,7 +614,7 @@ public class RunService {
                 new AgentExecutionRequest(
                     AgentRole.ANALYST,
                     agentId,
-                    contexts.assembleInput(new AgentContextInput(task, id, initial)),
+                    contexts.assembleInput(new AgentContextInput(task, id, initialCheck(initial))),
                     task.workspaceId(),
                     task.fileScopes(),
                     false,
@@ -662,7 +671,7 @@ public class RunService {
       String analysisAnswer = answer;
       HandoffParty upstreamParty = HandoffParty.ANALYSIS_AGENT;
       if (task.writeEnabled()) {
-        String coderId = RunRecordService.id();
+        String coderId = dev.workbench.domain.WorkbenchIds.newId();
         Handoff codingInput =
             new Handoff(
                 task.id().toString(),
@@ -749,7 +758,7 @@ public class RunService {
             EventType.TEST_FINISHED,
             "回归检测记录 " + regression.id() + "：" + regression.status() + "；需结合具体测试与差异审查。");
       }
-      String reviewerId = RunRecordService.id();
+      String reviewerId = dev.workbench.domain.WorkbenchIds.newId();
       String verification =
           regression == null
               ? "没有执行本次回归测试"
@@ -842,7 +851,7 @@ public class RunService {
                             ? "回归测试通过，仍需用户结合差异与原问题审查。"
                             : "回归检查未通过或无法执行；不得报告 Bug 已修复。";
             repository.finishReviewedRun(
-                new dev.workbench.task.ReviewCompletion(
+                new dev.workbench.store.ReviewCompletion(
                     java.util.UUID.fromString(id),
                     java.util.UUID.fromString(reviewerId),
                     review,
@@ -855,7 +864,7 @@ public class RunService {
                     control.elapsed()));
           } else {
             repository.finishReviewedRun(
-                new dev.workbench.task.ReviewCompletion(
+                new dev.workbench.store.ReviewCompletion(
                     java.util.UUID.fromString(id),
                     java.util.UUID.fromString(reviewerId),
                     review,
@@ -1101,7 +1110,7 @@ public class RunService {
               null);
     }
     repository.finishStoppedRun(
-        new dev.workbench.task.StopCompletion(
+        new dev.workbench.store.StopCompletion(
             java.util.UUID.fromString(runId),
             agentStarted ? java.util.UUID.fromString(agentId) : null,
             stopCause,
@@ -1122,5 +1131,17 @@ public class RunService {
       result.add(value.strip());
     }
     return List.copyOf(result);
+  }
+  private static dev.workbench.framework.context.InitialCheck initialCheck(BugService.Check check) {
+    if (check == null) return null;
+    return new dev.workbench.framework.context.InitialCheck(
+        check.id(),
+        check.runId(),
+        check.bugId(),
+        check.workspaceId(),
+        check.kind().name(),
+        check.status().name(),
+        check.workspaceFingerprint(),
+        check.output());
   }
 }

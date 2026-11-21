@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.time.Duration;
 import java.util.List;
@@ -28,6 +28,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import dev.workbench.framework.planning.PlanCandidateModel;
+import dev.workbench.store.RunRecordService;
 
 /** 候选计划只保存草稿，不创建任务、运行或工作区写入。 */
 @AutoConfigureMockMvc

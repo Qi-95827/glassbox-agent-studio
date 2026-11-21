@@ -4,7 +4,7 @@ import dev.workbench.domain.CheckpointSkipReason;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
-import dev.workbench.evaluation.CaseStatus;
+import dev.workbench.domain.CaseStatus;
 import dev.workbench.persistence.repository.ObservabilityRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;

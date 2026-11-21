@@ -22,12 +22,12 @@ import dev.workbench.framework.workflow.check.StaleEvidenceException;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanService;
-import dev.workbench.framework.workflow.view.ExecutionViewService;
+import dev.workbench.planning.PlanService;
+import dev.workbench.delivery.ExecutionViewService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
-import dev.workbench.task.TaskSupplementService;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.orchestration.TaskSupplementService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.WorkspaceService;
 import io.agentscope.core.message.Msg;
@@ -55,6 +55,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import reactor.core.publisher.Flux;
+import dev.workbench.delivery.ExecutionViewService;
+import dev.workbench.planning.PlanService;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.store.RunRecordService;
 
 /** 模拟 Bug 动态修复流程：真实容器证据与可控状态反例。 */
 @AutoConfigureMockMvc
@@ -913,7 +917,7 @@ class BugDynamicWorkflowIntegrationTest {
         "FAILURES_OBSERVED",
         "模拟复现输出",
         1,
-        RunRecordService.now(),
+        dev.workbench.domain.WorkbenchTime.now(),
         staleFingerprint,
         id);
     db.update(
@@ -921,9 +925,9 @@ class BugDynamicWorkflowIntegrationTest {
             + " WHERE id=?",
         "模拟复现检查通过",
         bugCheckId,
-        RunRecordService.now(),
+        dev.workbench.domain.WorkbenchTime.now(),
         claimed.checkId());
-    plans.finishCheckNode(id, nodes.getFirst().id(), PlanNodeStatus.COMPLETED, RunRecordService.now());
+    plans.finishCheckNode(id, nodes.getFirst().id(), PlanNodeStatus.COMPLETED, dev.workbench.domain.WorkbenchTime.now());
 
     var check = workflowRuns.workflowChecks(id).getFirst();
     assertEquals(Boolean.FALSE, check.evidenceCurrent());
@@ -1040,7 +1044,7 @@ class BugDynamicWorkflowIntegrationTest {
                   status.name(),
                   output,
                   1,
-                  RunRecordService.now(),
+                  dev.workbench.domain.WorkbenchTime.now(),
                   fingerprint,
                   runId);
               return new BugService.Check(
@@ -1051,7 +1055,7 @@ class BugDynamicWorkflowIntegrationTest {
                   status,
                   output,
                   1,
-                  RunRecordService.now(),
+                  dev.workbench.domain.WorkbenchTime.now(),
                   fingerprint,
                   runId);
             })
@@ -1145,7 +1149,7 @@ class BugDynamicWorkflowIntegrationTest {
         status,
         output,
         1,
-        RunRecordService.now(),
+        dev.workbench.domain.WorkbenchTime.now(),
         "a".repeat(64),
         runId);
   }
@@ -1154,7 +1158,7 @@ class BugDynamicWorkflowIntegrationTest {
     Model model = new FileWriterFixture();
     org.mockito.Mockito.doReturn(
             new AgentModelRegistry.SelectedModel(
-                model,
+                new AgentScopeModelClient(model),
                 new AgentModelRegistry.ModelReference(ModelMode.MOCK, model.getModelName(), 1)))
         .when(workflowModelRegistry)
         .select(

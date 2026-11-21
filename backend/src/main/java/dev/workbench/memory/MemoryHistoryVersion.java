@@ -2,6 +2,8 @@ package dev.workbench.memory;
 
 import java.time.Instant;
 import java.util.UUID;
+import dev.workbench.domain.MemoryCategory;
+import dev.workbench.domain.MemoryStatus;
 
 /** 用户确认记忆某一历史版本，包含当时的正文。 */
 public record MemoryHistoryVersion(

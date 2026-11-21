@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import java.time.Duration;
@@ -13,6 +13,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.planning.RecoveryLeaseService;
+import dev.workbench.planning.RunSnapshotService;
 
 /** 周期快照、损坏检测和恢复租约的并发/过期语义。 */
 @SpringBootTest(

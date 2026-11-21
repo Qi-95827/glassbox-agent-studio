@@ -5,9 +5,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.TaskEntryKind;
+import dev.workbench.observability.EventQueryService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.store.RunRecordService;
 
 /** 同一运行并发写事件时，运行内序号与游标分页保持无遗漏、无重复、无串运行。 */
 @SpringBootTest(

@@ -8,7 +8,7 @@ import dev.workbench.domain.RunStatus;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.persistence.entity.RunHandoverEntity;
 import dev.workbench.persistence.repository.RunHandoverRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -50,7 +50,7 @@ public class RunHandoverService {
     if (inFlight(runId) > 0)
       throw new IllegalStateException("仍有在途动作未结算，请等待停止边界后再接手。");
     String fingerprint = workspaces.snapshotFingerprint(task.workspaceId());
-    String id = RunRecordService.id(), now = RunRecordService.now();
+    String id = dev.workbench.domain.WorkbenchIds.newId(), now = dev.workbench.domain.WorkbenchTime.now();
     rows.save(
         new RunHandoverEntity(
             id,
@@ -73,7 +73,7 @@ public class RunHandoverService {
     if (active == null) throw new IllegalStateException("该运行没有待交还的人工接手。");
     String current = workspaces.snapshotFingerprint(active.getWorkspaceId());
     boolean changed = !active.getBaselineFingerprint().equals(current);
-    active.markReturned(current, changed, safeNote(note), RunRecordService.now());
+    active.markReturned(current, changed, safeNote(note), dev.workbench.domain.WorkbenchTime.now());
     rows.save(active);
     // 触发审批按当前版本重新校验；旧批准会转为 STALE，不会被继续复用。
     approvals.list(active.getWorkspaceId());

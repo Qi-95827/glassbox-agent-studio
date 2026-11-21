@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.auth.AuthService;
 import dev.workbench.domain.ToolKind;
-import dev.workbench.planning.ExecutionScopeResolver;
+import dev.workbench.domain.ExecutionScopeResolver;
 import dev.workbench.persistence.entity.PrivateAgentEntity;
 import dev.workbench.persistence.entity.PrivateAgentVersionEntity;
 import dev.workbench.persistence.entity.PrivateSkillEntity;
@@ -31,6 +31,7 @@ import java.util.Set;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import dev.workbench.store.RunRecordService;
 
 /**
  * 我的 Skill、工具和 Agent。
@@ -279,10 +280,10 @@ public class PrivateComponentService {
     validateSkill(request);
     var row =
         new PrivateSkillEntity(
-            dev.workbench.task.RunRecordService.id(),
+            dev.workbench.domain.WorkbenchIds.newId(),
             scope(),
             request.name().strip(),
-            dev.workbench.task.RunRecordService.now());
+            dev.workbench.domain.WorkbenchTime.now());
     apply(row, request);
     return skillView(skills.saveAndFlush(row));
   }
@@ -293,7 +294,7 @@ public class PrivateComponentService {
     requireEditable(row.getStatus());
     validateSkill(request);
     apply(row, request);
-    row.setUpdatedAt(dev.workbench.task.RunRecordService.now());
+    row.setUpdatedAt(dev.workbench.domain.WorkbenchTime.now());
     return skillView(skills.saveAndFlush(row));
   }
 
@@ -302,7 +303,7 @@ public class PrivateComponentService {
     var row = ownSkill(id);
     requireEditable(row.getStatus());
     int version = row.getCurrentVersion() + 1;
-    String now = dev.workbench.task.RunRecordService.now();
+    String now = dev.workbench.domain.WorkbenchTime.now();
     skillVersions.saveAndFlush(
         new PrivateSkillVersionEntity(
             row.getId(),
@@ -325,7 +326,7 @@ public class PrivateComponentService {
   public SkillView archiveSkill(String id) {
     var row = ownSkill(id);
     row.setStatus("ARCHIVED");
-    row.setArchivedAt(dev.workbench.task.RunRecordService.now());
+    row.setArchivedAt(dev.workbench.domain.WorkbenchTime.now());
     row.setUpdatedAt(row.getArchivedAt());
     return skillView(skills.saveAndFlush(row));
   }
@@ -362,10 +363,10 @@ public class PrivateComponentService {
     validateTool(request);
     var row =
         new PrivateToolEntity(
-            dev.workbench.task.RunRecordService.id(),
+            dev.workbench.domain.WorkbenchIds.newId(),
             scope(),
             request.name().strip(),
-            dev.workbench.task.RunRecordService.now());
+            dev.workbench.domain.WorkbenchTime.now());
     apply(row, request);
     return toolView(tools.saveAndFlush(row));
   }
@@ -384,7 +385,7 @@ public class PrivateComponentService {
     var row = ownTool(id);
     requireEditable(row.getStatus());
     int version = row.getCurrentVersion() + 1;
-    String now = dev.workbench.task.RunRecordService.now();
+    String now = dev.workbench.domain.WorkbenchTime.now();
     toolVersions.saveAndFlush(
         new PrivateToolVersionEntity(
             row.getId(),
@@ -405,7 +406,7 @@ public class PrivateComponentService {
   public ToolView archiveTool(String id) {
     var row = ownTool(id);
     row.setStatus("ARCHIVED");
-    row.setArchivedAt(dev.workbench.task.RunRecordService.now());
+    row.setArchivedAt(dev.workbench.domain.WorkbenchTime.now());
     row.setUpdatedAt(row.getArchivedAt());
     return toolView(tools.saveAndFlush(row));
   }
@@ -440,10 +441,10 @@ public class PrivateComponentService {
     validateAgent(request);
     var row =
         new PrivateAgentEntity(
-            dev.workbench.task.RunRecordService.id(),
+            dev.workbench.domain.WorkbenchIds.newId(),
             scope(),
             request.name().strip(),
-            dev.workbench.task.RunRecordService.now());
+            dev.workbench.domain.WorkbenchTime.now());
     apply(row, request);
     return agentView(agents.saveAndFlush(row));
   }
@@ -491,7 +492,7 @@ public class PrivateComponentService {
     }
     String components = write(Map.of("skills", pinnedSkills, "tools", pinnedTools));
     int version = row.getCurrentVersion() + 1;
-    String now = dev.workbench.task.RunRecordService.now();
+    String now = dev.workbench.domain.WorkbenchTime.now();
     String specSha =
         sha256(
             String.join(
@@ -531,7 +532,7 @@ public class PrivateComponentService {
   public AgentView archiveAgent(String id) {
     var row = ownAgent(id);
     row.setStatus("ARCHIVED");
-    row.setArchivedAt(dev.workbench.task.RunRecordService.now());
+    row.setArchivedAt(dev.workbench.domain.WorkbenchTime.now());
     row.setUpdatedAt(row.getArchivedAt());
     return agentView(agents.saveAndFlush(row));
   }
@@ -869,7 +870,7 @@ public class PrivateComponentService {
     row.setOutputContract(blankToNull(request.outputContract()));
     row.setContentMd(request.contentMd().strip());
     row.setDraftSha256(sha256(request.contentMd().strip()));
-    row.setUpdatedAt(dev.workbench.task.RunRecordService.now());
+    row.setUpdatedAt(dev.workbench.domain.WorkbenchTime.now());
   }
 
   private void apply(PrivateToolEntity row, ToolRequest request) {
@@ -885,7 +886,7 @@ public class PrivateComponentService {
                 .toList();
     row.setFileExtensionsJson(write(extensions));
     row.setDraftSha256(toolSpecSha(row));
-    row.setUpdatedAt(dev.workbench.task.RunRecordService.now());
+    row.setUpdatedAt(dev.workbench.domain.WorkbenchTime.now());
   }
 
   private void apply(PrivateAgentEntity row, AgentRequest request) {
@@ -916,7 +917,7 @@ public class PrivateComponentService {
                 row.getPermissionRole(),
                 row.getSkillRefsJson(),
                 row.getToolRefsJson())));
-    row.setUpdatedAt(dev.workbench.task.RunRecordService.now());
+    row.setUpdatedAt(dev.workbench.domain.WorkbenchTime.now());
   }
 
   private void validateSkill(SkillRequest request) {

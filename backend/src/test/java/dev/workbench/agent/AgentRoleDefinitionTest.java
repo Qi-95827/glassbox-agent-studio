@@ -6,6 +6,8 @@ import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ToolKind;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import dev.workbench.framework.agent.definition.AgentRoleDefinition;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 
 /** 角色能力与用户授权求交集，不能由单方扩大工具范围。 */
 class AgentRoleDefinitionTest {

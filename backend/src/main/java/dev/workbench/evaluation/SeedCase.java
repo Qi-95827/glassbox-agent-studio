@@ -1,6 +1,7 @@
 package dev.workbench.evaluation;
 
 import dev.workbench.domain.RunStatus;
+import dev.workbench.domain.TaskEntryKind;
 
 /** 固定版本种子样本，场景与预算明确，全部使用模拟模型。 */
 public enum SeedCase {

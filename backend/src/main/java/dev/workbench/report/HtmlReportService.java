@@ -2,11 +2,11 @@ package dev.workbench.report;
 
 import dev.workbench.bug.BugIntakeService;
 import dev.workbench.bug.BugService;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.RunMetricsService;
-import dev.workbench.orchestration.Handoff;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.domain.Handoff;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.WorkspaceService;

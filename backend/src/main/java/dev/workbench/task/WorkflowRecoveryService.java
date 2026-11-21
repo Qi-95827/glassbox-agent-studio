@@ -12,7 +12,7 @@ import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNode;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
@@ -34,6 +34,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.domain.RunLimits;
+import dev.workbench.domain.TaskEntryKind;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.store.ReviewCompletion;
+import dev.workbench.store.StopCompletion;
+import dev.workbench.planning.RecoveryLeaseService;
+import dev.workbench.planning.RunSnapshotService;
 
 /** 验证纯文本和只读工作区的节点边界并创建恢复运行。*/
 @Service
@@ -181,7 +188,7 @@ public class WorkflowRecoveryService {
             costs.inheritLimit(runId, nextRunId.toString());
             var reused = new LinkedHashMap<String, UUID>();
             stored.boundary().sources().forEach((key, source) -> reused.put(key, source.agentId()));
-            plans.attachRecovery(nextRunId.toString(), checkpointId, reused, RunRecordService.now());
+            plans.attachRecovery(nextRunId.toString(), checkpointId, reused, dev.workbench.domain.WorkbenchTime.now());
             runs.event(nextRunId.toString(), EventType.RECOVERY_STARTED, "已从动态工作流检查点恢复，保留原运行及累计消耗。");
           });
     } finally {

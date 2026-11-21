@@ -8,9 +8,9 @@ import dev.workbench.framework.agent.definition.AgentDefinition;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.agent.execution.AgentExecutor;
 import dev.workbench.framework.model.AgentModelRegistry;
-import dev.workbench.framework.model.ControlledModel;
+import dev.workbench.infrastructure.agentscope.ControlledModel;
 import dev.workbench.framework.tool.AgentToolContext;
-import dev.workbench.framework.tool.AgentToolRegistry;
+import dev.workbench.infrastructure.agentscope.AgentToolRegistry;
 import dev.workbench.workspace.AuthorizedFileSet;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
@@ -99,7 +99,7 @@ public class AgentScopeExecutor implements AgentExecutor {
     var selectedModel = models.select(effectiveRequest);
     Model controlled =
         new ControlledModel(
-            selectedModel.model(),
+            ((AgentScopeModelClient) selectedModel.client()).model(),
             effectiveMode,
             runtime,
             failure,

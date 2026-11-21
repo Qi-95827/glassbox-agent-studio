@@ -9,9 +9,12 @@ import dev.workbench.bug.BugService;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.framework.context.AgentContextAssembler;
 import dev.workbench.infrastructure.agentscope.AgentScopeExecutor;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import org.junit.jupiter.api.Test;
+import dev.workbench.domain.TaskEntryKind;
+import dev.workbench.planning.EntryPolicyService;
+import dev.workbench.store.RunRecordService;
 
 /** 队列明确拒绝时应保留可查看的失败运行，不声称启动过 Agent。 */
 class RunServiceQueueTest {
@@ -30,9 +33,10 @@ class RunServiceQueueTest {
             mock(BugService.class),
             mock(dev.workbench.bug.BugIntakeService.class),
             mock(dev.workbench.workspace.RunHandoverService.class),
-            mock(dev.workbench.domain.EntryPolicyService.class),
+            mock(dev.workbench.planning.EntryPolicyService.class),
             mock(AgentContextAssembler.class),
-            mock(WorkflowScheduler.class));
+            mock(WorkflowScheduler.class),
+            java.util.concurrent.Executors.newSingleThreadExecutor());
     service.shutdown();
     String runId = service.create(new CreateTaskRequest("任务", "normal", 4, 2, 30));
     verify(creations).persist(any(), any(), any(), anyString(), any(), anyBoolean(), any(), any(), any(), any());
@@ -62,9 +66,10 @@ class RunServiceQueueTest {
             mock(BugService.class),
             mock(dev.workbench.bug.BugIntakeService.class),
             mock(dev.workbench.workspace.RunHandoverService.class),
-            mock(dev.workbench.domain.EntryPolicyService.class),
+            mock(dev.workbench.planning.EntryPolicyService.class),
             mock(AgentContextAssembler.class),
-            mock(WorkflowScheduler.class));
+            mock(WorkflowScheduler.class),
+            java.util.concurrent.Executors.newSingleThreadExecutor());
     var runId = java.util.UUID.randomUUID();
     var taskId = java.util.UUID.randomUUID();
     var checkpointId = java.util.UUID.randomUUID();

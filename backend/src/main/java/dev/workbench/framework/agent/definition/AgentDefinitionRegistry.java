@@ -1,6 +1,6 @@
 package dev.workbench.framework.agent.definition;
 
-import dev.workbench.agent.AgentRoleRegistry;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 import dev.workbench.domain.AgentRole;
 import dev.workbench.framework.skill.SkillRegistry;
 import java.nio.ByteBuffer;

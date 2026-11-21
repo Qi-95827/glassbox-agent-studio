@@ -8,7 +8,7 @@ import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.task.CostService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.Objects;
 import java.util.UUID;

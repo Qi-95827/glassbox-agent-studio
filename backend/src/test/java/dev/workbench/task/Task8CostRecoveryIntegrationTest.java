@@ -6,7 +6,7 @@ import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import java.time.Duration;
@@ -15,6 +15,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.store.StopCompletion;
 
 /** 恢复子运行继承父运行价格版本和扣除已用额度后的剩余费用预算。 */
 @SpringBootTest(

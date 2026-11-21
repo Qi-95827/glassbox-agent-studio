@@ -4,10 +4,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -19,6 +19,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.planning.EntryRouteService;
+import dev.workbench.store.RunRecordService;
 
 /** 四类入口各走一次真实创建与规则选择的执行模板，核对各自的计划与产物边界。 */
 @SpringBootTest(

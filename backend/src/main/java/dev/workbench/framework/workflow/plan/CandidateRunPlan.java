@@ -1,7 +1,6 @@
 package dev.workbench.framework.workflow.plan;
 
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
-import dev.workbench.planning.PlanCandidateValidator;
 import java.util.List;
 
 /**
@@ -38,7 +37,7 @@ public record CandidateRunPlan(int schemaVersion, String candidateSha256, List<N
       List<String> writeFiles,
       List<PlanNodeSpec.Output> outputs,
       List<String> acceptanceCriteria,
-      PlanCandidateValidator.AgentBinding binding) {
+      AgentBinding binding) {
     /** 兼容没有私有 Agent 绑定的旧计划构造。 */
     public Node(
         String key,

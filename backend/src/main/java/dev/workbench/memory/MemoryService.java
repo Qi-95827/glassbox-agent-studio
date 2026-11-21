@@ -8,7 +8,7 @@ import dev.workbench.persistence.repository.MemoryHistoryRepository;
 import dev.workbench.persistence.repository.MemoryRecordRepository;
 import dev.workbench.persistence.repository.RunMemoryLoadRepository;
 import dev.workbench.persistence.repository.RunMemoryReferenceRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.text.Normalizer;
 import java.time.Instant;
@@ -19,6 +19,9 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.domain.MemoryCategory;
+import dev.workbench.domain.MemorySource;
+import dev.workbench.domain.MemoryStatus;
 
 /** 单机本地工作区的用户确认记忆；不自动把模型输出写入长期记忆。 */
 @Service
@@ -66,7 +69,7 @@ public class MemoryService {
           var selected = context(workspaceId);
           loads.save(
               new RunMemoryLoadEntity(
-                  runId, workspaceId, selected.size(), RunRecordService.now()));
+                  runId, workspaceId, selected.size(), dev.workbench.domain.WorkbenchTime.now()));
           for (int index = 0; index < selected.size(); index++) {
             var record = selected.get(index);
             references.save(
@@ -160,7 +163,7 @@ public class MemoryService {
         s -> {
           if (records.countByWorkspaceIdAndStatus(workspaceId, MemoryStatus.ACTIVE) >= 20)
             throw new IllegalStateException("每个工作区最多保存 20 条有效记忆。");
-          String id = RunRecordService.id(), time = RunRecordService.now();
+          String id = dev.workbench.domain.WorkbenchIds.newId(), time = dev.workbench.domain.WorkbenchTime.now();
           records.saveAndFlush(
               new MemoryRecordEntity(
                   id,
@@ -188,7 +191,7 @@ public class MemoryService {
                   workspaceId,
                   category,
                   text,
-                  RunRecordService.now(),
+                  dev.workbench.domain.WorkbenchTime.now(),
                   MemoryStatus.ACTIVE,
                   version);
           if (changed != 1) throw new IllegalStateException("记忆不存在、已删除或版本已变化。");
@@ -204,7 +207,7 @@ public class MemoryService {
               records.softDelete(
                   id,
                   workspaceId,
-                  RunRecordService.now(),
+                  dev.workbench.domain.WorkbenchTime.now(),
                   MemoryStatus.DELETED,
                   MemoryStatus.ACTIVE,
                   version);

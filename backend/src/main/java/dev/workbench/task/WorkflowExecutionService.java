@@ -17,7 +17,7 @@ import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNode;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowAttempt;
 import dev.workbench.framework.workflow.plan.WorkflowCheck;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
@@ -34,6 +34,11 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.store.RunRecordService;
+import dev.workbench.store.HandoffValidator;
+import dev.workbench.store.ReviewCompletion;
+import dev.workbench.store.StopCompletion;
+import dev.workbench.planning.RecoveryLeaseService;
 
 /** 维护动态计划的尝试与交接，复用运行仓库的实例与终态事务。 */
 @Service
@@ -80,9 +85,9 @@ public class WorkflowExecutionService {
           if (node == null || !nodeId.equals(node.id()))
             throw new IllegalStateException("节点不再是计划中的下一个就绪步骤。");
           if (node.systemCheck()) throw new IllegalStateException("系统检查节点必须由检查执行器认领。");
-          String time = RunRecordService.now();
-          String agentId = RunRecordService.id();
-          String attemptId = RunRecordService.id();
+          String time = dev.workbench.domain.WorkbenchTime.now();
+          String agentId = dev.workbench.domain.WorkbenchIds.newId();
+          String attemptId = dev.workbench.domain.WorkbenchIds.newId();
           int number = records.nextAttemptNumber(nodeId.toString());
           if (number > plans.workflowPlan(runId).maxAttempts())
             throw new IllegalStateException("节点尝试次数已经达到计划上限。");
@@ -155,9 +160,9 @@ public class WorkflowExecutionService {
                   .anyMatch(input -> input.result() == null || input.result().isBlank()))
             throw new IllegalStateException("计划依赖缺少可用于交接的已完成结果。");
           requireCurrentCheckEvidence(runId, upstream);
-          String time = RunRecordService.now();
+          String time = dev.workbench.domain.WorkbenchTime.now();
           plans.startCheckNode(runId, nodeId, time);
-          String checkId = RunRecordService.id();
+          String checkId = dev.workbench.domain.WorkbenchIds.newId();
           records.insertCheck(
               checkId,
               nodeId.toString(),
@@ -241,7 +246,7 @@ public class WorkflowExecutionService {
                   .noneMatch(
                       node -> node.id().equals(nodeId) && node.status() == PlanNodeStatus.RUNNING))
                 throw new IllegalStateException("当前运行没有在途的系统检查节点。");
-              String time = RunRecordService.now();
+              String time = dev.workbench.domain.WorkbenchTime.now();
               if (!records.finishCheck(checkId, result, time))
                 throw new IllegalStateException("检查记录已经结算。");
 
@@ -272,7 +277,7 @@ public class WorkflowExecutionService {
                     elapsed,
                     StopCause.CHECK_FAILED);
                 runs.event(runId, EventType.BLOCKED, "系统检查未通过：" + result.summary(), checkRef);
-                if (TaskSupplementService.REPRODUCTION_MISSING_INFO.equals(result.reasonCode()))
+                if (dev.workbench.domain.BlockReason.REPRODUCTION_MISSING_INFO.equals(result.reasonCode()))
                   openSupplementRequest(runId, checked, result.reasonCode());
                 return true;
               }
@@ -300,13 +305,13 @@ public class WorkflowExecutionService {
     if (!supplements.findOpen(runId).isEmpty()) return;
     String taskId = runs.runSnapshot(runId).taskId().toString();
     supplements.insert(
-        RunRecordService.id(),
+        dev.workbench.domain.WorkbenchIds.newId(),
         runId,
         node.id().toString(),
         reasonCode,
         "缺少可执行测试或验证条件。请补充一个 tests/ 下的 test_*.py 文件内容；提交通过校验后将从安全边界继续并重新执行复现检查。",
         runs.taskVersion(taskId),
-        RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
 
     runs.event(
         runId,
@@ -635,7 +640,7 @@ public class WorkflowExecutionService {
         || plan.approvedAt() != null) throw new IllegalStateException("当前运行没有待确认的该计划版本。");
     plans.checkedWorkflowNodes(runId, plan);
     plan.requireTaskAuthorization(runs.taskDefinition(runs.runSnapshot(runId).taskId().toString()));
-    int changed = planRows.approveIfPending(version.toString(), runId, RunRecordService.now());
+    int changed = planRows.approveIfPending(version.toString(), runId, dev.workbench.domain.WorkbenchTime.now());
     if (changed != 1) throw new IllegalStateException("当前运行没有待确认的该计划版本。");
     runs.event(
         runId, EventType.PLAN_APPROVED, "用户确认了工作流计划 " + version + "。", EventRef.plan(version));
@@ -763,7 +768,7 @@ public class WorkflowExecutionService {
             recordAttemptStop(agentId.toString(), cause);
           }
           // 停止发生在检查结算前时，保留检查记录并标明结果未知，不能当作通过。
-          records.interruptChecks(runId, RunRecordService.now());
+          records.interruptChecks(runId, dev.workbench.domain.WorkbenchTime.now());
 
           runs.settleStoppedRun(runId, cause, reason, rounds, tools, elapsed);
         });

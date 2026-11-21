@@ -2,6 +2,8 @@ package dev.workbench.planning;
 
 import dev.workbench.auth.AuthService;
 import org.springframework.stereotype.Component;
+import dev.workbench.domain.ExecutionScope;
+import dev.workbench.domain.ExecutionScopeResolver;
 
 /**
  * 从已认证会话解析当前执行归属。

@@ -6,6 +6,8 @@ import dev.workbench.framework.agent.definition.AgentDefinition;
 import dev.workbench.framework.agent.definition.AgentDefinitionCatalog;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.agent.definition.AgentDefinitionRegistry;
+import dev.workbench.framework.workflow.plan.AgentBinding;
+import dev.workbench.framework.workflow.plan.BindingComponent;
 import dev.workbench.privateagent.PrivateAgentCatalog;
 import dev.workbench.workspace.AuthorizedFileSet;
 import java.util.ArrayList;
@@ -30,15 +32,23 @@ public class PlanCandidateValidator {
   private static final int MAX_OUTPUTS = 5;
 
   private final AgentDefinitionCatalog definitions;
+  private final PrivateAgentCatalog privateAgents;
 
   @Autowired
-  public PlanCandidateValidator(AgentDefinitionCatalog definitions) {
+  public PlanCandidateValidator(
+      AgentDefinitionCatalog definitions, PrivateAgentCatalog privateAgents) {
     this.definitions = definitions;
+    this.privateAgents = privateAgents;
+  }
+
+  /** 只含内置定义的兼容构造，供旧单元验证使用。 */
+  public PlanCandidateValidator(AgentDefinitionCatalog definitions) {
+    this(definitions, null);
   }
 
   /** 只含内置定义的兼容构造，供旧单元验证使用。 */
   public PlanCandidateValidator(AgentDefinitionRegistry definitions) {
-    this(new AgentDefinitionCatalog(definitions));
+    this(new AgentDefinitionCatalog(definitions), null);
   }
 
   /** 通过校验的图；节点已按稳定拓扑顺序排列，文件与依赖已排序去重。 */
@@ -57,27 +67,6 @@ public class PlanCandidateValidator {
       return new Result(false, errors, null, null, List.of());
     }
   }
-
-  /** 节点最终使用的定义与可展示的选择依据；私有组件版本固定在这里。 */
-  public record AgentBinding(
-      String definitionId,
-      int definitionVersion,
-      String source,
-      String reason,
-      String name,
-      String specSha256,
-      String modelStrategy,
-      String modelMode,
-      List<BindingComponent> skills,
-      List<BindingComponent> tools) {
-    public AgentBinding {
-      skills = List.copyOf(skills);
-      tools = List.copyOf(tools);
-    }
-  }
-
-  public record BindingComponent(
-      String id, int version, String name, String kind, String sha256) {}
 
   public record ResolvedNode(
       PlanCandidateDraft.Node node, AgentDefinitionRef definition, AgentBinding binding) {}
@@ -440,7 +429,7 @@ public class PlanCandidateValidator {
           errors.add(node.key() + "：当前任务只允许内置模板，模型不能自行选择私有 Agent。");
       return new Selection(refs, bindings);
     }
-    var privateAgents = definitions.privateAgents();
+    var privateAgents = this.privateAgents;
     if (privateAgents == null) {
       errors.add("私有 Agent 目录不可用，请重新选择。");
       return new Selection(refs, bindings);

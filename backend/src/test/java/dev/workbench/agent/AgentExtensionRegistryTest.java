@@ -15,7 +15,7 @@ import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.framework.tool.AgentToolContext;
 import dev.workbench.framework.tool.AgentToolProvider;
-import dev.workbench.framework.tool.AgentToolRegistry;
+import dev.workbench.infrastructure.agentscope.AgentToolRegistry;
 import dev.workbench.framework.tool.ToolSpecification;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolUseBlock;
@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
 
 /** 检查提供者装配及失败边界，使用受控替身，不读取真实模型密钥。 */
 class AgentExtensionRegistryTest {
@@ -180,10 +181,10 @@ class AgentExtensionRegistryTest {
     var model = mock(Model.class);
     var fake = mock(AgentModelProvider.class);
     when(fake.mode()).thenReturn(ModelMode.MOCK);
-    when(fake.create(any())).thenReturn(model);
+    when(fake.create(any())).thenReturn(new AgentScopeModelClient(model));
     var registry = new AgentModelRegistry(List.of(fake));
     var request = request(ModelMode.MOCK);
-    assertSame(model, registry.create(request));
+    assertSame(model, ((AgentScopeModelClient) registry.create(request)).model());
     verify(fake).create(request);
     assertThrows(IllegalStateException.class, () -> registry.create(request(ModelMode.DEEPSEEK)));
     assertThrows(IllegalArgumentException.class, () -> new AgentModelRegistry(List.of(fake, fake)));

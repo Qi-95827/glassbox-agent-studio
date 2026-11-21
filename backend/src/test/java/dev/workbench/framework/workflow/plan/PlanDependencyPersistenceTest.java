@@ -19,6 +19,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.domain.TaskEntryKind;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
+import dev.workbench.planning.PlanService;
 
 /** 使用生产 JPA 计划路径验证持久化依赖和条件启动，不依赖真实模型。 */
 @SpringBootTest(
@@ -63,7 +66,7 @@ class PlanDependencyPersistenceTest {
   void unregisteredSystemCheckRejectsPlanBeforeAnyRecordIsWritten() {
     var definitions =
         new AgentDefinitionRegistry(
-            new dev.workbench.agent.AgentRoleRegistry(),
+            new dev.workbench.framework.agent.definition.AgentRoleRegistry(),
             new dev.workbench.framework.skill.SkillRegistry(),
             List.of(
                 () ->

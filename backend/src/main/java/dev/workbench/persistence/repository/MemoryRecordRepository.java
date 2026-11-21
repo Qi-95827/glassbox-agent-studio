@@ -1,7 +1,7 @@
 package dev.workbench.persistence.repository;
 
-import dev.workbench.memory.MemoryCategory;
-import dev.workbench.memory.MemoryStatus;
+import dev.workbench.domain.MemoryCategory;
+import dev.workbench.domain.MemoryStatus;
 import dev.workbench.persistence.entity.MemoryRecordEntity;
 import java.util.List;
 import java.util.Optional;

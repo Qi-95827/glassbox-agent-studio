@@ -6,7 +6,7 @@ import dev.workbench.persistence.entity.BugFeedbackEntity;
 import dev.workbench.persistence.repository.BugCheckCaseRepository;
 import dev.workbench.persistence.repository.BugCheckRepository;
 import dev.workbench.persistence.repository.BugFeedbackRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
@@ -220,11 +220,11 @@ public class BugService {
                   a -> "APPROVED".equals(a.get("STATUS")) && current.equals(a.get("FINGERPRINT")));
       if (!passed || !approved) throw new IllegalStateException("需要当前代码版本的通过回归及有效人工审查，才能记录用户确认关闭。");
     }
-    String id = RunRecordService.id();
+    String id = dev.workbench.domain.WorkbenchIds.newId();
     BugFeedbackEntity saved =
         feedbackRows.saveAndFlush(
             new BugFeedbackEntity(
-                id, bugId, workspaceId, status.name(), note, RunRecordService.now()));
+                id, bugId, workspaceId, status.name(), note, dev.workbench.domain.WorkbenchTime.now()));
     return feedbackMap(saved);
   }
 
@@ -290,7 +290,7 @@ public class BugService {
     }
     String source = root.toString();
     if (source.contains(",")) throw new IllegalArgumentException("工作区路径含逗号，不能安全传入容器挂载参数。");
-    String name = "agent-check-" + RunRecordService.id().substring(0, 12);
+    String name = "agent-check-" + dev.workbench.domain.WorkbenchIds.newId().substring(0, 12);
     // 容器内固定执行 unittest：无网络、只读挂载、低权限、资源上限，不接受模型提供的 shell 命令。
     String script =
         "import unittest,sys; s=unittest.defaultTestLoader.discover('tests',pattern='test_*.py');"
@@ -473,7 +473,7 @@ public class BugService {
       long duration,
       String fingerprint,
       List<UnittestResults.Case> cases) {
-    String id = RunRecordService.id(), time = RunRecordService.now();
+    String id = dev.workbench.domain.WorkbenchIds.newId(), time = dev.workbench.domain.WorkbenchTime.now();
     BugCheckEntity checkRow =
         new BugCheckEntity(
             id,

@@ -5,7 +5,7 @@ import dev.workbench.persistence.entity.GitActionEntity;
 import dev.workbench.persistence.entity.GitDeliveryRequestEntity;
 import dev.workbench.persistence.repository.GitActionRepository;
 import dev.workbench.persistence.repository.GitDeliveryRequestRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -52,7 +52,7 @@ public class GitDeliveryService {
     String remoteUrlSha256 = workspaces.remotePushUrlFingerprint(workspaceId, remote);
     String targetCommit =
         kind == GitAction.Kind.MERGE ? workspaces.branchCommit(workspaceId, target) : null;
-    String id = RunRecordService.id(), now = RunRecordService.now();
+    String id = dev.workbench.domain.WorkbenchIds.newId(), now = dev.workbench.domain.WorkbenchTime.now();
     requests.save(
         new GitDeliveryRequestEntity(
             id,
@@ -86,7 +86,7 @@ public class GitDeliveryService {
     requests.updateStatus(
         id,
         approve ? DeliveryStatus.APPROVED.name() : DeliveryStatus.REJECTED.name(),
-        RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
     audit.record(
         approve ? "GIT_DELIVERY_APPROVE" : "GIT_DELIVERY_REJECT",
         "GIT_DELIVERY",
@@ -101,8 +101,8 @@ public class GitDeliveryService {
     if (!DeliveryStatus.APPROVED.name().equals(request.status()))
       throw new IllegalStateException("只有已批准的交付请求可以执行。");
     Validated validated = validate(request);
-    requests.updateStatus(id, DeliveryStatus.STARTED.name(), RunRecordService.now());
-    String actionId = RunRecordService.id(), now = RunRecordService.now();
+    requests.updateStatus(id, DeliveryStatus.STARTED.name(), dev.workbench.domain.WorkbenchTime.now());
+    String actionId = dev.workbench.domain.WorkbenchIds.newId(), now = dev.workbench.domain.WorkbenchTime.now();
     actions.save(
         new GitActionEntity(
             actionId,
@@ -175,7 +175,7 @@ public class GitDeliveryService {
         detail = "合并结果无法确认，请检查工作区：" + excerpt(output);
       }
     }
-    requests.updateResult(id, status.name(), detail, RunRecordService.now());
+    requests.updateResult(id, status.name(), detail, dev.workbench.domain.WorkbenchTime.now());
     actions.updateOutcome(
         actionId,
         switch (status) {
@@ -186,7 +186,7 @@ public class GitDeliveryService {
         },
         commitId,
         detail,
-        RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
     audit.record(
         "GIT_DELIVERY_EXECUTE",
         "GIT_DELIVERY",

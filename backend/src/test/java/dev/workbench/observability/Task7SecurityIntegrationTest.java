@@ -5,11 +5,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.audit.AuditService;
 import dev.workbench.report.HtmlReportService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import dev.workbench.store.RunRecordService;
 
 /** 任务 7：脱敏、审计、告警定位和环境自检。 */
 @SpringBootTest(
@@ -47,7 +48,7 @@ class Task7SecurityIntegrationTest {
             .anyMatch(row -> "TEST_ACTION".equals(row.get("ACTION"))
                 && "id-1".equals(row.get("TARGET_ID"))));
 
-    String runId = RunRecordService.id();
+    String runId = dev.workbench.domain.WorkbenchIds.newId();
     db.update(
         "INSERT INTO runs(id,task_id,parent_id,status,reason,result,rounds,tools,max_rounds,"
             + "max_tools,max_seconds,elapsed_ms,created_at,updated_at)"
@@ -64,8 +65,8 @@ class Task7SecurityIntegrationTest {
         2,
         30,
         1,
-        RunRecordService.now(),
-        RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now(),
+        dev.workbench.domain.WorkbenchTime.now());
     assertTrue(
         alerts.list().stream()
             .anyMatch(alert -> runId.equals(alert.runId()) && "RUN_FAILED".equals(alert.code())));

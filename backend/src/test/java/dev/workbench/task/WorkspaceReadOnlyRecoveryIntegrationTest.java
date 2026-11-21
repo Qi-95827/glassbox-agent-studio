@@ -11,9 +11,9 @@ import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.tool.ResourceVersion;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.framework.workflow.plan.PlanService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
-import dev.workbench.framework.workflow.view.ExecutionViewService;
+import dev.workbench.delivery.ExecutionViewService;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.persistence.repository.WorkflowCheckpointData;
@@ -31,6 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.store.RunRecordService;
 
 /** 只读工作区分析的安全边界：版本证据、复用来源、预算继承与拒绝路径。 */
 @SpringBootTest(
@@ -183,7 +184,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         ToolKind.WORKSPACE_READ.name(),
         1);
     String sha = workspaces.read(workspace.id(), "authorized.txt").sha256();
-    String toolId = RunRecordService.id();
+    String toolId = dev.workbench.domain.WorkbenchIds.newId();
     repo.startTool(toolId, id, claim.agentId(), ToolKind.WORKSPACE_READ, 1, "d".repeat(64));
     repo.finishTool(
         toolId,
@@ -192,7 +193,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         null,
         1,
         ResourceVersion.encode(Map.of("authorized.txt", sha)));
-    String modelId = RunRecordService.id();
+    String modelId = dev.workbench.domain.WorkbenchIds.newId();
     repo.startModel(modelId, id, claim.agentId(), ModelKind.MOCK);
     repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
     repo.update(id, RunStatus.RUNNING, null, null, 1, 1, 20);
@@ -265,7 +266,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         ToolKind.WORKSPACE_READ.name(),
         1);
     String sha = workspaces.read(workspace.id(), "authorized.txt").sha256();
-    String toolId = RunRecordService.id();
+    String toolId = dev.workbench.domain.WorkbenchIds.newId();
     repo.startTool(toolId, id, claim.agentId(), ToolKind.WORKSPACE_READ, 1, "c".repeat(64));
     repo.finishTool(
         toolId,
@@ -274,7 +275,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         null,
         1,
         ResourceVersion.encode(Map.of("authorized.txt", sha)));
-    String modelId = RunRecordService.id();
+    String modelId = dev.workbench.domain.WorkbenchIds.newId();
     repo.startModel(modelId, id, claim.agentId(), ModelKind.MOCK);
     repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
     repo.update(id, RunStatus.RUNNING, null, null, 1, 1, 20);
@@ -422,7 +423,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         ToolKind.WORKSPACE_READ.name(),
         1);
     String sha = workspaces.read(workspace.id(), "authorized.txt").sha256();
-    String toolId = RunRecordService.id();
+    String toolId = dev.workbench.domain.WorkbenchIds.newId();
     repo.startTool(toolId, id, claim.agentId(), ToolKind.WORKSPACE_READ, 1, "b".repeat(64));
     repo.finishTool(
         toolId,
@@ -431,7 +432,7 @@ class WorkspaceReadOnlyRecoveryIntegrationTest {
         null,
         1,
         ResourceVersion.encode(Map.of("authorized.txt", sha)));
-    String modelId = RunRecordService.id();
+    String modelId = dev.workbench.domain.WorkbenchIds.newId();
     repo.startModel(modelId, id, claim.agentId(), ModelKind.MOCK);
     repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
     repo.update(id, RunStatus.RUNNING, null, null, 1, 1, 20);

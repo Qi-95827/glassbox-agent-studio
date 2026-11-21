@@ -2,7 +2,7 @@ package dev.workbench.privateagent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import dev.workbench.agent.AgentRoleRegistry;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ModelMode;

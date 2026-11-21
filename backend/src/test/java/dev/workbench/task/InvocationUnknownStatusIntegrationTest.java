@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import dev.workbench.domain.RunLimits;
+import dev.workbench.store.RunRecordService;
 
 /** 历史未知状态文本不能让调用完成判断抛枚举转换异常。 */
 @SpringBootTest(

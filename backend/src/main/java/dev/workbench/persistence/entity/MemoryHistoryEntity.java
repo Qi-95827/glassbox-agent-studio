@@ -1,7 +1,7 @@
 package dev.workbench.persistence.entity;
 
-import dev.workbench.memory.MemoryCategory;
-import dev.workbench.memory.MemoryStatus;
+import dev.workbench.domain.MemoryCategory;
+import dev.workbench.domain.MemoryStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
 import jakarta.persistence.EmbeddedId;

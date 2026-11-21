@@ -6,7 +6,7 @@ import dev.workbench.persistence.entity.EvaluationCheckEntity;
 import dev.workbench.persistence.repository.EvaluationBatchRepository;
 import dev.workbench.persistence.repository.EvaluationCaseRepository;
 import dev.workbench.persistence.repository.EvaluationCheckRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -16,6 +16,7 @@ import java.util.UUID;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.domain.CaseStatus;
 
 /** 评测批次和样本记录；不存储模型上下文或密钥。 */
 @Service
@@ -58,7 +59,7 @@ public class EvaluationRepository {
       String requestedBy) {
     tx.executeWithoutResult(
         ignored -> {
-          String time = RunRecordService.now();
+          String time = dev.workbench.domain.WorkbenchTime.now();
           batches.save(
               new EvaluationBatchEntity(
                   id,
@@ -76,7 +77,7 @@ public class EvaluationRepository {
           for (SeedCase sample : suite.cases()) {
             rows.add(
                 new EvaluationCaseEntity(
-                    RunRecordService.id(),
+                    dev.workbench.domain.WorkbenchIds.newId(),
                     id,
                     sample.name(),
                     ++sequence,
@@ -96,7 +97,7 @@ public class EvaluationRepository {
                   sample.name(),
                   CaseStatus.PENDING.name(),
                   CaseStatus.RUNNING.name(),
-                  RunRecordService.now());
+                  dev.workbench.domain.WorkbenchTime.now());
           if (n != 1) throw new IllegalStateException("评测样本不能重复启动。");
         });
   }
@@ -110,7 +111,7 @@ public class EvaluationRepository {
                   sample.name(),
                   CaseStatus.RUNNING.name(),
                   runId,
-                  RunRecordService.now());
+                  dev.workbench.domain.WorkbenchTime.now());
           if (n != 1) throw new IllegalStateException("评测样本已结束，无法关联运行。");
         });
   }
@@ -124,7 +125,7 @@ public class EvaluationRepository {
                 CaseStatus.RUNNING.name(),
                 status.name(),
                 explanation,
-                RunRecordService.now()));
+                dev.workbench.domain.WorkbenchTime.now()));
   }
 
   /** 案例终态和全部断言在同一事务保存，失败时不留下不完整结果。 */
@@ -166,7 +167,7 @@ public class EvaluationRepository {
                   passed
                       ? "运行状态及关联证据满足固定断言。"
                       : "部分固定断言未通过，请查看断言明细及关联运行。",
-                  RunRecordService.now());
+                  dev.workbench.domain.WorkbenchTime.now());
           if (changed != 1) throw new IllegalStateException("评测案例状态已改变，无法保存断言。");
         });
   }
@@ -186,7 +187,7 @@ public class EvaluationRepository {
   public void finishBatch(String id, EvaluationStatus status) {
     tx.executeWithoutResult(
         ignored -> {
-          String time = RunRecordService.now();
+          String time = dev.workbench.domain.WorkbenchTime.now();
           cases.finishAllInBatch(
               id,
               CaseStatus.PENDING.name(),

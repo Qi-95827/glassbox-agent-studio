@@ -9,9 +9,9 @@ import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.planning.PlanCandidateInput;
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.planning.PlanCandidateService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +25,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import dev.workbench.framework.planning.PlanCandidateModel;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.store.RunRecordService;
 
 /**
  * 浏览器验收夹具：把多文件冒泡排序运行写入隔离文件数据库和工作区。
@@ -61,12 +64,12 @@ class BubbleSortBrowserFixture {
                 }
 
                 @Override
-                public io.agentscope.core.model.Model create(AgentExecutionRequest request) {
-                  return new ScriptedWriteModel(
+                public dev.workbench.framework.model.ModelClient create(AgentExecutionRequest request) {
+                  return new AgentScopeModelClient(new ScriptedWriteModel(
                       request.role(),
                       request.fileScopes(),
                       request.writeFiles(),
-                      BubbleSortFixture.contents());
+                      BubbleSortFixture.contents()));
                 }
               }));
     }

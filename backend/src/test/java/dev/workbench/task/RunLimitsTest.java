@@ -3,6 +3,7 @@ package dev.workbench.task;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import dev.workbench.domain.RunLimits;
 
 /** 运行限额在领域边界也必须有效，不能依赖单个 HTTP 调用方。 */
 class RunLimitsTest {

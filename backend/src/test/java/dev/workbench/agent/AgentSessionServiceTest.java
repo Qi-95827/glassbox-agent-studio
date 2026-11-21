@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.VersionedState;
@@ -12,6 +12,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import dev.workbench.infrastructure.agentscope.AgentSessionService;
+import dev.workbench.framework.agent.session.AgentSessionInfo;
+import dev.workbench.framework.agent.session.AgentSessionStatus;
+import dev.workbench.store.RunRecordService;
 
 /** 观察信息必须区分缺失和读取失败，不能返回状态正文。 */
 class AgentSessionServiceTest {

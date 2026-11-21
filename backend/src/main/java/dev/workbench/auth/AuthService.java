@@ -1,6 +1,6 @@
 package dev.workbench.auth;
 
-import dev.workbench.planning.ExecutionScope;
+import dev.workbench.domain.ExecutionScope;
 import dev.workbench.persistence.entity.UserEntity;
 import dev.workbench.persistence.repository.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import dev.workbench.store.RunRecordService;
 
 /**
  * 本地账号、密码摘要和服务端会话。
@@ -99,7 +100,7 @@ public class AuthService {
             ? request.username()
             : request.displayName().strip();
     if (displayName.length() > 120) throw new IllegalArgumentException("显示名称超过 120 字。");
-    String id = dev.workbench.task.RunRecordService.id();
+    String id = dev.workbench.domain.WorkbenchIds.newId();
     UserEntity admin =
         new UserEntity(
             id,
@@ -109,7 +110,7 @@ public class AuthService {
             "ADMIN",
             "ACTIVE",
             request.claimLegacyHistory(),
-            dev.workbench.task.RunRecordService.now());
+            dev.workbench.domain.WorkbenchTime.now());
     users.saveAndFlush(admin);
     loginSession(http, admin);
     return new Status(true, view(admin));
@@ -159,14 +160,14 @@ public class AuthService {
     var saved =
         users.saveAndFlush(
             new UserEntity(
-                dev.workbench.task.RunRecordService.id(),
+                dev.workbench.domain.WorkbenchIds.newId(),
                 username,
                 displayName,
                 hash(request.password()),
                 role,
                 "ACTIVE",
                 false,
-                dev.workbench.task.RunRecordService.now()));
+                dev.workbench.domain.WorkbenchTime.now()));
     return view(saved);
   }
 

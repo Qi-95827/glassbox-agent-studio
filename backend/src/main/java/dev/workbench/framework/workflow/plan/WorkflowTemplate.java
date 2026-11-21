@@ -85,7 +85,7 @@ public record WorkflowTemplate(
       return this == WORKSPACE_BUG_FIX;
     }
 
-    boolean permits(ToolKind tool) {
+    public boolean permits(ToolKind tool) {
       return hasWorkspace()
           && (tool == ToolKind.WORKSPACE_READ
               || tool == ToolKind.WORKSPACE_SEARCH

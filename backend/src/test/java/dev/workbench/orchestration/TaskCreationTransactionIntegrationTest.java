@@ -3,14 +3,14 @@ package dev.workbench.orchestration;
 import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
-import dev.workbench.domain.EntryPolicyService;
+import dev.workbench.planning.EntryPolicyService;
 import dev.workbench.domain.ModelMode;
 import dev.workbench.domain.Scenario;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.framework.workflow.plan.PlanService;
-import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.planning.PlanService;
+import dev.workbench.domain.RunLimits;
+import dev.workbench.store.RunRecordService;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import dev.workbench.store.RunRecordService;
 
 /**
  * 创建任务第一批持久化验收：任务、首运行、初始计划、入口策略、创建事件在同一事务提交； 失败时一起回滚且不派发，重试恰好创建一套记录。

@@ -2,7 +2,7 @@ package dev.workbench.audit;
 
 import dev.workbench.persistence.entity.AuditEventEntity;
 import dev.workbench.persistence.repository.AuditRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.util.List;
 import java.util.Map;
 import org.springframework.data.domain.PageRequest;
@@ -27,14 +27,14 @@ public class AuditService {
       safeDetail = safeDetail.substring(0, 1000);
     records.save(
         new AuditEventEntity(
-            RunRecordService.id(),
+            dev.workbench.domain.WorkbenchIds.newId(),
             LOCAL_ACTOR,
             action,
             targetType,
             targetId,
             outcome == null ? "RECORDED" : outcome,
             safeDetail,
-            RunRecordService.now()));
+            dev.workbench.domain.WorkbenchTime.now()));
   }
 
   public List<Map<String, Object>> list(int limit) {

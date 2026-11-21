@@ -2,7 +2,7 @@ package dev.workbench.infrastructure.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;

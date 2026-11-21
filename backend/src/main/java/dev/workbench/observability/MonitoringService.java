@@ -3,7 +3,7 @@ package dev.workbench.observability;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
-import dev.workbench.evaluation.CaseStatus;
+import dev.workbench.domain.CaseStatus;
 import dev.workbench.persistence.repository.ObservabilityRepository;
 import java.util.List;
 import org.springframework.stereotype.Service;

@@ -13,7 +13,7 @@ import dev.workbench.domain.Scenario;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.tool.AgentToolContext;
-import dev.workbench.framework.tool.AgentToolRegistry;
+import dev.workbench.infrastructure.agentscope.AgentToolRegistry;
 import dev.workbench.framework.tool.ToolContracts;
 import dev.workbench.persistence.repository.WorkspaceDeclaredFileRepository;
 import dev.workbench.persistence.repository.WorkspaceRepository;

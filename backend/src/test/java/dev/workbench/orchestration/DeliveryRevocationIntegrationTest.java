@@ -12,7 +12,7 @@ import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.task.DeliveryAccessDeniedException;
 import dev.workbench.task.RunDeliveryService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +31,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.web.servlet.MockMvc;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.store.RunRecordService;
 
 /** P08：目录撤权后，即使文件内容未变也不能读取交付正文；历史回执仍可查。 */
 @AutoConfigureMockMvc
@@ -56,12 +58,12 @@ class DeliveryRevocationIntegrationTest {
                 }
 
                 @Override
-                public io.agentscope.core.model.Model create(AgentExecutionRequest request) {
+                public dev.workbench.framework.model.ModelClient create(AgentExecutionRequest request) {
                   var contents = new LinkedHashMap<String, String>();
                   for (String path : request.writeFiles())
                     contents.put(path, "written:" + path + "\n");
-                  return new ScriptedWriteModel(
-                      request.role(), request.fileScopes(), request.writeFiles(), contents);
+                  return new AgentScopeModelClient(new ScriptedWriteModel(
+                      request.role(), request.fileScopes(), request.writeFiles(), contents));
                 }
               }));
     }

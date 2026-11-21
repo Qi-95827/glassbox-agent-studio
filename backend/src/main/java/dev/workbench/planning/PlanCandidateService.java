@@ -8,12 +8,9 @@ import dev.workbench.domain.Scenario;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.framework.workflow.plan.CandidateRunPlan;
-import dev.workbench.orchestration.RunService;
-import dev.workbench.orchestration.TaskCreationService;
 import dev.workbench.persistence.entity.PlanCandidateEntity;
 import dev.workbench.persistence.repository.PlanCandidateRepository;
-import dev.workbench.task.RunLimits;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.domain.RunLimits;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import dev.workbench.workspace.WorkspaceService;
 import jakarta.annotation.PreDestroy;
@@ -34,6 +31,10 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import dev.workbench.domain.ExecutionScope;
+import dev.workbench.framework.planning.PlanCandidateModel;
+import dev.workbench.domain.ExecutionScopeResolver;
+import dev.workbench.framework.workflow.plan.PlanningRunReader;
 
 /**
  * 运行创建前的候选计划用例。
@@ -69,9 +70,9 @@ public class PlanCandidateService {
   private final ExecutionScopeResolver scopes;
   private final WorkspaceService workspaces;
   private final WorkspaceAuthorizationService workspaceAuthorization;
-  private final TaskCreationService taskCreations;
-  private final RunService runs;
-  private final RunRecordService records;
+  private final CandidateRunPersister taskCreations;
+  private final CandidateRunDispatcher runs;
+  private final PlanningRunReader records;
   private final ObjectMapper json;
   private final TransactionTemplate tx;
   private final dev.workbench.ownership.OwnershipService ownership;
@@ -89,13 +90,15 @@ public class PlanCandidateService {
       ExecutionScopeResolver scopes,
       WorkspaceService workspaces,
       WorkspaceAuthorizationService workspaceAuthorization,
-      TaskCreationService taskCreations,
-      RunService runs,
-      RunRecordService records,
+      CandidateRunPersister taskCreations,
+      CandidateRunDispatcher runs,
+      PlanningRunReader records,
       ObjectMapper json,
       TransactionTemplate tx,
       dev.workbench.ownership.OwnershipService ownership,
-      dev.workbench.privateagent.PrivateAgentCatalog privateAgents) {
+      dev.workbench.privateagent.PrivateAgentCatalog privateAgents,
+      @org.springframework.beans.factory.annotation.Qualifier("planningExecutor")
+          ExecutorService executor) {
     this.store = store;
     this.validator = validator;
     this.model = model;
@@ -109,13 +112,7 @@ public class PlanCandidateService {
     this.tx = tx;
     this.ownership = ownership;
     this.privateAgents = privateAgents;
-    ThreadFactory factory =
-        runnable -> {
-          Thread thread = new Thread(runnable, "plan-candidate");
-          thread.setDaemon(true);
-          return thread;
-        };
-    this.executor = Executors.newSingleThreadExecutor(factory);
+    this.executor = executor;
   }
 
   public record GenerateRequest(
@@ -179,7 +176,7 @@ public class PlanCandidateService {
         tx.execute(
             status -> {
               int version = store.latestInputVersion(groupId) + 1;
-              String id = RunRecordService.id();
+              String id = java.util.UUID.randomUUID().toString();
               var row =
                   new PlanCandidateEntity(
                       id,
@@ -288,8 +285,8 @@ public class PlanCandidateService {
     CandidateRunPlan plan =
         CandidateRunPlanFactory.create(
             validated.normalized(), row.getCandidateSha256(), validated.nodes());
-    String taskId = RunRecordService.id();
-    String runId = RunRecordService.id();
+    String taskId = java.util.UUID.randomUUID().toString();
+    String runId = java.util.UUID.randomUUID().toString();
     var task =
         new TaskDefinition(
             UUID.fromString(taskId),
@@ -452,12 +449,7 @@ public class PlanCandidateService {
         return prepareWorkspace(latest, input);
       if (!active(latest.getPreparationStartedAt())) break;
       if (System.nanoTime() > deadline) throw new IllegalStateException("独立工作区仍在准备，请稍后重试确认。");
-      try {
-        Thread.sleep(100);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new IllegalStateException("等待工作区准备被中断。");
-      }
+      dev.workbench.framework.concurrent.AsyncDelay.await(100);
       latest = reload(row);
     }
     String expected = latest.getPreparationId();

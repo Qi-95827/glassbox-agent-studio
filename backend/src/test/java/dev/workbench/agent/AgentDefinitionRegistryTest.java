@@ -20,7 +20,7 @@ import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.framework.skill.SkillId;
 import dev.workbench.framework.skill.SkillRegistry;
-import dev.workbench.framework.tool.AgentToolRegistry;
+import dev.workbench.infrastructure.agentscope.AgentToolRegistry;
 import dev.workbench.infrastructure.agentscope.AgentScopeExecutor;
 import dev.workbench.infrastructure.model.DemoModel;
 import io.agentscope.core.message.Msg;
@@ -37,6 +37,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import reactor.core.publisher.Flux;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
 
 /** 新定义必须通过实际 AgentScope 装配路径，同时沿用旧权限边界。 */
 class AgentDefinitionRegistryTest {
@@ -62,8 +64,8 @@ class AgentDefinitionRegistryTest {
             return ModelMode.MOCK;
           }
 
-          public io.agentscope.core.model.Model create(AgentExecutionRequest request) {
-            return new DemoModel(request.role(), false, request.scenario(), List.of());
+          public dev.workbench.framework.model.ModelClient create(AgentExecutionRequest request) {
+            return new AgentScopeModelClient(new DemoModel(request.role(), false, request.scenario(), List.of()));
           }
         };
     var dataSource =
@@ -159,8 +161,8 @@ class AgentDefinitionRegistryTest {
             return ModelMode.MOCK;
           }
 
-          public Model create(AgentExecutionRequest request) {
-            return model;
+          public dev.workbench.framework.model.ModelClient create(AgentExecutionRequest request) {
+            return new AgentScopeModelClient(model);
           }
         };
     var source =

@@ -3,7 +3,7 @@ package dev.workbench.persistence;
 import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -17,6 +17,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
+import dev.workbench.store.RunRecordService;
 
 /** 同一份隔离旧 H2 副本连续启动两次，核对历史、回填标记和 JPA 会话读取。 */
 @EnabledIf("legacyCopyAvailable")

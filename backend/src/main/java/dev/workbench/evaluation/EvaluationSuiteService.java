@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.audit.AuditService;
 import dev.workbench.persistence.entity.EvaluationSuiteVersionEntity;
 import dev.workbench.persistence.repository.EvaluationSuiteVersionRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.util.List;
@@ -59,10 +59,10 @@ public class EvaluationSuiteService {
     int version = latest == null ? 1 : latest.version() + 1;
     String definition = SeedSuite.snapshot(json, suite);
     String sha = SeedSuite.sha256(definition);
-    String id = RunRecordService.id();
+    String id = dev.workbench.domain.WorkbenchIds.newId();
     versions.saveAndFlush(
         new EvaluationSuiteVersionEntity(
-            id, suite.name(), version, definition, sha, true, RunRecordService.now()));
+            id, suite.name(), version, definition, sha, true, dev.workbench.domain.WorkbenchTime.now()));
     audit.record(
         "EVALUATION_SUITE_PUBLISH",
         "EVALUATION_SUITE",

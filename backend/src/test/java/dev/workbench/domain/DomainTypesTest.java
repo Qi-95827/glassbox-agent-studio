@@ -3,7 +3,7 @@ package dev.workbench.domain;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.workbench.orchestration.Handoff;
+import dev.workbench.domain.Handoff;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 

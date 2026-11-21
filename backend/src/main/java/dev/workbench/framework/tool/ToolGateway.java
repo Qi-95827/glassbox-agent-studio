@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.execution.AgentRuntime;
-import dev.workbench.workspace.WorkspaceVersionConflict;
+import dev.workbench.domain.WorkspaceVersionConflict;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.Callable;

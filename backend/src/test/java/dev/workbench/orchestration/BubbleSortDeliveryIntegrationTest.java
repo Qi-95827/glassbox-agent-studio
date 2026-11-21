@@ -12,10 +12,10 @@ import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.planning.PlanCandidateInput;
-import dev.workbench.planning.PlanCandidateModel;
+import dev.workbench.framework.planning.PlanCandidateModel;
 import dev.workbench.planning.PlanCandidateService;
 import dev.workbench.task.RunDeliveryService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.time.Duration;
 import java.util.List;
@@ -31,6 +31,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.web.servlet.MockMvc;
+import dev.workbench.framework.planning.PlanCandidateModel;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.store.RunRecordService;
 
 /** 多文件冒泡排序走完整条链：候选确认、两个开发节点分别装配与写入、审查汇合、交付投影。 */
 @AutoConfigureMockMvc
@@ -64,12 +67,12 @@ class BubbleSortDeliveryIntegrationTest {
                 }
 
                 @Override
-                public io.agentscope.core.model.Model create(AgentExecutionRequest request) {
-                  return new ScriptedWriteModel(
+                public dev.workbench.framework.model.ModelClient create(AgentExecutionRequest request) {
+                  return new AgentScopeModelClient(new ScriptedWriteModel(
                       request.role(),
                       request.fileScopes(),
                       request.writeFiles(),
-                      BubbleSortFixture.contents());
+                      BubbleSortFixture.contents()));
                 }
               }));
     }

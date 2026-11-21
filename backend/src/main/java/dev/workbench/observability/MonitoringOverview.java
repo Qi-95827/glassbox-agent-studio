@@ -3,7 +3,7 @@ package dev.workbench.observability;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
-import dev.workbench.evaluation.CaseStatus;
+import dev.workbench.domain.CaseStatus;
 import java.util.List;
 
 /** 本机数据库的低敏聚合快照。空列表表示没有记录，不代表监控系统健康。 */

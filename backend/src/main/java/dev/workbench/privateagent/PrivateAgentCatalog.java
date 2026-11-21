@@ -7,6 +7,7 @@ import dev.workbench.domain.ModelMode;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.definition.AgentDefinition;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
+import dev.workbench.framework.agent.definition.PrivateAgentDefinitionSource;
 import dev.workbench.persistence.entity.PrivateAgentEntity;
 import dev.workbench.persistence.entity.PrivateAgentVersionEntity;
 import dev.workbench.persistence.repository.PrivateAgentRepository;
@@ -25,7 +26,7 @@ import org.springframework.stereotype.Service;
  * <p>引用由服务端生成的稳定标识和版本组成；解析固定版本，不读取草稿或最新发布。归属、发布状态和 权限类别由调用方在每个阶段复核；这里只提供不可变的声明与组件快照。
  */
 @Service
-public class PrivateAgentCatalog {
+public class PrivateAgentCatalog implements PrivateAgentDefinitionSource {
   public static final String PREFIX = "pa-";
 
   private final PrivateAgentRepository agents;
@@ -43,6 +44,11 @@ public class PrivateAgentCatalog {
 
   public static boolean isPrivate(AgentDefinitionRef ref) {
     return ref != null && ref.id() != null && ref.id().startsWith(PREFIX);
+  }
+
+  @Override
+  public boolean isPrivateReference(AgentDefinitionRef ref) {
+    return isPrivate(ref);
   }
 
   public static AgentDefinitionRef reference(String agentId, int version) {
@@ -115,6 +121,11 @@ public class PrivateAgentCatalog {
     }
   }
 
+  @Override
+  public Components components(AgentDefinitionRef ref) {
+    return components(version(ref));
+  }
+
   public Components components(PrivateAgentVersionEntity row) {
     try {
       var node = json.readTree(row.getComponentsJson());
@@ -128,7 +139,32 @@ public class PrivateAgentCatalog {
               node.path("tools"),
               json.getTypeFactory()
                   .constructCollectionType(List.class, PrivateComponentService.PinnedTool.class));
-      return new Components(skills, tools);
+      return new Components(
+          skills.stream()
+              .map(
+                  skill ->
+                      new PinnedSkill(
+                          skill.id(),
+                          skill.version(),
+                          skill.name(),
+                          skill.sha256(),
+                          skill.guidance(),
+                          skill.usageNotes(),
+                          skill.inputContract(),
+                          skill.outputContract()))
+              .toList(),
+          tools.stream()
+              .map(
+                  tool ->
+                      new PinnedTool(
+                          tool.id(),
+                          tool.version(),
+                          tool.name(),
+                          tool.executorKind(),
+                          tool.toolName(),
+                          tool.fileExtensions(),
+                          tool.sha256()))
+              .toList());
     } catch (JsonProcessingException e) {
       throw new IllegalStateException("私有 Agent 组件快照无法读取。", e);
     }
@@ -231,15 +267,6 @@ public class PrivateAgentCatalog {
     if (path == null || extensions == null || extensions.isEmpty()) return false;
     String lower = path.toLowerCase(Locale.ROOT);
     return extensions.stream().anyMatch(lower::endsWith);
-  }
-
-  public record Components(
-      List<PrivateComponentService.PinnedSkill> skills,
-      List<PrivateComponentService.PinnedTool> tools) {
-    public Components {
-      skills = List.copyOf(skills);
-      tools = List.copyOf(tools);
-    }
   }
 
   public record Recommendation(

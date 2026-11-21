@@ -4,11 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.audit.AuditService;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import dev.workbench.store.RunRecordService;
 
 /** 版本化评测套件、预算配置、不可比原因与管理审计。 */
 @SpringBootTest(
@@ -52,7 +53,7 @@ class Task5EvaluationConfigIntegrationTest {
 
   @Test
   void differentSuiteOrDefinitionHasExplicitComparisonReason() {
-    String baseline = RunRecordService.id(), candidate = RunRecordService.id();
+    String baseline = dev.workbench.domain.WorkbenchIds.newId(), candidate = dev.workbench.domain.WorkbenchIds.newId();
     repository.create(baseline, SeedSuite.Variant.LOCAL_AGENT_V2);
     repository.create(candidate, SeedSuite.Variant.DYNAMIC_CHECK_V1);
     var comparison = comparisons.compare(baseline, candidate);
@@ -63,7 +64,7 @@ class Task5EvaluationConfigIntegrationTest {
   @Test
   void differentBudgetIsNotComparable() {
     var version = suites.resolve(SeedSuite.Variant.DYNAMIC_CHECK_V1, null);
-    String baseline = RunRecordService.id(), candidate = RunRecordService.id();
+    String baseline = dev.workbench.domain.WorkbenchIds.newId(), candidate = dev.workbench.domain.WorkbenchIds.newId();
     repository.create(
         baseline,
         SeedSuite.Variant.DYNAMIC_CHECK_V1,

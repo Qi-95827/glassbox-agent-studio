@@ -2,7 +2,7 @@ package dev.workbench.workspace;
 
 import dev.workbench.persistence.entity.ApprovalEntity;
 import dev.workbench.persistence.repository.ApprovalRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,7 +31,7 @@ public class ApprovalService {
         valid = false;
       }
       if (!valid)
-        rows.updateStatus(row.getId(), "STALE", RunRecordService.now());
+        rows.updateStatus(row.getId(), "STALE", dev.workbench.domain.WorkbenchTime.now());
     }
     return rows.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId).stream()
         .map(ApprovalService::map)
@@ -40,8 +40,8 @@ public class ApprovalService {
 
   public Map<String, Object> propose(String workspaceId) {
     String fingerprint = workspaces.approvalFingerprint(workspaceId),
-        id = RunRecordService.id(),
-        now = RunRecordService.now();
+        id = dev.workbench.domain.WorkbenchIds.newId(),
+        now = dev.workbench.domain.WorkbenchTime.now();
     rows.save(new ApprovalEntity(id, workspaceId, fingerprint, "PENDING", now, now));
     return map(
         rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
@@ -56,18 +56,18 @@ public class ApprovalService {
       try {
         current = workspaces.approvalFingerprint(row.getWorkspaceId());
       } catch (RuntimeException e) {
-        rows.updateStatus(id, "STALE", RunRecordService.now());
+        rows.updateStatus(id, "STALE", dev.workbench.domain.WorkbenchTime.now());
         throw new IllegalStateException("工作区状态已改变，原审查已失效。");
       }
       if (!current.equals(row.getFingerprint())) {
-        rows.updateStatus(id, "STALE", RunRecordService.now());
+        rows.updateStatus(id, "STALE", dev.workbench.domain.WorkbenchTime.now());
         throw new IllegalStateException("代码或目标分支已变化，原审查已失效。");
       }
     }
     rows.updateStatus(
         id,
         decision == Decision.APPROVE ? "APPROVED" : "REJECTED",
-        RunRecordService.now());
+        dev.workbench.domain.WorkbenchTime.now());
     return map(
         rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
   }

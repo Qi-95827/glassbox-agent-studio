@@ -3,7 +3,7 @@ package dev.workbench.persistence;
 import static org.junit.jupiter.api.Assertions.*;
 
 import dev.workbench.app.WorkbenchApplication;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import dev.workbench.store.RunRecordService;
 
 /**
  * 隔离旧 H2 副本启动与历史读取。

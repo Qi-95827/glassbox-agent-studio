@@ -1,16 +1,16 @@
 package dev.workbench.framework.agent.assembly;
 
-import dev.workbench.agent.AgentRoleRegistry;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.definition.AgentDefinition;
 import dev.workbench.framework.agent.definition.AgentDefinitionCatalog;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.agent.definition.AgentDefinitionRegistry;
+import dev.workbench.framework.agent.definition.PrivateAgentDefinitionSource;
 import dev.workbench.framework.skill.SkillDefinition;
 import dev.workbench.framework.skill.SkillRegistry;
 import dev.workbench.framework.tool.ToolContracts;
-import dev.workbench.privateagent.PrivateComponentService;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -126,9 +126,7 @@ public class AgentAssemblyPlanner {
         fingerprint,
         components.skills(),
         components.tools(),
-        definitions.isPrivate(ref)
-            ? definitions.privateAgents().fixedModelMode(ref).orElse(null)
-            : null);
+        definitions.fixedModelMode(ref).orElse(null));
   }
 
   /** 技能指导与工具契约是装配计划，不表示已注册、已调用或执行成功。 */
@@ -137,8 +135,8 @@ public class AgentAssemblyPlanner {
       List<SkillDefinition> skills,
       Map<ToolKind, Integer> toolVersions,
       String definitionSha256,
-      List<PrivateComponentService.PinnedSkill> privateSkills,
-      List<PrivateComponentService.PinnedTool> privateTools,
+      List<PrivateAgentDefinitionSource.PinnedSkill> privateSkills,
+      List<PrivateAgentDefinitionSource.PinnedTool> privateTools,
       dev.workbench.domain.ModelMode modelOverride) {
     public Assembly {
       skills = List.copyOf(skills);

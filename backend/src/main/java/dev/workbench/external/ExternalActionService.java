@@ -5,7 +5,7 @@ import dev.workbench.persistence.entity.ExternalActionCheckEntity;
 import dev.workbench.persistence.entity.ExternalActionEntity;
 import dev.workbench.persistence.repository.ExternalActionCheckRepository;
 import dev.workbench.persistence.repository.ExternalActionRepository;
-import dev.workbench.task.RunRecordService;
+import dev.workbench.store.RunRecordService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -69,7 +69,7 @@ public class ExternalActionService {
     var saved =
         actions.saveAndFlush(
             new ExternalActionEntity(
-                RunRecordService.id(),
+                dev.workbench.domain.WorkbenchIds.newId(),
                 runId,
                 actionKey,
                 kind,
@@ -105,7 +105,7 @@ public class ExternalActionService {
     String time = Instant.now().toString();
     checks.save(
         new ExternalActionCheckEntity(
-            RunRecordService.id(),
+            dev.workbench.domain.WorkbenchIds.newId(),
             action.getId(),
             probe.outcome().name(),
             safe(probe.evidence()),
