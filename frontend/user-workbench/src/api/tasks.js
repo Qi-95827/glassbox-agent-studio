@@ -10,6 +10,8 @@ export function normalizeTask(row) {
     runId: row.RUN_ID,
     goal: row.GOAL,
     status: row.STATUS,
+    taskStatus: row.TASK_STATUS || row.STATUS,
+    workspaceDelivered: Boolean(row.WORKSPACE_DELIVERED),
     createdAt: row.CREATED_AT,
     updatedAt: row.UPDATED_AT,
     entryKind: row.ENTRY_KIND,

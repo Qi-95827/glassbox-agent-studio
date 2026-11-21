@@ -32,7 +32,11 @@ public class WorkspaceController {
     ownership.requireWorkspace(workspaceId);
   }
 
-  public record CreateWorkspace(String repositoryPath, String baseBranch) {}
+  public record CreateWorkspace(String repositoryPath, String baseBranch, String workBranch) {
+    public CreateWorkspace(String repositoryPath, String baseBranch) {
+      this(repositoryPath, baseBranch, null);
+    }
+  }
 
   public record CreateIdeaWorkspace(java.util.List<String> files) {}
 
@@ -69,7 +73,7 @@ public class WorkspaceController {
 
   @PostMapping
   public Object create(@RequestBody CreateWorkspace request) {
-    return service.create(request.repositoryPath(), request.baseBranch());
+    return service.create(request.repositoryPath(), request.baseBranch(), request.workBranch());
   }
 
   @PostMapping("/from-idea")

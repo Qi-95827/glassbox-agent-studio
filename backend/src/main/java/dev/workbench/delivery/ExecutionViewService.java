@@ -59,7 +59,71 @@ public class ExecutionViewService {
       CountsView counts,
       BudgetView budget,
       RecoverySupportView recoverySupport,
-      long lastEventSeq) {}
+      long lastEventSeq,
+      String executionMode,
+      List<String> breakpoints) {
+    public ExecutionView(
+        int schemaVersion,
+        String generatedAt,
+        String taskId,
+        String runId,
+        String parentRunId,
+        String runStatus,
+        String stopCause,
+        String reason,
+        String result,
+        String createdAt,
+        String updatedAt,
+        long elapsedMs,
+        int rounds,
+        int tools,
+        int taskVersion,
+        PlanView plan,
+        List<NodeView> nodes,
+        List<EdgeView> edges,
+        FocusView focus,
+        List<BlockingView> blocking,
+        List<ActionView> availableActions,
+        RecoveryView recovery,
+        SupplementView supplement,
+        HandoverView handover,
+        CountsView counts,
+        BudgetView budget,
+        RecoverySupportView recoverySupport,
+        long lastEventSeq) {
+      this(
+          schemaVersion,
+          generatedAt,
+          taskId,
+          runId,
+          parentRunId,
+          runStatus,
+          stopCause,
+          reason,
+          result,
+          createdAt,
+          updatedAt,
+          elapsedMs,
+          rounds,
+          tools,
+          taskVersion,
+          plan,
+          nodes,
+          edges,
+          focus,
+          blocking,
+          availableActions,
+          recovery,
+          supplement,
+          handover,
+          counts,
+          budget,
+          recoverySupport,
+          lastEventSeq,
+          "STEP_TEACHING",
+          List.of());
+    }
+  }
 
   public record PlanView(
       String id,
@@ -254,7 +318,21 @@ public class ExecutionViewService {
       Long durationMs,
       String createdAt,
       String updatedAt,
-      String errorMessage) {}
+      String errorMessage,
+      dev.workbench.framework.trace.GlassboxModels.ModelCallPayload payload) {
+    public ModelCallView(
+        String id,
+        String name,
+        String status,
+        Integer inputTokens,
+        Integer outputTokens,
+        Long durationMs,
+        String createdAt,
+        String updatedAt,
+        String errorMessage) {
+      this(id, name, status, inputTokens, outputTokens, durationMs, createdAt, updatedAt, errorMessage, null);
+    }
+  }
 
   public record ToolCallView(
       String id,
@@ -266,7 +344,33 @@ public class ExecutionViewService {
       String updatedAt,
       String result,
       String errorMessage,
-      String resourceVersion) {}
+      String resourceVersion,
+      dev.workbench.framework.trace.GlassboxModels.ToolCallTrace trace) {
+    public ToolCallView(
+        String id,
+        String name,
+        Integer version,
+        String status,
+        Long durationMs,
+        String createdAt,
+        String updatedAt,
+        String result,
+        String errorMessage,
+        String resourceVersion) {
+      this(
+          id,
+          name,
+          version,
+          status,
+          durationMs,
+          createdAt,
+          updatedAt,
+          result,
+          errorMessage,
+          resourceVersion,
+          null);
+    }
+  }
 
   public record CheckView(
       String id,
@@ -318,7 +422,43 @@ public class ExecutionViewService {
       String acceptedAt,
       String sourceRunId,
       String sourceResult,
-      List<ToolEvidenceView> toolEvidence) {}
+      List<ToolEvidenceView> toolEvidence,
+      dev.workbench.framework.trace.GlassboxModels.StructuredHandoff structured) {
+    public HandoffView(
+        int version,
+        String senderNodeId,
+        String senderNodeLabel,
+        String senderAttemptId,
+        String senderAgentId,
+        String receiverNodeId,
+        String receiverNodeLabel,
+        String receiverAttemptId,
+        String receiverAgentId,
+        String dependencyNodeId,
+        String dependencyNodeLabel,
+        String acceptedAt,
+        String sourceRunId,
+        String sourceResult,
+        List<ToolEvidenceView> toolEvidence) {
+      this(
+          version,
+          senderNodeId,
+          senderNodeLabel,
+          senderAttemptId,
+          senderAgentId,
+          receiverNodeId,
+          receiverNodeLabel,
+          receiverAttemptId,
+          receiverAgentId,
+          dependencyNodeId,
+          dependencyNodeLabel,
+          acceptedAt,
+          sourceRunId,
+          sourceResult,
+          toolEvidence,
+          null);
+    }
+  }
 
   public record ToolEvidenceView(
       String toolCallId, String tool, int version, String resourceVersion) {}

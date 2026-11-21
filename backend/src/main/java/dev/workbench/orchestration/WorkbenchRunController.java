@@ -17,6 +17,7 @@ public class WorkbenchRunController {
   private final AgentSessionService sessions;
   private final RunHandoverService handovers;
   private final dev.workbench.ownership.OwnershipService ownership;
+  private final dev.workbench.store.GlassboxTraceStore traces;
 
   public WorkbenchRunController(
       WorkbenchTaskService taskService,
@@ -24,13 +25,15 @@ public class WorkbenchRunController {
       TaskSupplementService supplements,
       AgentSessionService sessions,
       RunHandoverService handovers,
-      dev.workbench.ownership.OwnershipService ownership) {
+      dev.workbench.ownership.OwnershipService ownership,
+      dev.workbench.store.GlassboxTraceStore traces) {
     this.taskService = taskService;
     this.service = service;
     this.supplements = supplements;
     this.sessions = sessions;
     this.handovers = handovers;
     this.ownership = ownership;
+    this.traces = traces;
   }
 
   @GetMapping("/runs/{id}")
@@ -85,6 +88,26 @@ public class WorkbenchRunController {
     ownership.requireRun(id);
     service.resume(id);
     return Map.of("accepted", true);
+  }
+
+  public record DebugControlRequest(String executionMode, java.util.List<String> breakpoints) {}
+
+  @GetMapping("/runs/{id}/debug-control")
+  Object debugControl(@PathVariable String id) {
+    ownership.requireRun(id);
+    return traces.planControl(id);
+  }
+
+  @PutMapping("/runs/{id}/debug-control")
+  Object updateDebugControl(
+      @PathVariable String id, @RequestBody(required = false) DebugControlRequest request) {
+    ownership.requireRun(id);
+    String mode = request == null ? null : request.executionMode();
+    var bps =
+        request == null || request.breakpoints() == null
+            ? null
+            : new dev.workbench.store.GlassboxTraceStore.CollectionOrNull(request.breakpoints());
+    return traces.updatePlanControl(id, mode, bps);
   }
 
   public record HandoverRequest(String note) {}

@@ -1,5 +1,6 @@
 package dev.workbench.agent;
 
+import dev.workbench.framework.prompt.PromptResourceLoader;
 import dev.workbench.framework.tool.ToolSpecification;
 import dev.workbench.workspace.WorkspaceService;
 import java.nio.charset.StandardCharsets;
@@ -8,17 +9,21 @@ import java.util.List;
 /** 单文件写入要求任务写授权，并在工作区服务内核对文件版本。 */
 public final class WorkspaceWriteTool {
   static final ToolSpecification.Parameter EXPECTED =
-      new ToolSpecification.Parameter("expectedSha256", "最近一次读取获得的 SHA-256");
+      new ToolSpecification.Parameter(
+          "expectedSha256",
+          PromptResourceLoader.tool("workspace_write_single").parameter("expectedSha256"));
   static final ToolSpecification.Parameter CONTENT =
-      new ToolSpecification.Parameter("content", "完整的新文件内容");
+      new ToolSpecification.Parameter(
+          "content", PromptResourceLoader.tool("workspace_write_single").parameter("content"));
 
   private WorkspaceWriteTool() {}
 
   static ToolSpecification<WriteReceipt> specification(
       WorkspaceService service, String id, String scope) {
+    var copy = PromptResourceLoader.tool("workspace_write_single");
     return new ToolSpecification<>(
         "write_authorized_file",
-        "保存用户授权的文件；必须提供读取时的 SHA-256，不可访问其他文件。",
+        copy.description(),
         List.of(EXPECTED, CONTENT),
         List.of(id, scope),
         "修改用户授权的工作区文件。",

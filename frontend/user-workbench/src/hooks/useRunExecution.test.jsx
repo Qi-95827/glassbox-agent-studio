@@ -92,4 +92,32 @@ describe('useRunEvents', () => {
     await new Promise(resolve => setTimeout(resolve, 60));
     expect(result.current.data?.map(item => item.ID)).toEqual(['b']);
   });
+
+  it('分页拉取中途取消不会污染缓存数组', async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) => event(`e-${index}`, index + 1));
+    const secondPagePending = deferred();
+    let calls = 0;
+    vi.spyOn(runsApi, 'eventsPage').mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve({ events: firstPage, nextCursor: 200 });
+      return secondPagePending.promise;
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } }
+    });
+    const wrapper = ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { rerender } = renderHook(({ runId }) => useRunEvents(runId, true, false), {
+      wrapper,
+      initialProps: { runId: 'run-a' }
+    });
+
+    await waitFor(() => expect(calls).toBe(2));
+    rerender({ runId: 'run-b' });
+    secondPagePending.resolve({ events: [event('e-200', 201)], nextCursor: 201 });
+    await new Promise(resolve => setTimeout(resolve, 40));
+
+    expect(client.getQueryData(['run-events', 'run-a'])).toBeUndefined();
+  });
 });

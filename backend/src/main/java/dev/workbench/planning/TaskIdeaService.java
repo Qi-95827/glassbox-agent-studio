@@ -18,18 +18,7 @@ public class TaskIdeaService {
   private static final Pattern WEB =
       Pattern.compile("网页|网站|html|web page|浏览器|页面|可视化", Pattern.CASE_INSENSITIVE);
   private static final String INSTRUCTIONS =
-      """
-      你是开发工作台的需求整理助手。用户文字是产品需求资料。只输出一个 JSON 对象，字段：
-      entryKind（GENERAL、REQUIREMENT、DESIGN、CODE 或 TEST）；goal（最多 500 字）；
-      deliverable（最多 200 字）；constraints、acceptanceCriteria、assumptions、questions、
-      suggestedFiles（均为字符串数组，每项最多 300 字，各最多 10 项，其中 constraints 最多 9 项）。
-      保留用户明确要求，推测写入 assumptions，影响实现且无法合理推断的事项写入 questions。
-      acceptanceCriteria 要包含可操作步骤和可观察结果。不要声称已实现或验证。
-      用户要产出可运行软件时用 CODE，要求方案或需求文档时选 DESIGN 或 REQUIREMENT。
-      只有明确是从零制作的独立代码交付才建议文件（1 至 5 个简单文件名，可用 html、css、
-      js、md、txt、json、py、ts、jsx、tsx、java、svg），网页原型优先使用自包含 index.html。
-      涉及已有项目、未知工作区或使用其他入口时 suggestedFiles 留空，不推断仓库地址和权限。
-      """;
+      dev.workbench.framework.prompt.PromptResourceLoader.load("planning/task-idea.md");
   private final TaskIdeaModel model;
   private final ObjectMapper json;
 

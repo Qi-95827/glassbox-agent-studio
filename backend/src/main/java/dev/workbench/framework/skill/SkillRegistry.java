@@ -1,6 +1,7 @@
 package dev.workbench.framework.skill;
 
 import dev.workbench.domain.AgentRole;
+import dev.workbench.framework.prompt.PromptResourceLoader;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -70,19 +71,19 @@ public class SkillRegistry {
                 SkillId.ANALYZE_EVIDENCE,
                 1,
                 "问题分析",
-                "先区分用户目标、已有证据和未知事项；只引用真实工具观察，不把假设或模拟结果写成已验证事实。"),
+                PromptResourceLoader.load("skills/analyze-evidence.md")),
         SkillId.AUTHORIZED_EDIT,
             new SkillDefinition(
                 SkillId.AUTHORIZED_EDIT,
                 1,
                 "受限代码修改",
-                "先核对分析交接和授权范围，读取目标文件并使用其当前摘要；尽量缩小修改，清楚说明未验证事项。"),
+                PromptResourceLoader.load("skills/authorized-edit.md")),
         SkillId.REVIEW_EVIDENCE,
             new SkillDefinition(
                 SkillId.REVIEW_EVIDENCE,
                 1,
                 "证据审查",
-                "核对目标、约束、上游推断与真实证据；测试未执行、失败和未知分别说明，不以模型自述替代验证。"));
+                PromptResourceLoader.load("skills/review-evidence.md")));
   }
 
   private static Map<AgentRole, List<SkillId>> builtInAssignments() {

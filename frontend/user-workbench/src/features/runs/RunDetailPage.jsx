@@ -22,7 +22,7 @@ import { useToast } from '../../components/ToastProvider';
 import { useNodeDetail, useRunEvents, useRunExecution } from '../../hooks/useRunExecution';
 import { runsApi } from '../../api/runs';
 import { tasksApi } from '../../api/tasks';
-import { EVENT_NAMES, modelKey, modelLabel, nodeTitle } from '../../constants/labels';
+import { EVENT_NAMES, modelKey, modelLabel, nodeTitle, statusLabel } from '../../constants/labels';
 import { oneLine, shortId } from '../../utils/format';
 import { usePageChrome } from '../../layout/pageChrome';
 import { googleTokens } from '../../theme/googleTheme';
@@ -102,7 +102,7 @@ export default function RunDetailPage() {
       { label: goalTitle },
       { label: `运行 #${shortId(runId)}`, mono: true }
     ],
-    status: view?.runStatus ?? detail?.run?.STATUS ?? null,
+    status: detail?.task?.TASK_STATUS ?? view?.runStatus ?? detail?.run?.STATUS ?? null,
     model: {
       label: runModel === 'mixed' ? '混合模型' : runModel ? modelLabel(runModel) : '未知模型',
       value: runModel,
@@ -237,10 +237,30 @@ export default function RunDetailPage() {
     );
   }
 
+  const workspaceDelivered = Boolean(detail?.task?.WORKSPACE_DELIVERED);
   const focusItems = view.focus?.active ?? [];
   const blocking = (view.blocking ?? []).filter(
-    item => !(view.reason && item.code === 'RUN_BLOCKED' && !item.nodeId)
+    item =>
+      !(view.reason && item.code === 'RUN_BLOCKED' && !item.nodeId) &&
+      !(workspaceDelivered && item.code === 'RUN_BLOCKED')
   );
+
+  const breakpoints = new Set(view.breakpoints ?? []);
+  const toggleBreakpoint = async nodeId => {
+    const next = new Set(breakpoints);
+    if (next.has(nodeId)) next.delete(nodeId);
+    else next.add(nodeId);
+    try {
+      await runsApi.updateDebugControl(runId, {
+        executionMode: view?.executionMode || 'STEP_TEACHING',
+        breakpoints: [...next]
+      });
+      toast.success(next.has(nodeId) ? '已在该节点设置断点' : '已取消节点断点');
+      invalidate();
+    } catch (err) {
+      toast.error(err.message || '无法更新断点设置');
+    }
+  };
 
   const inspector = (
     <NodeInspector
@@ -254,6 +274,8 @@ export default function RunDetailPage() {
       generatedAt={view.generatedAt}
       runModelMode={detail?.task?.MODEL_MODE}
       selectedEdge={selectedEdge}
+      hasBreakpoint={Boolean(node && breakpoints.has(node.id))}
+      onToggleBreakpoint={() => node && toggleBreakpoint(node.id)}
       cancelAction={(view.availableActions ?? []).find(action => action.actionCode === 'CANCEL')}
       executor={node?.agentName || 'AutoDev-Agent v2'}
       onClose={() => setInspectorOpen(false)}
@@ -270,7 +292,18 @@ export default function RunDetailPage() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <RunHeader view={view} tab={tab} onTab={setTab} onAction={handleAction} busy={busyAction} />
+      <RunHeader
+        view={view}
+        tab={tab}
+        onTab={setTab}
+        onAction={handleAction}
+        busy={busyAction}
+        workspaceId={detail?.task?.WORKSPACE_ID}
+        onOpenWorkspace={() => {
+          const wsId = detail?.task?.WORKSPACE_ID;
+          if (wsId) navigate(`/workspaces?id=${wsId}`);
+        }}
+      />
 
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', bgcolor: googleTokens.canvas }}>
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, position: 'relative' }}>
@@ -285,6 +318,7 @@ export default function RunDetailPage() {
                   selectedEdge ? `${selectedEdge.fromNodeId}:${selectedEdge.toNodeId}` : null
                 }
                 focusIds={new Set(focusItems.map(item => item.nodeId))}
+                breakpoints={breakpoints}
                 generatedAt={view.generatedAt}
                 viewportKey={inspectorOpen}
                 onSelectNode={id => {
@@ -330,11 +364,16 @@ export default function RunDetailPage() {
                       {item.activityLabel ? ` · ${item.activityLabel}` : ''}
                     </Box>
                   ))}
-                  {view.reason && (
-                    <Alert severity="warning" sx={{ py: 0.25 }}>
-                      {view.reason}
-                    </Alert>
-                  )}
+                  {view.reason &&
+                    (workspaceDelivered ? (
+                      <Alert severity="success" sx={{ py: 0.25 }}>
+                        工作区已完成 Git 交付（Agent 执行终态：{statusLabel(view.runStatus)}）
+                      </Alert>
+                    ) : (
+                      <Alert severity="warning" sx={{ py: 0.25 }}>
+                        {view.reason}
+                      </Alert>
+                    ))}
                 </Box>
               )}
 

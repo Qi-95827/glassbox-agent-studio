@@ -1,5 +1,6 @@
 package dev.workbench.agent;
 
+import dev.workbench.framework.prompt.PromptResourceLoader;
 import dev.workbench.framework.tool.ToolSpecification;
 import dev.workbench.workspace.AuthorizedCodeSearch;
 import dev.workbench.workspace.AuthorizedFileSet;
@@ -11,10 +12,11 @@ public final class WorkspaceSearchTool {
 
   static ToolSpecification<AuthorizedCodeSearch.SearchResult> specification(
       AuthorizedCodeSearch search, String workspaceId, AuthorizedFileSet scope) {
+    var copy = PromptResourceLoader.tool("workspace_search");
     return new ToolSpecification<>(
         "search_authorized_files",
-        "在用户明确授权的现有文件内搜索区分大小写的单行字面文本，返回匹配行与文件摘要。",
-        List.of(new ToolSpecification.Parameter("query", "1 至 100 个字符的单行字面文本")),
+        copy.description(),
+        List.of(new ToolSpecification.Parameter("query", copy.parameter("query"))),
         List.of(workspaceId),
         "搜索用户授权的工作区文件。",
         arguments -> AuthorizedCodeSearch.validateQuery(arguments.get("query")),

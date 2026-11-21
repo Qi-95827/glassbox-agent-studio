@@ -7,8 +7,10 @@ import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.control.RunControl;
+import dev.workbench.framework.trace.GlassboxModels;
 import dev.workbench.task.CostService;
 import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.GlassboxTraceStore;
 import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.store.RunStateStore;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
@@ -26,6 +28,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final RunControl.NodePolicy nodePolicy;
   private final CostService costs;
   private final WorkspaceAuthorizationService authorization;
+  private final GlassboxTraceStore traces;
   private AgentAssemblySnapshot.Components assembly;
   private CostService.Reservation costReservation = CostService.Reservation.NONE;
 
@@ -72,6 +75,30 @@ final class ControlledAgentRuntime implements AgentRuntime {
       RunControl.NodePolicy nodePolicy,
       CostService costs,
       WorkspaceAuthorizationService authorization) {
+    this(
+        runId,
+        agentId,
+        control,
+        assemblyRecords,
+        runs,
+        evidence,
+        nodePolicy,
+        costs,
+        authorization,
+        null);
+  }
+
+  ControlledAgentRuntime(
+      String runId,
+      String agentId,
+      RunControl control,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
+      RunControl.NodePolicy nodePolicy,
+      CostService costs,
+      WorkspaceAuthorizationService authorization,
+      GlassboxTraceStore traces) {
     this.runId = Objects.requireNonNull(runId);
     this.agentId = Objects.requireNonNull(agentId);
     this.control = Objects.requireNonNull(control);
@@ -81,6 +108,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
     this.nodePolicy = nodePolicy;
     this.costs = costs;
     this.authorization = authorization;
+    this.traces = traces;
   }
 
   @Override
@@ -195,6 +223,20 @@ final class ControlledAgentRuntime implements AgentRuntime {
   public void toolResult(String result, String resourceVersion) {
     control.finishTool(InvocationStatus.COMPLETED, result, null, resourceVersion);
     // 工具结束时框架会话未必形成一致快照，不能视为系统检查点。
+  }
+
+  @Override
+  public void modelTrace(GlassboxModels.ModelCallPayload payload) {
+    if (traces == null || payload == null) return;
+    UUID callId = control.lastModelCallId();
+    if (callId == null) callId = control.currentModelCallId();
+    if (callId != null) traces.recordModelPayload(runId, callId.toString(), payload);
+  }
+
+  @Override
+  public void toolTrace(UUID callId, GlassboxModels.ToolCallTrace trace) {
+    if (traces == null || callId == null || trace == null) return;
+    traces.recordToolTrace(runId, callId.toString(), trace);
   }
 
   @Override

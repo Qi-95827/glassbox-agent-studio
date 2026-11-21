@@ -3,23 +3,34 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { runsApi } from '../api/runs';
 import { isLiveStatus } from '../constants/labels';
 
+const MAX_CACHED_RUN_STREAMS = 10;
+
 const liveInterval = query => {
   const status = query.state.data?.run?.STATUS ?? query.state.data?.runStatus;
   return isLiveStatus(status) ? 1800 : false;
 };
 
+function pruneOldRunEntries(cursorMap, eventsMap, currentRunId) {
+  while (eventsMap.size > MAX_CACHED_RUN_STREAMS) {
+    const oldestKey = eventsMap.keys().next().value;
+    if (oldestKey === currentRunId) break;
+    eventsMap.delete(oldestKey);
+    cursorMap.delete(oldestKey);
+  }
+}
+
 /** 运行详情 + 服务端执行视图，运行中自动轮询，进入终态自动停止。 */
 export function useRunExecution(runId) {
   const runQuery = useQuery({
     queryKey: ['run', runId],
-    queryFn: () => runsApi.get(runId, false),
+    queryFn: ({ signal }) => runsApi.get(runId, false, { signal }),
     enabled: Boolean(runId),
     refetchInterval: liveInterval
   });
 
   const viewQuery = useQuery({
     queryKey: ['execution-view', runId],
-    queryFn: () => runsApi.executionView(runId),
+    queryFn: ({ signal }) => runsApi.executionView(runId, { signal }),
     enabled: Boolean(runId),
     refetchInterval: liveInterval
   });
@@ -94,6 +105,7 @@ export function useRunEvents(runId, enabled = true, live = false) {
     if (runId && !cursorByRun.current.has(runId)) {
       cursorByRun.current.set(runId, 0);
       eventsByRun.current.set(runId, []);
+      pruneOldRunEntries(cursorByRun.current, eventsByRun.current, runId);
     }
     return () => {
       if (runId) queryClient.cancelQueries({ queryKey: ['run-events', runId] });
@@ -104,17 +116,21 @@ export function useRunEvents(runId, enabled = true, live = false) {
     queryKey: ['run-events', runId],
     queryFn: async ({ signal }) => {
       let cursor = cursorByRun.current.get(runId) ?? 0;
-      const merged = eventsByRun.current.get(runId) ?? [];
-      const known = new Set(merged.map(event => event.ID));
+      const working = [...(eventsByRun.current.get(runId) ?? [])];
+      const known = new Set(working.map(event => event.ID));
       for (let round = 0; round < 25; round += 1) {
         const page = await runsApi.eventsPage(runId, cursor, 200, { signal });
-        const absorbed = absorbEventPage(merged, known, cursor, page);
+        if (signal?.aborted) return working;
+        const absorbed = absorbEventPage(working, known, cursor, page);
         cursor = absorbed.cursor;
         if (absorbed.received < 200) break;
       }
-      cursorByRun.current.set(runId, cursor);
-      eventsByRun.current.set(runId, merged);
-      return [...merged];
+      if (!signal?.aborted) {
+        cursorByRun.current.set(runId, cursor);
+        eventsByRun.current.set(runId, working);
+        pruneOldRunEntries(cursorByRun.current, eventsByRun.current, runId);
+      }
+      return working;
     },
     enabled: Boolean(runId) && enabled,
     refetchInterval: live ? 1800 : false,
@@ -125,7 +141,7 @@ export function useRunEvents(runId, enabled = true, live = false) {
 export function useNodeDetail(runId, nodeId, live = false) {
   return useQuery({
     queryKey: ['node-detail', runId, nodeId],
-    queryFn: () => runsApi.nodeDetail(runId, nodeId),
+    queryFn: ({ signal }) => runsApi.nodeDetail(runId, nodeId, { signal }),
     enabled: Boolean(runId && nodeId),
     refetchInterval: live ? 1800 : false
   });
@@ -134,7 +150,7 @@ export function useNodeDetail(runId, nodeId, live = false) {
 export function useRunDelivery(runId, enabled = true) {
   return useQuery({
     queryKey: ['delivery', runId],
-    queryFn: () => runsApi.delivery(runId),
+    queryFn: ({ signal }) => runsApi.delivery(runId, { signal }),
     enabled: Boolean(runId) && enabled,
     retry: 0
   });
@@ -143,7 +159,7 @@ export function useRunDelivery(runId, enabled = true) {
 export function useAgentMetrics(runId, enabled = true) {
   return useQuery({
     queryKey: ['agent-metrics', runId],
-    queryFn: () => runsApi.agentMetrics(runId),
+    queryFn: ({ signal }) => runsApi.agentMetrics(runId, { signal }),
     enabled: Boolean(runId) && enabled
   });
 }

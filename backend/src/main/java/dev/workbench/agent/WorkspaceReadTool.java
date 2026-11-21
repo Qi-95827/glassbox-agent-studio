@@ -1,5 +1,6 @@
 package dev.workbench.agent;
 
+import dev.workbench.framework.prompt.PromptResourceLoader;
 import dev.workbench.framework.tool.ToolSpecification;
 import dev.workbench.workspace.WorkspaceService;
 import java.util.List;
@@ -10,9 +11,10 @@ public final class WorkspaceReadTool {
 
   static ToolSpecification<WorkspaceService.FileContent> specification(
       WorkspaceService service, String id, String scope) {
+    var copy = PromptResourceLoader.tool("workspace_read_single");
     return new ToolSpecification<>(
         "read_authorized_file",
-        "读取用户明确授权的单个工作区文件，返回内容和 SHA-256。",
+        copy.description(),
         List.of(),
         List.of(id, scope),
         "读取用户授权的工作区文件。",

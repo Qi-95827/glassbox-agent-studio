@@ -1,5 +1,6 @@
 package dev.workbench.agent;
 
+import dev.workbench.framework.prompt.PromptResourceLoader;
 import dev.workbench.framework.tool.ToolSpecification;
 import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.WorkspaceService;
@@ -11,11 +12,14 @@ public final class WorkspaceScopedWriteTool {
 
   static ToolSpecification<WorkspaceWriteTool.WriteReceipt> specification(
       WorkspaceService service, String workspaceId, AuthorizedFileSet scope) {
+    var copy = PromptResourceLoader.tool("workspace_write_scoped");
     return new ToolSpecification<>(
         "write_authorized_file",
-        "修改授权列表中的一个现有文件，必须提供该文件的 SHA-256。",
+        copy.description(),
         List.of(
-            WorkspaceScopedReadTool.PATH, WorkspaceWriteTool.EXPECTED, WorkspaceWriteTool.CONTENT),
+            new ToolSpecification.Parameter("path", copy.parameter("path")),
+            new ToolSpecification.Parameter("expectedSha256", copy.parameter("expectedSha256")),
+            new ToolSpecification.Parameter("content", copy.parameter("content"))),
         List.of(workspaceId),
         "修改用户授权的工作区文件。",
         arguments -> {

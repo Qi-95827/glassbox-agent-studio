@@ -55,6 +55,7 @@ class WorkflowScheduler {
   private final WorkspaceAuthorizationService workspaceAuthorization;
   private final dev.workbench.ownership.OwnershipService ownership;
   private final dev.workbench.privateagent.PrivateAgentCatalog privateAgents;
+  private final dev.workbench.store.GlassboxTraceStore traces;
 
   WorkflowScheduler(
       RunEvidenceRecordService evidence,
@@ -71,7 +72,8 @@ class WorkflowScheduler {
       SourceArtifactService sourceArtifacts,
       WorkspaceAuthorizationService workspaceAuthorization,
       dev.workbench.ownership.OwnershipService ownership,
-      dev.workbench.privateagent.PrivateAgentCatalog privateAgents) {
+      dev.workbench.privateagent.PrivateAgentCatalog privateAgents,
+      dev.workbench.store.GlassboxTraceStore traces) {
     this.evidence = evidence;
     this.agents = agents;
     this.runs = runs;
@@ -89,6 +91,7 @@ class WorkflowScheduler {
     this.workspaceAuthorization = workspaceAuthorization;
     this.ownership = ownership;
     this.privateAgents = privateAgents;
+    this.traces = traces;
   }
 
   WorkflowTemplate template(String id) {
@@ -133,9 +136,18 @@ class WorkflowScheduler {
             workflowRuns.checkpointBeforeFirstNode(runId, plan.id(), control.elapsed());
             return null;
           });
+      var releasedBreakpoints = new java.util.HashSet<String>();
       while (true) {
         var node = plans.nextReady(plans.checkedWorkflowNodes(runId, plan));
         if (node == null) throw new IllegalStateException("工作流没有可继续执行的节点。");
+        String nodeIdText = node.id().toString();
+        if (traces != null
+            && !releasedBreakpoints.contains(nodeIdText)
+            && traces.planControl(runId).breakpoints().contains(nodeIdText)) {
+          releasedBreakpoints.add(nodeIdText);
+          control.pauseAtBreakpoint(
+              stateLock, "命中节点断点：" + node.label() + "；请检查上游交接与上下文后点击「继续」放行。");
+        }
         if (node.systemCheck()) {
           // 检查节点不创建 Agent 实例，也不消耗模型或工具预算。
           var claimed =
@@ -293,7 +305,8 @@ class WorkflowScheduler {
                 evidence,
                 nodePolicy,
                 costs,
-                workspaceAuthorization),
+                workspaceAuthorization,
+                traces),
             node.definitionRef(),
             node.definitionSha256(),
             writeFiles);

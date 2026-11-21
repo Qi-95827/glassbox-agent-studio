@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap');
-
+/* 使用本地系统与主题字体栈，避免外链字体在离线或受限网络下阻塞首屏样式。 */
 html,
 body,
 #root {

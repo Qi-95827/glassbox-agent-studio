@@ -7,6 +7,7 @@ import dev.workbench.framework.ownership.OwnershipStamper;
 import dev.workbench.persistence.entity.TaskEntity;
 import dev.workbench.persistence.entity.TaskRoleBudgetEntity;
 import dev.workbench.persistence.entity.TaskToolBudgetEntity;
+import dev.workbench.persistence.repository.GitActionRepository;
 import dev.workbench.persistence.repository.InvocationRepository;
 import dev.workbench.persistence.repository.TaskData;
 import dev.workbench.persistence.repository.TaskRepository;
@@ -28,8 +29,27 @@ public class TaskRecordService {
   private final TaskRoleBudgetRepository roleBudgetRows;
   private final TaskToolBudgetRepository toolBudgetRows;
   private final InvocationRepository invocationRows;
+  private final GitActionRepository gitActions;
   private final OwnershipStamper ownership;
   private final ObjectMapper json;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public TaskRecordService(
+      TaskRepository taskRows,
+      TaskRoleBudgetRepository roleBudgetRows,
+      TaskToolBudgetRepository toolBudgetRows,
+      InvocationRepository invocationRows,
+      GitActionRepository gitActions,
+      OwnershipStamper ownership,
+      ObjectMapper json) {
+    this.taskRows = taskRows;
+    this.roleBudgetRows = roleBudgetRows;
+    this.toolBudgetRows = toolBudgetRows;
+    this.invocationRows = invocationRows;
+    this.gitActions = gitActions;
+    this.ownership = ownership;
+    this.json = json;
+  }
 
   public TaskRecordService(
       TaskRepository taskRows,
@@ -38,20 +58,26 @@ public class TaskRecordService {
       InvocationRepository invocationRows,
       OwnershipStamper ownership,
       ObjectMapper json) {
-    this.taskRows = taskRows;
-    this.roleBudgetRows = roleBudgetRows;
-    this.toolBudgetRows = toolBudgetRows;
-    this.invocationRows = invocationRows;
-    this.ownership = ownership;
-    this.json = json;
+    this(taskRows, roleBudgetRows, toolBudgetRows, invocationRows, null, ownership, json);
   }
 
   public List<Map<String, Object>> tasks() {
+    var deliveredWorkspaces =
+        gitActions == null
+            ? java.util.Set.<String>of()
+            : new java.util.HashSet<>(gitActions.findDeliveredWorkspaceIds());
     return taskRows.findAllWithLatestRun(RunStatus.PENDING.name()).stream()
         .map(
             task -> {
               var row = taskMap(task.task());
+              String workspaceId = task.task().workspaceId();
+              boolean hasWorkspace = workspaceId != null && !workspaceId.isBlank();
+              boolean delivered = hasWorkspace && deliveredWorkspaces.contains(workspaceId);
               row.put("STATUS", task.status());
+              row.put(
+                  "TASK_STATUS",
+                  TaskStatus.derive(task.status(), hasWorkspace, delivered).name());
+              row.put("WORKSPACE_DELIVERED", delivered);
               row.put("RUN_ID", task.runId());
               row.put("PLAN_REVIEW_PENDING", task.planReviewPending());
               return row;
@@ -61,6 +87,20 @@ public class TaskRecordService {
 
   public Map<String, Object> task(String id) {
     return taskMap(findTask(id));
+  }
+
+  public Map<String, Object> task(String id, String runStatus) {
+    var task = findTask(id);
+    var row = taskMap(task);
+    String workspaceId = task.workspaceId();
+    boolean hasWorkspace = workspaceId != null && !workspaceId.isBlank();
+    boolean delivered =
+        hasWorkspace
+            && gitActions != null
+            && gitActions.findDeliveredWorkspaceIds().contains(workspaceId);
+    row.put("TASK_STATUS", TaskStatus.derive(runStatus, hasWorkspace, delivered).name());
+    row.put("WORKSPACE_DELIVERED", delivered);
+    return row;
   }
 
   private TaskData findTask(String id) {

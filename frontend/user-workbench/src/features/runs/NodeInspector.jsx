@@ -12,6 +12,8 @@ import {
   Divider,
   IconButton,
   Stack,
+  Tab,
+  Tabs,
   Tooltip,
   Typography
 } from '@mui/material';
@@ -21,9 +23,15 @@ import SearchRounded from '@mui/icons-material/SearchRounded';
 import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded';
 import ErrorOutlineRounded from '@mui/icons-material/ErrorOutlineRounded';
 import HourglassEmptyRounded from '@mui/icons-material/HourglassEmptyRounded';
+import FiberManualRecordRounded from '@mui/icons-material/FiberManualRecordRounded';
 import StatusChip from '../../components/StatusChip';
 import { Readout, TraceSection } from '../../components/WorkbenchDialog';
 import EmptyState from '../../components/EmptyState';
+import MarkdownView from '../../components/MarkdownView';
+import AssemblyBlueprintPanel from './glassbox/AssemblyBlueprintPanel';
+import LlmTracePanel from './glassbox/LlmTracePanel';
+import ToolGatewayPanel from './glassbox/ToolGatewayPanel';
+import HandoffEnvelopePanel from './glassbox/HandoffEnvelopePanel';
 import { TOOL_NAMES, PLAN_ROLES, modelKey, modelLabel, nodeTitle } from '../../constants/labels';
 import { clock, duration, nodeDuration, oneLine, parseJson, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
@@ -141,23 +149,11 @@ function LongBody({ text, label = '交接正文' }) {
       <Box
         sx={{
           position: 'relative',
-          maxHeight: expanded ? 'none' : 120,
+          maxHeight: expanded ? 'none' : 160,
           overflow: 'hidden'
         }}
       >
-        <Typography
-          component="pre"
-          variant="body2"
-          sx={{
-            m: 0,
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-            fontFamily: 'inherit',
-            lineHeight: 1.65
-          }}
-        >
-          {text}
-        </Typography>
+        <MarkdownView text={text} dense />
         {!expanded && long && (
           <Box
             sx={{
@@ -333,13 +329,17 @@ export default function NodeInspector({
   executor,
   runModelMode,
   selectedEdge,
+  hasBreakpoint = false,
+  onToggleBreakpoint,
   cancelAction,
   onClose,
   onCancelRun,
   onOpenLogs
 }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [viewTab, setViewTab] = useState('overview');
   const attempts = detail?.attempts ?? [];
+  const models = attempts.flatMap(attempt => attempt.models ?? []);
   const tools = attempts.flatMap(attempt =>
     (attempt.tools ?? []).map(call => ({ ...call, attemptNo: attempt.number }))
   );
@@ -423,6 +423,26 @@ export default function NodeInspector({
               label={`任务 ID：${shortId(taskId) || '—'}`}
               sx={{ bgcolor: '#F1F3F4', color: '#5F6368', fontFamily: googleTokens.mono }}
             />
+            {node && onToggleBreakpoint && (
+              <Tooltip title="在执行该节点前自动暂停，便于检查上游交接与上下文">
+                <Chip
+                  size="small"
+                  clickable
+                  onClick={onToggleBreakpoint}
+                  icon={
+                    <FiberManualRecordRounded
+                      sx={{ fontSize: 12, color: hasBreakpoint ? '#C5221F' : '#9AA0A6' }}
+                    />
+                  }
+                  label={hasBreakpoint ? '已设断点' : '设断点'}
+                  sx={{
+                    bgcolor: hasBreakpoint ? '#FCE8E6' : '#F1F3F4',
+                    color: hasBreakpoint ? '#C5221F' : '#5F6368',
+                    fontWeight: 500
+                  }}
+                />
+              </Tooltip>
+            )}
           </Stack>
         </Stack>
         <Tooltip title="关闭详情">
@@ -465,173 +485,202 @@ export default function NodeInspector({
 
       <Divider />
 
+      <Tabs
+        value={viewTab}
+        onChange={(_, value) => setViewTab(value)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{
+          minHeight: 38,
+          px: 1.5,
+          borderBottom: `1px solid ${googleTokens.outline}`,
+          '& .MuiTab-root': { minHeight: 38, py: 0.75, fontSize: 12.5 }
+        }}
+      >
+        <Tab value="overview" label="总览" />
+        <Tab value="llm" label={`模型 I/O (${models.length})`} />
+        <Tab value="gateway" label={`工具安检 (${tools.length})`} />
+        <Tab value="handoff" label={`交接 (${inbound.length + outbound.length})`} />
+        <Tab value="assembly" label="装配配方" />
+      </Tabs>
+
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', px: 2.5, py: 2 }}>
-        {error && (
-          <Alert severity="error" sx={{ mb: 1.5 }}>
-            {error.message || String(error)}
-          </Alert>
-        )}
-        {loading && !detail && (
-          <Stack direction="row" spacing={1} sx={{ py: 2, alignItems: 'center' }}>
-            <CircularProgress size={16} />
-            <Typography variant="body2" color="text.secondary">
-              正在读取节点记录…
-            </Typography>
-          </Stack>
-        )}
-
-        <Typography sx={{ fontSize: 13.5, fontWeight: 600, mb: 1 }}>工具调用与写入回执</Typography>
-        <Stack spacing={0.9}>
-          {tools.length > 0 ? (
-            tools.map(call => <ToolRow key={call.id} call={call} />)
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              {node?.status === 'RUNNING'
-                ? '节点正在执行，工具调用回执会在完成后写入。'
-                : '该节点没有工具调用记录。'}
-            </Typography>
-          )}
-        </Stack>
-
-        <Typography sx={{ fontSize: 13.5, fontWeight: 600, mt: 2.5, mb: 1 }}>
-          上游交接摘要
-        </Typography>
-        <HandoffSummary
-          handoffs={edgeHandoffs}
-          selectedEdge={selectedEdge}
-          fromLabel={edgeFromLabel}
-          toLabel={edgeToLabel}
-          dependency={dependency}
-        />
-
-        {(inbound.length > 0 || outbound.length > 0) && (
-          <TraceSection
-            title="全部交接记录"
-            subtitle={`入站 ${inbound.length} 条 · 出站 ${outbound.length} 条`}
-            defaultExpanded={Boolean(selectedEdge)}
-          >
-            <Stack spacing={1}>
-              {inbound.map(record => (
-                <HandoffRecord
-                  key={`in:${record.senderAttemptId}:${record.dependencyNodeId}`}
-                  record={record}
-                  direction="inbound"
-                />
-              ))}
-              {outbound.map(record => (
-                <HandoffRecord
-                  key={`out:${record.receiverAttemptId}:${record.dependencyNodeId}`}
-                  record={record}
-                  direction="outbound"
-                />
-              ))}
-            </Stack>
-          </TraceSection>
-        )}
-
-        {detail?.result && (
+        {viewTab === 'llm' && <LlmTracePanel models={models} />}
+        {viewTab === 'gateway' && <ToolGatewayPanel tools={tools} />}
+        {viewTab === 'handoff' && <HandoffEnvelopePanel inbound={inbound} outbound={outbound} />}
+        {viewTab === 'assembly' && <AssemblyBlueprintPanel node={node} attempts={attempts} />}
+        {viewTab === 'overview' && (
           <>
-            <Typography sx={{ fontSize: 13.5, fontWeight: 600, mt: 2.5, mb: 1 }}>
-              节点结果
-            </Typography>
-            <Box sx={{ bgcolor: googleTokens.canvas, borderRadius: 2.5, p: 1.4 }}>
-              <LongBody text={detail.result} label="节点结果" />
-            </Box>
-          </>
-        )}
-
-        {checks.length > 0 && (
-          <Box sx={{ mt: 1 }}>
-            <TraceSection title={`系统检查 · ${checks.length} 条`} subtitle="证据快照">
-              <Stack spacing={1}>
-                {checks.map(check => (
-                  <Box key={check.id}>
-                    <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
-                      <StatusChip value={check.status} />
-                      <Typography variant="caption" color="text.secondary">
-                        {check.checkId} v{check.checkVersion}
-                      </Typography>
-                    </Stack>
-                    {check.summary && (
-                      <Typography variant="body2" sx={{ mt: 0.4, whiteSpace: 'pre-wrap' }}>
-                        {check.summary}
-                      </Typography>
-                    )}
-                    {check.evidence && (
-                      <Box sx={{ mt: 0.5 }}>
-                        <Readout maxHeight={160}>{check.evidence}</Readout>
-                      </Box>
-                    )}
-                  </Box>
-                ))}
+            {error && (
+              <Alert severity="error" sx={{ mb: 1.5 }}>
+                {error.message || String(error)}
+              </Alert>
+            )}
+            {loading && !detail && (
+              <Stack direction="row" spacing={1} sx={{ py: 2, alignItems: 'center' }}>
+                <CircularProgress size={16} />
+                <Typography variant="body2" color="text.secondary">
+                  正在读取节点记录…
+                </Typography>
               </Stack>
-            </TraceSection>
-          </Box>
-        )}
+            )}
 
-        {hasAssembly && (
-          <TraceSection title="Agent 装配快照" subtitle={`定义 ${node.definitionId ?? '—'}`}>
-            <Stack spacing={1}>
-              <Typography variant="body2">
-                Skill：{(node.agentSkills ?? []).map(item => item.name).join('、') || '无'}
-              </Typography>
-              <Typography variant="body2">
-                工具：{(node.agentTools ?? []).map(item => item.name).join('、') || '无'}
-              </Typography>
-              {node.agentReason && (
-                <Typography variant="caption" color="text.secondary">
-                  选择理由：{node.agentReason}
+            <Typography sx={{ fontSize: 13.5, fontWeight: 600, mb: 1 }}>
+              工具调用与写入回执
+            </Typography>
+            <Stack spacing={0.9}>
+              {tools.length > 0 ? (
+                tools.map(call => <ToolRow key={call.id} call={call} />)
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  {node?.status === 'RUNNING'
+                    ? '节点正在执行，工具调用回执会在完成后写入。'
+                    : '该节点没有工具调用记录。'}
                 </Typography>
               )}
-              {attempts
-                .filter(attempt => attempt.assembly)
-                .map(attempt => (
-                  <Box key={`assembly:${attempt.id}`}>
-                    <Typography variant="caption" color="text.secondary">
-                      尝试 {attempt.number} · 实际装配
-                      {attempt.assembly?.components?.model?.name
-                        ? ` · 模型 ${modelLabel(
-                            attempt.assembly.components.model.mode ||
-                              attempt.assembly.components.model.name
-                          )}`
-                        : ''}
-                      {attempt.assembly?.components?.input?.sources?.length
-                        ? ` · 输入来源 ${attempt.assembly.components.input.sources.length} 个`
-                        : ''}
-                    </Typography>
-                    <Readout mono maxHeight={240}>
-                      {JSON.stringify(attempt.assembly, null, 2)}
-                    </Readout>
-                  </Box>
-                ))}
             </Stack>
-          </TraceSection>
-        )}
 
-        {nodeEvents.length > 0 && (
-          <TraceSection title="节点时间线" subtitle={`${nodeEvents.length} 条事件`}>
-            <Stack spacing={0.9}>
-              {nodeEvents.map(event => (
-                <Box key={event.id}>
-                  <Typography variant="caption" color="text.secondary">
-                    {clock(event.occurredAt)} · {event.type}
-                    {event.reasonCode ? ` · ${event.reasonCode}` : ''}
-                  </Typography>
-                  <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                    {event.message}
-                  </Typography>
+            <Typography sx={{ fontSize: 13.5, fontWeight: 600, mt: 2.5, mb: 1 }}>
+              上游交接摘要
+            </Typography>
+            <HandoffSummary
+              handoffs={edgeHandoffs}
+              selectedEdge={selectedEdge}
+              fromLabel={edgeFromLabel}
+              toLabel={edgeToLabel}
+              dependency={dependency}
+            />
+
+            {(inbound.length > 0 || outbound.length > 0) && (
+              <TraceSection
+                title="全部交接记录"
+                subtitle={`入站 ${inbound.length} 条 · 出站 ${outbound.length} 条`}
+                defaultExpanded={Boolean(selectedEdge)}
+              >
+                <Stack spacing={1}>
+                  {inbound.map(record => (
+                    <HandoffRecord
+                      key={`in:${record.senderAttemptId}:${record.dependencyNodeId}`}
+                      record={record}
+                      direction="inbound"
+                    />
+                  ))}
+                  {outbound.map(record => (
+                    <HandoffRecord
+                      key={`out:${record.receiverAttemptId}:${record.dependencyNodeId}`}
+                      record={record}
+                      direction="outbound"
+                    />
+                  ))}
+                </Stack>
+              </TraceSection>
+            )}
+
+            {detail?.result && (
+              <>
+                <Typography sx={{ fontSize: 13.5, fontWeight: 600, mt: 2.5, mb: 1 }}>
+                  节点结果
+                </Typography>
+                <Box sx={{ bgcolor: googleTokens.canvas, borderRadius: 2.5, p: 1.4 }}>
+                  <LongBody text={detail.result} label="节点结果" />
                 </Box>
-              ))}
-            </Stack>
-          </TraceSection>
-        )}
+              </>
+            )}
 
-        {!node && (
-          <EmptyState
-            compact
-            title="选择一个节点"
-            description="点击流程图上的节点查看工具回执、交接摘要与检查证据。"
-          />
+            {checks.length > 0 && (
+              <Box sx={{ mt: 1 }}>
+                <TraceSection title={`系统检查 · ${checks.length} 条`} subtitle="证据快照">
+                  <Stack spacing={1}>
+                    {checks.map(check => (
+                      <Box key={check.id}>
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+                          <StatusChip value={check.status} />
+                          <Typography variant="caption" color="text.secondary">
+                            {check.checkId} v{check.checkVersion}
+                          </Typography>
+                        </Stack>
+                        {check.summary && (
+                          <Typography variant="body2" sx={{ mt: 0.4, whiteSpace: 'pre-wrap' }}>
+                            {check.summary}
+                          </Typography>
+                        )}
+                        {check.evidence && (
+                          <Box sx={{ mt: 0.5 }}>
+                            <Readout maxHeight={160}>{check.evidence}</Readout>
+                          </Box>
+                        )}
+                      </Box>
+                    ))}
+                  </Stack>
+                </TraceSection>
+              </Box>
+            )}
+
+            {hasAssembly && (
+              <TraceSection title="Agent 装配快照" subtitle={`定义 ${node.definitionId ?? '—'}`}>
+                <Stack spacing={1}>
+                  <Typography variant="body2">
+                    Skill：{(node.agentSkills ?? []).map(item => item.name).join('、') || '无'}
+                  </Typography>
+                  <Typography variant="body2">
+                    工具：{(node.agentTools ?? []).map(item => item.name).join('、') || '无'}
+                  </Typography>
+                  {node.agentReason && (
+                    <Typography variant="caption" color="text.secondary">
+                      选择理由：{node.agentReason}
+                    </Typography>
+                  )}
+                  {attempts
+                    .filter(attempt => attempt.assembly)
+                    .map(attempt => (
+                      <Box key={`assembly:${attempt.id}`}>
+                        <Typography variant="caption" color="text.secondary">
+                          尝试 {attempt.number} · 实际装配
+                          {attempt.assembly?.components?.model?.name
+                            ? ` · 模型 ${modelLabel(
+                                attempt.assembly.components.model.mode ||
+                                  attempt.assembly.components.model.name
+                              )}`
+                            : ''}
+                          {attempt.assembly?.components?.input?.sources?.length
+                            ? ` · 输入来源 ${attempt.assembly.components.input.sources.length} 个`
+                            : ''}
+                        </Typography>
+                        <Readout mono maxHeight={240}>
+                          {JSON.stringify(attempt.assembly, null, 2)}
+                        </Readout>
+                      </Box>
+                    ))}
+                </Stack>
+              </TraceSection>
+            )}
+
+            {nodeEvents.length > 0 && (
+              <TraceSection title="节点时间线" subtitle={`${nodeEvents.length} 条事件`}>
+                <Stack spacing={0.9}>
+                  {nodeEvents.map(event => (
+                    <Box key={event.id}>
+                      <Typography variant="caption" color="text.secondary">
+                        {clock(event.occurredAt)} · {event.type}
+                        {event.reasonCode ? ` · ${event.reasonCode}` : ''}
+                      </Typography>
+                      <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                        {event.message}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              </TraceSection>
+            )}
+
+            {!node && (
+              <EmptyState
+                compact
+                title="选择一个节点"
+                description="点击流程图上的节点查看工具回执、交接摘要与检查证据。"
+              />
+            )}
+          </>
         )}
       </Box>
 

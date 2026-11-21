@@ -18,7 +18,15 @@ const primaryActions = new Set(['APPROVE_PLAN', 'PAUSE', 'RESUME', 'TAKE_OVER', 
 const secondaryActions = new Set(['CANCEL', 'RECOVER']);
 
 /** 运行顶部：蓝色细底条 Tabs + 服务端动作按钮组。 */
-export default function RunHeader({ view, tab, onTab, onAction, busy }) {
+export default function RunHeader({
+  view,
+  tab,
+  onTab,
+  onAction,
+  busy,
+  workspaceId,
+  onOpenWorkspace
+}) {
   const [moreAnchor, setMoreAnchor] = useState(null);
   const actions = (view?.availableActions ?? []).filter(
     action => action.actionCode !== 'SUBMIT_SUPPLEMENT'
@@ -105,10 +113,18 @@ export default function RunHeader({ view, tab, onTab, onAction, busy }) {
           size="small"
           variant="contained"
           startIcon={<TaskAltRounded fontSize="small" />}
-          onClick={() => onTab('output')}
+          onClick={() => {
+            if (tab !== 'output') {
+              onTab('output');
+            } else if (workspaceId && onOpenWorkspace) {
+              onOpenWorkspace();
+            } else {
+              onTab('output');
+            }
+          }}
           sx={{ whiteSpace: 'nowrap' }}
         >
-          验收交付
+          {tab === 'output' && workspaceId ? '去工作区提交' : '验收交付'}
         </Button>
       </Stack>
     </Box>

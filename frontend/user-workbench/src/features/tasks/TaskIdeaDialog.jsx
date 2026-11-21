@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -23,7 +23,14 @@ import PlanCandidateDialog from './PlanCandidateDialog';
 const entries = ['GENERAL', 'REQUIREMENT', 'DESIGN', 'CODE', 'TEST'];
 
 /** 从一句想法整理成可编辑任务草稿；不会直接调用工具或创建运行。 */
-export default function TaskIdeaDialog({ open, onClose, onCreated, onManual }) {
+export default function TaskIdeaDialog({
+  open,
+  initialIdea = '',
+  initialModelMode = 'mock',
+  onClose,
+  onCreated,
+  onManual
+}) {
   const [idea, setIdea] = useState('');
   const [mode, setMode] = useState('DEEPSEEK');
   const [form, setForm] = useState(null);
@@ -32,6 +39,7 @@ export default function TaskIdeaDialog({ open, onClose, onCreated, onManual }) {
   const [draftStatus, setDraftStatus] = useState({ phase: null, error: '' });
   const [draftMeta, setDraftMeta] = useState({ prepared: null, idea: null });
   const [planOpen, setPlanOpen] = useState(false);
+  const lastAutoIdeaRef = useRef('');
 
   const phase = draftStatus.phase;
   const error = draftStatus.error;
@@ -53,29 +61,50 @@ export default function TaskIdeaDialog({ open, onClose, onCreated, onManual }) {
     setError('');
   };
 
-  async function generate() {
-    setPhase('draft');
-    setError('');
-    try {
-      const draft = await tasksApi.draftIdea({ idea: idea.trim(), mode });
-      setForm({
-        entryKind: draft.entryKind,
-        goal: draft.goal,
-        deliverable: draft.deliverable,
-        constraints: draft.constraints.join('\n'),
-        acceptance: draft.acceptanceCriteria.join('\n'),
-        files: draft.suggestedFiles.join('\n'),
-        assumptions: draft.assumptions,
-        questions: draft.questions
-      });
-      setDraftIdea(idea.trim());
-      setModelMode(mode === 'DEEPSEEK' ? 'deepseek' : 'mock');
-    } catch (failure) {
-      setError(failure.message);
-    } finally {
-      setPhase(null);
+  const generate = useCallback(
+    async (overrideIdea, overrideMode) => {
+      const targetIdea = (overrideIdea ?? idea).trim();
+      const targetMode = overrideMode ?? mode;
+      if (!targetIdea) return;
+      setPhase('draft');
+      setError('');
+      try {
+        const draft = await tasksApi.draftIdea({ idea: targetIdea, mode: targetMode });
+        setForm({
+          entryKind: draft.entryKind,
+          goal: draft.goal,
+          deliverable: draft.deliverable,
+          constraints: draft.constraints.join('\n'),
+          acceptance: draft.acceptanceCriteria.join('\n'),
+          files: draft.suggestedFiles.join('\n'),
+          assumptions: draft.assumptions,
+          questions: draft.questions
+        });
+        setDraftIdea(targetIdea);
+        setModelMode(targetMode === 'DEEPSEEK' ? 'deepseek' : 'mock');
+      } catch (failure) {
+        setError(failure.message);
+      } finally {
+        setPhase(null);
+      }
+    },
+    [idea, mode]
+  );
+
+  useEffect(() => {
+    if (!open) {
+      lastAutoIdeaRef.current = '';
+      return;
     }
-  }
+    const incoming = initialIdea.trim();
+    if (!incoming || incoming === lastAutoIdeaRef.current) return;
+    lastAutoIdeaRef.current = incoming;
+    const nextMode = initialModelMode === 'deepseek' ? 'DEEPSEEK' : 'LOCAL';
+    setIdea(incoming);
+    setMode(nextMode);
+    setModelMode(initialModelMode === 'deepseek' ? 'deepseek' : 'mock');
+    generate(incoming, nextMode);
+  }, [open, initialIdea, initialModelMode, generate]);
 
   function taskInput() {
     if (!form) throw new Error('请先整理想法或手动填写。');

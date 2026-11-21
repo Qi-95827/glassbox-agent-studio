@@ -72,6 +72,18 @@ public final class RunControl {
     return rounds;
   }
 
+  /** 在节点断点处主动挂起运行，复用协作式暂停与恢复机制等待用户人工放行。 */
+  public void pauseAtBreakpoint(Object stateLock, String reason) {
+    paused.add(runId);
+    atBoundary(
+        stateLock,
+        () -> {
+          repository.event(runId, EventType.PAUSED, reason);
+          return null;
+        });
+    check();
+  }
+
   /** 抓取此次装配对应的配置，不以剩余额度替代政策上限。 */
   public AgentBudgetPolicy budgetPolicy(AgentRole profile, NodePolicy node) {
     return new AgentBudgetPolicy(
@@ -203,7 +215,7 @@ public final class RunControl {
       check();
       long remaining = until - elapsed();
       if (remaining <= 0) return;
-      Thread.sleep(Math.min(100, remaining));
+      dev.workbench.framework.concurrent.BoundedWait.pauseInterruptibly(Math.min(100, remaining));
     }
   }
 

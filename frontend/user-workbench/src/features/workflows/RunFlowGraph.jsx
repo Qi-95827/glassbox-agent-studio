@@ -28,7 +28,7 @@ const toneColor = {
 };
 
 function FlowNode({ data }) {
-  const { node, selected, compact, onSelect, generatedAt } = data;
+  const { node, selected, compact, onSelect, generatedAt, hasBreakpoint } = data;
   const running = node.status === 'RUNNING';
   const duration = nodeDuration(node, generatedAt);
   return (
@@ -83,18 +83,40 @@ function FlowNode({ data }) {
             justifyContent: 'center'
           }}
         >
-          <Typography
-            noWrap
-            title={nodeTitle(node)}
-            sx={{
-              fontSize: compact ? 12.5 : 14,
-              fontWeight: 600,
-              lineHeight: 1.35,
-              color: googleTokens.text
-            }}
-          >
-            {nodeTitle(node)}
-          </Typography>
+          <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', minWidth: 0 }}>
+            <Typography
+              noWrap
+              title={nodeTitle(node)}
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: compact ? 12.5 : 14,
+                fontWeight: 600,
+                lineHeight: 1.35,
+                color: googleTokens.text
+              }}
+            >
+              {nodeTitle(node)}
+            </Typography>
+            {hasBreakpoint && (
+              <Box
+                component="span"
+                title="已设置断点：运行到此节点前暂停"
+                sx={{
+                  px: 0.6,
+                  py: 0.1,
+                  borderRadius: 9999,
+                  bgcolor: '#FCE8E6',
+                  color: '#C5221F',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  flexShrink: 0
+                }}
+              >
+                断点
+              </Box>
+            )}
+          </Stack>
           <Stack direction="row" spacing={compact ? 0.6 : 1} sx={{ alignItems: 'center' }}>
             <StatusChip value={node.status} />
             {duration != null && (
@@ -152,6 +174,7 @@ function FlowCanvas({
   selectedId,
   selectedEdgeId,
   focusIds,
+  breakpoints,
   generatedAt,
   viewportKey,
   onSelectNode,
@@ -184,6 +207,7 @@ function FlowCanvas({
     data: {
       node,
       selected: selectedId === node.id,
+      hasBreakpoint: Boolean(breakpoints?.has(node.id)),
       compact,
       onSelect: onSelectNode,
       generatedAt

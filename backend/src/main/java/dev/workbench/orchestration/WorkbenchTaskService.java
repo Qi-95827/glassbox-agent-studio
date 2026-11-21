@@ -126,7 +126,7 @@ public class WorkbenchTaskService {
     String taskId = run.get("TASK_ID").toString();
     Map<String, Object> detail = new LinkedHashMap<>();
     detail.put("run", run);
-    detail.put("task", tasks.task(taskId));
+    detail.put("task", tasks.task(taskId, String.valueOf(run.get("STATUS"))));
     detail.put("entryPolicy", entryPolicies.find(taskId));
     detail.put("entryRoute", entryRoutes.find(taskId));
     detail.put("sourceArtifacts", sourceArtifacts.find(taskId));

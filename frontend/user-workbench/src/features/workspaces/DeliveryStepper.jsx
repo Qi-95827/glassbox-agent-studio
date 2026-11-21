@@ -32,9 +32,19 @@ export function isLocalCommit(row) {
   return (row.kind || row.KIND || 'LOCAL_COMMIT') === 'LOCAL_COMMIT';
 }
 
-/** 审批拒绝/失效时停在审批步骤；推送确认后才把最后一步算完成。 */
-export function deliveryActiveStep({ diffReviewed, approvalStatus, committed, deliveryStatus }) {
-  if (approvalStatus === 'REJECTED' || approvalStatus === 'STALE') return 1;
+/** 审批拒绝/失效时停在审批步骤；若工作区已干净且已完成本地提交，则审批已被本次提交消费，视为完成。 */
+export function deliveryActiveStep({
+  diffReviewed,
+  approvalStatus,
+  committed,
+  deliveryStatus,
+  hasDiff = true
+}) {
+  if (approvalStatus === 'REJECTED') return 1;
+  if (approvalStatus === 'STALE') {
+    if (!hasDiff && committed) return deliveryStatus === 'CONFIRMED' ? 4 : 3;
+    return 1;
+  }
   if (approvalStatus !== 'APPROVED') return diffReviewed ? 1 : 0;
   if (!committed) return 2;
   return deliveryStatus === 'CONFIRMED' ? 4 : 3;
@@ -80,8 +90,10 @@ export default function DeliveryStepper({ workspaceId }) {
   const diffReviewed = Boolean(latestApproval) || !hasDiff;
   const approvalStatus = latestApproval?.STATUS || latestApproval?.status;
   const approved = approvalStatus === 'APPROVED';
-  const approvalInvalid = approvalStatus === 'REJECTED' || approvalStatus === 'STALE';
   const committed = Boolean(latestCommit);
+  const consumedByCommit = approvalStatus === 'STALE' && !hasDiff && committed;
+  const approvalInvalid =
+    approvalStatus === 'REJECTED' || (approvalStatus === 'STALE' && !consumedByCommit);
   const deliveryStatus = latestDelivery?.status || latestDelivery?.STATUS;
   const deliveryFailed = ['CONFLICT', 'UNKNOWN', 'REJECTED'].includes(deliveryStatus);
 
@@ -89,7 +101,8 @@ export default function DeliveryStepper({ workspaceId }) {
     diffReviewed,
     approvalStatus,
     committed,
-    deliveryStatus
+    deliveryStatus,
+    hasDiff
   });
 
   const steps = [
@@ -103,9 +116,11 @@ export default function DeliveryStepper({ workspaceId }) {
     },
     {
       label: '审查批准',
-      detail: latestApproval
-        ? `${approvalLabels[approvalStatus] || approvalStatus} · ${dateTime(latestApproval.UPDATED_AT || latestApproval.CREATED_AT)}`
-        : '还没有审查记录',
+      detail: consumedByCommit
+        ? `已通过并用于提交 · ${dateTime(latestApproval.UPDATED_AT || latestApproval.CREATED_AT)}`
+        : latestApproval
+          ? `${approvalLabels[approvalStatus] || approvalStatus} · ${dateTime(latestApproval.UPDATED_AT || latestApproval.CREATED_AT)}`
+          : '还没有审查记录',
       error: approvalInvalid
     },
     {
@@ -144,7 +159,8 @@ export default function DeliveryStepper({ workspaceId }) {
     >
       <Typography sx={{ fontSize: 13.5, fontWeight: 600 }}>Git 交付进度</Typography>
       <Typography variant="caption" color="text.secondary">
-        仅按服务端记录推导；推送 / 合并是可选的最后一步。
+        仅按服务端记录推导；当前在独立隔离分支
+        {status.data?.branch ? `（${status.data.branch}）` : ''}提交，推送 / 合并是可选的最后一步。
       </Typography>
       {approvalInvalid && (
         <Typography variant="body2" color="error.main" sx={{ mt: 0.75 }}>

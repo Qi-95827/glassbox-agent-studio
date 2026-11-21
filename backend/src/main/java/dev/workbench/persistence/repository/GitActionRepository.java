@@ -12,6 +12,9 @@ import org.springframework.transaction.annotation.Transactional;
 public interface GitActionRepository extends JpaRepository<GitActionEntity, String> {
   List<GitActionEntity> findByWorkspaceIdOrderByCreatedAtDesc(String workspaceId);
 
+  @Query("select distinct a.workspaceId from GitActionEntity a where a.status = 'CONFIRMED'")
+  List<String> findDeliveredWorkspaceIds();
+
   @Transactional
   @Modifying
   @Query(

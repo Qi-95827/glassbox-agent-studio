@@ -45,15 +45,16 @@ public record CreateTaskRequest(
     Long maxCostMicros) {
 
   /**
-   * 兼容历史调用点的前缀参数写法。
+   * 兼容历史测试调用点的前缀参数写法。
    *
-   * <p>所有旧构造器都是规范参数的“前缀 + 默认 null”，这里按长度统一收敛；新代码应使用 builder。
+   * <p>所有旧构造器都是规范参数的“前缀 + 默认 null”，这里按长度统一收敛；生产代码与新测试应统一使用 {@link #builder()}。
    */
+  @Deprecated(forRemoval = true)
   @JsonIgnore
   @SuppressWarnings("unchecked")
   public CreateTaskRequest(Object... values) {
     this(
-        text(values, 0),
+        text(validated(values), 0),
         text(values, 1),
         integer(values, 2),
         integer(values, 3),
@@ -65,21 +66,21 @@ public record CreateTaskRequest(
         text(values, 9),
         bool(values, 10),
         integer(values, 11),
-        (List<String>) value(values, 12),
-        (List<String>) value(values, 13),
+        cast(values, 12, List.class),
+        cast(values, 13, List.class),
         longValue(values, 14),
         integer(values, 15),
-        (TaskEntryKind) value(values, 16),
+        cast(values, 16, TaskEntryKind.class),
         integer(values, 17),
         integer(values, 18),
-        (List<String>) value(values, 19),
-        (Map<AgentRole, RoleBudget>) value(values, 20),
-        (Map<ToolKind, Integer>) value(values, 21),
+        cast(values, 19, List.class),
+        cast(values, 20, Map.class),
+        cast(values, 21, Map.class),
         text(values, 22),
         bool(values, 23),
-        (Map<String, WorkflowNodeBudget>) value(values, 24),
-        (List<String>) value(values, 25),
-        (List<String>) value(values, 26),
+        cast(values, 24, Map.class),
+        cast(values, 25, List.class),
+        cast(values, 26, List.class),
         longValue(values, 27));
   }
 
@@ -87,24 +88,46 @@ public record CreateTaskRequest(
     return new Builder();
   }
 
+  private static Object[] validated(Object[] values) {
+    if (values != null && values.length > 28)
+      throw new IllegalArgumentException(
+          "CreateTaskRequest 参数过多：" + values.length + "（最多 28 个，请改用 builder()）。");
+    return values;
+  }
+
   private static Object value(Object[] values, int index) {
     return values != null && index < values.length ? values[index] : null;
   }
 
+  @SuppressWarnings("unchecked")
+  private static <T> T cast(Object[] values, int index, Class<T> type) {
+    Object raw = value(values, index);
+    if (raw == null) return null;
+    if (!type.isInstance(raw))
+      throw new IllegalArgumentException(
+          "CreateTaskRequest 第 "
+              + index
+              + " 个参数类型不匹配：期望 "
+              + type.getSimpleName()
+              + "，实际 "
+              + raw.getClass().getSimpleName());
+    return (T) raw;
+  }
+
   private static String text(Object[] values, int index) {
-    return (String) value(values, index);
+    return cast(values, index, String.class);
   }
 
   private static Integer integer(Object[] values, int index) {
-    return (Integer) value(values, index);
+    return cast(values, index, Integer.class);
   }
 
   private static Long longValue(Object[] values, int index) {
-    return (Long) value(values, index);
+    return cast(values, index, Long.class);
   }
 
   private static Boolean bool(Object[] values, int index) {
-    return (Boolean) value(values, index);
+    return cast(values, index, Boolean.class);
   }
 
   /** 显式 builder，避免继续增加位置参数构造器。 */

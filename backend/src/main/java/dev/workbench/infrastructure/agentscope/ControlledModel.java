@@ -1,16 +1,23 @@
 package dev.workbench.infrastructure.agentscope;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.framework.model.ModelRateLimitException;
+import dev.workbench.framework.trace.GlassboxModels;
+import dev.workbench.framework.trace.SensitiveDataMasker;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ModelMode;
 import dev.workbench.framework.agent.execution.AgentRuntime;
+import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.model.ChatResponse;
 import io.agentscope.core.model.ChatUsage;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolSchema;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
@@ -84,6 +91,7 @@ public record ControlledModel(
                         runtime.modelResult(
                             usage == null ? null : usage.getInputTokens(),
                             usage == null ? null : usage.getOutputTokens());
+                        runtime.modelTrace(buildPayload(messages, tools, latest.get()));
                         runtime.event(EventType.MODEL_FINISHED, "AgentScope 模型已返回。");
                       } catch (RuntimeException e) {
                         failure.set(e);
@@ -119,5 +127,65 @@ public record ControlledModel(
     if (existingCompletion != null) cap = Math.min(cap, existingCompletion);
     var limit = GenerateOptions.builder().maxTokens(cap).maxCompletionTokens(cap).build();
     return GenerateOptions.mergeOptions(limit, options);
+  }
+
+  private static final ObjectMapper TRACE_JSON = new ObjectMapper();
+
+  /** 提取发给模型的消息切片、工具 Schema 以及原始响应/工具决策，脱敏后供玻璃盒透视使用。 */
+  private static GlassboxModels.ModelCallPayload buildPayload(
+      List<Msg> messages, List<ToolSchema> tools, ChatResponse response) {
+    boolean truncated = false;
+    var reqMessages = new ArrayList<GlassboxModels.PromptMessage>();
+    if (messages != null) {
+      for (Msg msg : messages) {
+        String text = msg.getTextContent();
+        if (text == null) text = "";
+        var safe = SensitiveDataMasker.maskAndTruncate(text, 16_384);
+        if (safe.truncated()) truncated = true;
+        String role = msg.getRole() == null ? "USER" : msg.getRole().name();
+        reqMessages.add(
+            new GlassboxModels.PromptMessage(role, msg.getName(), safe.text(), text.length()));
+      }
+    }
+    var reqTools = new ArrayList<GlassboxModels.ToolSchemaView>();
+    if (tools != null) {
+      for (ToolSchema tool : tools) {
+        String params = safeJson(tool.getParameters());
+        var safeParams = SensitiveDataMasker.maskAndTruncate(params, 8_192);
+        if (safeParams.truncated()) truncated = true;
+        reqTools.add(
+            new GlassboxModels.ToolSchemaView(
+                tool.getName(), tool.getDescription(), safeParams.text()));
+      }
+    }
+    var textBuilder = new StringBuilder();
+    var toolCalls = new ArrayList<GlassboxModels.ToolCallDecision>();
+    if (response != null && response.getContent() != null) {
+      for (ContentBlock block : response.getContent()) {
+        if (block instanceof TextBlock tb && tb.getText() != null) {
+          if (!textBuilder.isEmpty()) textBuilder.append('\n');
+          textBuilder.append(tb.getText());
+        } else if (block instanceof ToolUseBlock tub) {
+          String args = safeJson(tub.getInput());
+          var safeArgs = SensitiveDataMasker.maskAndTruncate(args, 8_192);
+          if (safeArgs.truncated()) truncated = true;
+          toolCalls.add(
+              new GlassboxModels.ToolCallDecision(tub.getId(), tub.getName(), safeArgs.text()));
+        }
+      }
+    }
+    var safeResp = SensitiveDataMasker.maskAndTruncate(textBuilder.toString(), 32_768);
+    if (safeResp.truncated()) truncated = true;
+    return new GlassboxModels.ModelCallPayload(
+        reqMessages, reqTools, safeResp.text(), toolCalls, truncated);
+  }
+
+  private static String safeJson(Object value) {
+    if (value == null) return "{}";
+    try {
+      return TRACE_JSON.writeValueAsString(value);
+    } catch (Exception e) {
+      return String.valueOf(value);
+    }
   }
 }

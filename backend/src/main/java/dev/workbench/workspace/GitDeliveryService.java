@@ -41,14 +41,20 @@ public class GitDeliveryService {
   public synchronized DeliveryRequest prepare(
       String workspaceId, String kindText, String remote, String target, String note) {
     GitAction.Kind kind = parseKind(kindText);
-    if (remote == null || !remote.matches("[A-Za-z0-9._-]{1,80}") || remote.startsWith("-"))
+    String normalizedRemote =
+        remote == null || remote.isBlank() ? "local" : remote.strip();
+    if (kind == GitAction.Kind.PUSH
+        && (remote == null || !remote.matches("[A-Za-z0-9._-]{1,80}") || remote.startsWith("-")))
       throw new IllegalArgumentException("远端名称无效。");
     WorkspaceService.Workspace workspace = workspaces.get(workspaceId);
     workspaces.requireBranchName(Path.of(workspace.repositoryPath()), target);
     String head = workspaces.head(workspaceId);
     String branch = workspaces.currentBranch(workspaceId);
     if ("HEAD".equals(branch)) throw new IllegalStateException("分离 HEAD 状态不能发起交付。");
-    String remoteUrlSha256 = workspaces.remotePushUrlFingerprint(workspaceId, remote);
+    String remoteUrlSha256 =
+        kind == GitAction.Kind.PUSH
+            ? workspaces.remotePushUrlFingerprint(workspaceId, normalizedRemote)
+            : null;
     String targetCommit =
         kind == GitAction.Kind.MERGE ? workspaces.branchCommit(workspaceId, target) : null;
     String id = dev.workbench.domain.WorkbenchIds.newId(), now = dev.workbench.domain.WorkbenchTime.now();
@@ -57,7 +63,7 @@ public class GitDeliveryService {
             id,
             workspaceId,
             kind.name(),
-            remote,
+            normalizedRemote,
             target,
             targetCommit,
             head,
@@ -211,19 +217,21 @@ public class GitDeliveryService {
     String branch = workspaces.currentBranch(request.workspaceId().toString());
     if (!head.equals(request.headCommit()) || !branch.equals(request.sourceBranch()))
       throw new IllegalStateException("当前 HEAD 或分支已变化，请重新发起交付请求。");
-    String validatedRemote;
-    try {
-      validatedRemote =
-          workspaces.remotePushUrl(request.workspaceId().toString(), request.remote());
-    } catch (RuntimeException e) {
-      throw new IllegalStateException("远端地址无法确认，原批准已失效，请重新发起交付请求。");
+    String validatedRemote = null;
+    if (GitAction.Kind.PUSH.name().equals(request.kind())) {
+      try {
+        validatedRemote =
+            workspaces.remotePushUrl(request.workspaceId().toString(), request.remote());
+      } catch (RuntimeException e) {
+        throw new IllegalStateException("远端地址无法确认，原批准已失效，请重新发起交付请求。");
+      }
+      String currentRemote = hash(validatedRemote);
+      if (request.remoteUrlSha256() == null
+          || !java.security.MessageDigest.isEqual(
+              currentRemote.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+              request.remoteUrlSha256().getBytes(java.nio.charset.StandardCharsets.US_ASCII)))
+        throw new IllegalStateException("远端推送地址已变化，原批准已失效，请重新发起交付请求。");
     }
-    String currentRemote = hash(validatedRemote);
-    if (request.remoteUrlSha256() == null
-        || !java.security.MessageDigest.isEqual(
-            currentRemote.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
-            request.remoteUrlSha256().getBytes(java.nio.charset.StandardCharsets.US_ASCII)))
-      throw new IllegalStateException("远端推送地址已变化，原批准已失效，请重新发起交付请求。");
     if (GitAction.Kind.MERGE.name().equals(request.kind())) {
       if (request.targetCommit() == null)
         throw new IllegalStateException("合并请求未绑定待合入提交，请重新发起。");

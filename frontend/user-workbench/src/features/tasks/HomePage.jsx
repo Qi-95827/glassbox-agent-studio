@@ -8,7 +8,8 @@ import { usePageChrome } from '../../layout/pageChrome';
 import StatusChip from '../../components/StatusChip';
 import EmptyState from '../../components/EmptyState';
 import TaskComposer from './TaskComposer';
-import { ENTRY_KINDS, modelLabel } from '../../constants/labels';
+import TeachingPlaybooks from './TeachingPlaybooks';
+import { ENTRY_KINDS, modelLabel, statusLabel } from '../../constants/labels';
 import { googleTokens } from '../../theme/googleTheme';
 import { oneLine, timeAgo } from '../../utils/format';
 
@@ -32,7 +33,7 @@ function RunRow({ task }) {
         spacing={1.5}
         sx={{ width: '100%', minWidth: 0, alignItems: 'center' }}
       >
-        <StatusChip value={task.status} />
+        <StatusChip value={task.taskStatus || task.status} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography noWrap sx={{ fontSize: 13.5, fontWeight: 500 }}>
             {oneLine(task.goal, 96) || '未命名任务'}
@@ -43,6 +44,9 @@ function RunRow({ task }) {
               sx={{ fontFamily: googleTokens.mono, color: googleTokens.textSecondary }}
             >
               #{task.runId?.slice(0, 8)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Agent：{statusLabel(task.status)}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               {ENTRY_KINDS[task.entryKind] || '通用目标'}
@@ -86,6 +90,8 @@ export default function HomePage() {
         </Stack>
 
         <TaskComposer onModelChange={setModel} />
+
+        <TeachingPlaybooks />
 
         <Stack
           direction="row"

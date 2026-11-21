@@ -48,6 +48,7 @@ final class ExecutionGraphProjector {
   private final com.fasterxml.jackson.databind.ObjectMapper json;
   private final ExecutionOperationProjector operations;
   private final ExecutionSummaryProjector summaries;
+  private final dev.workbench.store.GlassboxTraceStore traces;
 
   ExecutionGraphProjector(
       RunStateStore runs,
@@ -60,7 +61,8 @@ final class ExecutionGraphProjector {
       dev.workbench.ownership.OwnershipService ownership,
       com.fasterxml.jackson.databind.ObjectMapper json,
       ExecutionOperationProjector operations,
-      ExecutionSummaryProjector summaries) {
+      ExecutionSummaryProjector summaries,
+      dev.workbench.store.GlassboxTraceStore traces) {
     this.runs = runs;
     this.agents = agents;
     this.tasks = tasks;
@@ -72,6 +74,7 @@ final class ExecutionGraphProjector {
     this.json = json;
     this.operations = operations;
     this.summaries = summaries;
+    this.traces = traces;
   }
 
   ExecutionView view(String runId) {
@@ -118,6 +121,7 @@ final class ExecutionGraphProjector {
     var counts = summaries.counts(nodes, checks, models, tools);
     var budget = summaries.budgetView(snapshot, runId);
     var recoverySupport = summaries.recoverySupportView(snapshot, plan, runId);
+    var planControl = traces.planControl(runId);
     return new ExecutionView(
         ExecutionViewService.SCHEMA_VERSION,
         Instant.now().toString(),
@@ -146,7 +150,9 @@ final class ExecutionGraphProjector {
         counts,
         budget,
         recoverySupport,
-        operations.lastEventSeq(runId));
+        operations.lastEventSeq(runId),
+        planControl.executionMode(),
+        List.copyOf(planControl.breakpoints()));
   }
 
   private PlanView planView(WorkflowPlan plan) {

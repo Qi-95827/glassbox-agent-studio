@@ -347,17 +347,19 @@ public class ManagedEvaluationDatasetService {
         try {
           runId =
               runs.create(
-                  new CreateTaskRequest(
-                      sample.goal(),
-                      sample.scenario(),
-                      config.maxRounds() == null
-                          ? sample.maxRounds()
-                          : Math.min(sample.maxRounds(), config.maxRounds()),
-                      config.maxTools() == null
-                          ? sample.maxTools()
-                          : Math.min(sample.maxTools(), config.maxTools()),
-                      config.maxSeconds() == null ? 30 : config.maxSeconds(),
-                      "mock"));
+                  CreateTaskRequest.builder()
+                      .goal(sample.goal())
+                      .scenario(sample.scenario())
+                      .limits(
+                          config.maxRounds() == null
+                              ? sample.maxRounds()
+                              : Math.min(sample.maxRounds(), config.maxRounds()),
+                          config.maxTools() == null
+                              ? sample.maxTools()
+                              : Math.min(sample.maxTools(), config.maxTools()),
+                          config.maxSeconds() == null ? 30 : config.maxSeconds())
+                      .modelMode("mock")
+                      .build());
         } catch (RuntimeException e) {
           row.finish("FAILED", null, "无法创建运行：" + safe(e.getMessage()), Instant.now().toString());
           cases.save(row);

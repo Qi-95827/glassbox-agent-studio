@@ -1,76 +1,71 @@
 package dev.workbench.app;
 
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionHandler;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-/** 统一托管业务异步线程池，禁止各 Service 私建执行器。 */
+/**
+ * 统一托管业务异步线程池，禁止各 Service 私建执行器。
+ *
+ * <p>采用 core == max 并开启 allowCoreThreadTimeOut：既避免有界队列填满前永远停留在单线程的经典陷阱，
+ * 也能在空闲时自动回收工作线程；停机时由 Spring ThreadPoolTaskExecutor 统一等待进行中的任务结束。
+ */
 @Configuration
 @EnableAsync
 public class AsyncConfiguration {
 
-  @Bean(name = "workflowRunExecutor", destroyMethod = "shutdown")
-  public ExecutorService workflowRunExecutor() {
-    return pool(1, 4, 200, "workflow-run-");
+  @Bean(name = "workflowRunTaskExecutor")
+  public ThreadPoolTaskExecutor workflowRunTaskExecutor() {
+    return buildExecutor(4, 200, "workflow-run-");
   }
 
-  @Bean(name = "planningExecutor", destroyMethod = "shutdown")
-  public ExecutorService planningExecutor() {
-    return pool(1, 2, 100, "planning-");
+  @Bean(name = "workflowRunExecutor", destroyMethod = "")
+  public ExecutorService workflowRunExecutor(
+      @Qualifier("workflowRunTaskExecutor") ThreadPoolTaskExecutor executor) {
+    return executor.getThreadPoolExecutor();
   }
 
-  @Bean(name = "evaluationExecutor", destroyMethod = "shutdown")
-  public ExecutorService evaluationExecutor() {
-    return pool(1, 2, 100, "evaluation-");
+  @Bean(name = "planningTaskExecutor")
+  public ThreadPoolTaskExecutor planningTaskExecutor() {
+    // 候选计划生成保持单线程有序执行，避免同一用户连续提交草稿时产生旧候选反超新候选的乱序竞态。
+    return buildExecutor(1, 100, "planning-");
   }
 
-  private static ExecutorService pool(int core, int max, int queue, String prefix) {
-    AtomicInteger sequence = new AtomicInteger();
-    ThreadFactory factory =
-        runnable -> {
-          Thread thread = new Thread(runnable, prefix + sequence.incrementAndGet());
-          thread.setDaemon(true);
-          return thread;
-        };
-    return new GracefulExecutor(
-        core,
-        max,
-        30,
-        TimeUnit.SECONDS,
-        new LinkedBlockingQueue<>(queue),
-        factory,
-        new ThreadPoolExecutor.AbortPolicy());
+  @Bean(name = "planningExecutor", destroyMethod = "")
+  public ExecutorService planningExecutor(
+      @Qualifier("planningTaskExecutor") ThreadPoolTaskExecutor executor) {
+    return executor.getThreadPoolExecutor();
+  }
+
+  @Bean(name = "evaluationTaskExecutor")
+  public ThreadPoolTaskExecutor evaluationTaskExecutor() {
+    return buildExecutor(2, 100, "evaluation-");
+  }
+
+  @Bean(name = "evaluationExecutor", destroyMethod = "")
+  public ExecutorService evaluationExecutor(
+      @Qualifier("evaluationTaskExecutor") ThreadPoolTaskExecutor executor) {
+    return executor.getThreadPoolExecutor();
   }
 
   /** 拒绝策略保持 AbortPolicy：调用方必须显式处理队列满，而不是静默降级。 */
-  private static final class GracefulExecutor extends ThreadPoolExecutor {
-    private GracefulExecutor(
-        int core,
-        int max,
-        long keepAlive,
-        TimeUnit unit,
-        java.util.concurrent.BlockingQueue<Runnable> queue,
-        ThreadFactory factory,
-        RejectedExecutionHandler handler) {
-      super(core, max, keepAlive, unit, queue, factory, handler);
-    }
-
-    @Override
-    public void shutdown() {
-      super.shutdown();
-      try {
-        if (!awaitTermination(30, TimeUnit.SECONDS)) super.shutdownNow();
-      } catch (InterruptedException e) {
-        super.shutdownNow();
-        Thread.currentThread().interrupt();
-      }
-    }
+  private static ThreadPoolTaskExecutor buildExecutor(int concurrency, int queue, String prefix) {
+    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+    executor.setCorePoolSize(concurrency);
+    executor.setMaxPoolSize(concurrency);
+    executor.setQueueCapacity(queue);
+    executor.setKeepAliveSeconds(30);
+    executor.setAllowCoreThreadTimeOut(true);
+    executor.setThreadNamePrefix(prefix);
+    executor.setDaemon(true);
+    executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+    executor.setWaitForTasksToCompleteOnShutdown(true);
+    executor.setAwaitTerminationSeconds(5);
+    executor.initialize();
+    return executor;
   }
 }

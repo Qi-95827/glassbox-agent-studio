@@ -44,6 +44,7 @@ final class ExecutionNodeDetailProjector {
   private final EventRepository events;
   private final ExecutionGraphProjector graph;
   private final dev.workbench.ownership.OwnershipService ownership;
+  private final dev.workbench.store.GlassboxTraceStore traces;
 
   ExecutionNodeDetailProjector(
       RunStateStore runs,
@@ -52,7 +53,8 @@ final class ExecutionNodeDetailProjector {
       WorkflowExecutionService workflows,
       EventRepository events,
       ExecutionGraphProjector graph,
-      dev.workbench.ownership.OwnershipService ownership) {
+      dev.workbench.ownership.OwnershipService ownership,
+      dev.workbench.store.GlassboxTraceStore traces) {
     this.runs = runs;
     this.agents = agents;
     this.plans = plans;
@@ -60,6 +62,7 @@ final class ExecutionNodeDetailProjector {
     this.events = events;
     this.graph = graph;
     this.ownership = ownership;
+    this.traces = traces;
   }
 
   NodeDetail detail(String runId, String nodeIdText) {
@@ -82,6 +85,8 @@ final class ExecutionNodeDetailProjector {
     var agentRows = agents.agents(runId);
     var assemblies = agents.agentAssemblies(runId);
     var handoffs = workflows.workflowHandoffs(runId);
+    var modelPayloads = traces.modelPayloadsByRun(runId);
+    var toolTraces = traces.toolTracesByRun(runId);
     return new NodeDetail(
         ExecutionViewService.SCHEMA_VERSION,
         Instant.now().toString(),
@@ -93,7 +98,10 @@ final class ExecutionNodeDetailProjector {
             ExecutionViewSupport.groupChecks(allChecks)),
         graph.dependencies(nodes, node),
         attempts.stream()
-            .map(attempt -> attemptView(attempt, models, tools, agentRows, assemblies))
+            .map(
+                attempt ->
+                    attemptView(
+                        attempt, models, tools, agentRows, assemblies, modelPayloads, toolTraces))
             .toList(),
         checks.stream().map(this::checkView).toList(),
         handoffs.stream()
@@ -127,7 +135,9 @@ final class ExecutionNodeDetailProjector {
       List<Map<String, Object>> models,
       List<Map<String, Object>> tools,
       List<Map<String, Object>> agents,
-      List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded> assemblies) {
+      List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded> assemblies,
+      Map<String, dev.workbench.framework.trace.GlassboxModels.ModelCallPayload> modelPayloads,
+      Map<String, dev.workbench.framework.trace.GlassboxModels.ToolCallTrace> toolTraces) {
     String agentId = attempt.agentId().toString();
     String result =
         agents.stream()
@@ -146,11 +156,11 @@ final class ExecutionNodeDetailProjector {
         attempt.stopCause() == null ? null : attempt.stopCause().name(),
         models.stream()
             .filter(row -> agentId.equals(nullable(row.get("AGENT_ID"))))
-            .map(this::modelView)
+            .map(row -> modelView(row, modelPayloads))
             .toList(),
         tools.stream()
             .filter(row -> agentId.equals(nullable(row.get("AGENT_ID"))))
-            .map(this::toolView)
+            .map(row -> toolView(row, toolTraces))
             .toList(),
         result,
         assemblies.stream()
@@ -160,9 +170,12 @@ final class ExecutionNodeDetailProjector {
             .orElse(null));
   }
 
-  private ModelCallView modelView(Map<String, Object> row) {
+  private ModelCallView modelView(
+      Map<String, Object> row,
+      Map<String, dev.workbench.framework.trace.GlassboxModels.ModelCallPayload> payloads) {
+    String id = nullable(row.get("ID"));
     return new ModelCallView(
-        nullable(row.get("ID")),
+        id,
         nullable(row.get("MODEL_NAME")),
         nullable(row.get("STATUS")),
         integer(row.get("INPUT_TOKENS")),
@@ -170,12 +183,16 @@ final class ExecutionNodeDetailProjector {
         longValue(row.get("DURATION_MS")),
         nullable(row.get("CREATED_AT")),
         nullable(row.get("UPDATED_AT")),
-        nullable(row.get("ERROR_MESSAGE")));
+        nullable(row.get("ERROR_MESSAGE")),
+        id == null ? null : payloads.get(id));
   }
 
-  private ToolCallView toolView(Map<String, Object> row) {
+  private ToolCallView toolView(
+      Map<String, Object> row,
+      Map<String, dev.workbench.framework.trace.GlassboxModels.ToolCallTrace> traces) {
+    String id = nullable(row.get("ID"));
     return new ToolCallView(
-        nullable(row.get("ID")),
+        id,
         nullable(row.get("TOOL_NAME")),
         integer(row.get("TOOL_VERSION")),
         nullable(row.get("STATUS")),
@@ -184,7 +201,8 @@ final class ExecutionNodeDetailProjector {
         nullable(row.get("UPDATED_AT")),
         nullable(row.get("RESULT")),
         nullable(row.get("ERROR_MESSAGE")),
-        nullable(row.get("RESOURCE_VERSION")));
+        nullable(row.get("RESOURCE_VERSION")),
+        id == null ? null : traces.get(id));
   }
 
   private CheckView checkView(WorkflowCheck check) {
@@ -239,7 +257,8 @@ final class ExecutionNodeDetailProjector {
                         evidence.tool().name(),
                         evidence.version(),
                         evidence.resourceVersion()))
-            .toList());
+            .toList(),
+        dev.workbench.framework.trace.StructuredHandoffExtractor.extract(handoff));
   }
 
   private String nodeResult(

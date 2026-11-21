@@ -24,9 +24,12 @@ class FlywayMigrationCompatibilityTest {
   void emptyDatabaseAppliesBothMigrationsAndCreatesFullSchema() {
     var db = database("empty");
     migrate(db, flyway(db));
-    assertEquals("3", flyway(db).info().current().getVersion().getVersion());
-    assertEquals(78, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND lower(TABLE_NAME)<>'flyway_schema_history'"));
+    assertEquals("4", flyway(db).info().current().getVersion().getVersion());
+    assertEquals(81, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND lower(TABLE_NAME)<>'flyway_schema_history'"));
     assertEquals(1, count(db, "INFORMATION_SCHEMA.COLUMNS", "TABLE_NAME='COST_RESERVATIONS' AND COLUMN_NAME='PRICE_VERSION_ID'"));
+    assertEquals(1, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND TABLE_NAME='MODEL_CALL_PAYLOADS'"));
+    assertEquals(1, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND TABLE_NAME='TOOL_CALL_TRACES'"));
+    assertEquals(1, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND TABLE_NAME='WORKFLOW_PLAN_CONTROLS'"));
   }
 
   @Test
@@ -58,7 +61,7 @@ class FlywayMigrationCompatibilityTest {
 
     migrate(db, flyway(db));
 
-    assertEquals("3", flyway(db).info().current().getVersion().getVersion());
+    assertEquals("4", flyway(db).info().current().getVersion().getVersion());
     assertEquals(
         1,
         count(
@@ -79,8 +82,8 @@ class FlywayMigrationCompatibilityTest {
     var db = database("double-startup");
     migrate(db, flyway(db));
     migrate(db, flyway(db));
-    assertEquals("3", flyway(db).info().current().getVersion().getVersion());
-    assertEquals(78, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND lower(TABLE_NAME)<>'flyway_schema_history'"));
+    assertEquals("4", flyway(db).info().current().getVersion().getVersion());
+    assertEquals(81, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND lower(TABLE_NAME)<>'flyway_schema_history'"));
   }
 
   @Test
@@ -94,8 +97,8 @@ class FlywayMigrationCompatibilityTest {
             + ";DB_CLOSE_ON_EXIT=FALSE";
     var db = new JdbcTemplate(new DriverManagerDataSource(url, "sa", ""));
     migrate(db, flyway(db));
-    assertEquals("3", flyway(db).info().current().getVersion().getVersion());
-    assertEquals(78, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND lower(TABLE_NAME)<>'flyway_schema_history'"));
+    assertEquals("4", flyway(db).info().current().getVersion().getVersion());
+    assertEquals(81, count(db, "INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA='PUBLIC' AND lower(TABLE_NAME)<>'flyway_schema_history'"));
     assertTrue(db.queryForObject("SELECT COUNT(*) FROM tasks", Integer.class) >= 1);
   }
 

@@ -8,6 +8,7 @@ import {
   MenuItem,
   Stack,
   TextField,
+  Tooltip,
   Typography
 } from '@mui/material';
 import { useQueryClient } from '@tanstack/react-query';
@@ -15,6 +16,7 @@ import {
   useWorkspaceApprovals,
   useWorkspaceCommits,
   useWorkspaceDeliveries,
+  useWorkspaceStatus,
   useWorkspaceUntracked
 } from '../../hooks/useWorkspaces';
 import { workspacesApi } from '../../api/workspaces';
@@ -38,6 +40,7 @@ const deliveryStatusNames = {
 export default function WorkspaceGitPanel({ workspace }) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const status = useWorkspaceStatus(workspace.id);
   const approvals = useWorkspaceApprovals(workspace.id);
   const commits = useWorkspaceCommits(workspace.id);
   const deliveries = useWorkspaceDeliveries(workspace.id);
@@ -73,6 +76,9 @@ export default function WorkspaceGitPanel({ workspace }) {
   };
 
   const approved = (approvals.data ?? []).filter(row => row.STATUS === 'APPROVED');
+  const hasReviewableChanges =
+    Boolean(status.data?.changes) || (untracked.data ?? []).some(file => file.reviewed);
+  const hasLocalCommit = (commits.data ?? []).length > 0;
 
   return (
     <Stack spacing={2.5}>
@@ -89,14 +95,25 @@ export default function WorkspaceGitPanel({ workspace }) {
           sx={{ mb: 1, justifyContent: 'space-between', alignItems: 'center' }}
         >
           <Typography sx={{ fontSize: 14, fontWeight: 600 }}>人工审查</Typography>
-          <Button
-            size="small"
-            variant="outlined"
-            loading={busy}
-            onClick={() => run(() => workspacesApi.proposeApproval(workspace.id), '审查已创建')}
+          <Tooltip
+            title={
+              hasReviewableChanges
+                ? '针对当前未提交的工作区差异发起人工审查'
+                : '当前工作区没有待审查的差异，无需发起审查'
+            }
           >
-            发起审查
-          </Button>
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                loading={busy}
+                disabled={!hasReviewableChanges}
+                onClick={() => run(() => workspacesApi.proposeApproval(workspace.id), '审查已创建')}
+              >
+                {hasReviewableChanges ? '发起审查' : '无待审差异'}
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
         <Typography variant="caption" color="text.secondary">
           仅记录当前差异的审查结果，不会提交、推送或合并；未跟踪文件尚不支持审批。
@@ -107,7 +124,6 @@ export default function WorkspaceGitPanel({ workspace }) {
               key={row.ID}
               direction={{ xs: 'column', sm: 'row' }}
               spacing={1}
-
               sx={{
                 p: 1.25,
                 border: `1px solid ${googleTokens.outline}`,
@@ -115,9 +131,18 @@ export default function WorkspaceGitPanel({ workspace }) {
                 alignItems: { sm: 'center' }
               }}
             >
-              <StatusChip value={row.STATUS} />
+              <StatusChip
+                value={
+                  row.STATUS === 'STALE' && !hasReviewableChanges && hasLocalCommit
+                    ? 'COMPLETED'
+                    : row.STATUS
+                }
+              />
               <Typography variant="body2" sx={{ flex: 1, fontFamily: googleTokens.mono }}>
                 #{shortId(row.ID)} · {dateTime(row.UPDATED_AT || row.CREATED_AT)}
+                {row.STATUS === 'STALE' && !hasReviewableChanges && hasLocalCommit
+                  ? '（已用于本地提交）'
+                  : ''}
               </Typography>
               {row.STATUS === 'PENDING' && (
                 <Stack direction="row" spacing={0.5}>
@@ -379,6 +404,37 @@ export default function WorkspaceGitPanel({ workspace }) {
             }
           >
             准备合并
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onClick={async () => {
+              const latestCommit = (commits.data ?? [])[0];
+              const latestApproval = (approvals.data ?? [])[0];
+              const summary = [
+                `## 变更交付摘要`,
+                `- **开发分支**：\`${workspace.workBranch || workspace.branch || workspace.id}\``,
+                `- **目标分支**：\`${target || 'main'}\`（远端 \`${remote || 'origin'}\`）`,
+                `- **基础提交**：\`${shortId(workspace.baseCommit)}\``,
+                latestCommit
+                  ? `- **最新本地提交**：\`${shortId(latestCommit.commitId || latestCommit.ID || latestCommit.id)}\`（${latestCommit.status || latestCommit.STATUS || 'CONFIRMED'}）`
+                  : '- **本地提交**：尚未提交',
+                latestApproval
+                  ? `- **人工审查记录**：#${shortId(latestApproval.ID)}（${latestApproval.STATUS}）`
+                  : '- **人工审查记录**：无',
+                note ? `\n### 补充说明\n${note}` : ''
+              ]
+                .filter(Boolean)
+                .join('\n');
+              try {
+                await navigator.clipboard.writeText(summary);
+                toast.success('已复制 PR 摘要到剪贴板');
+              } catch {
+                toast.info('当前浏览器不支持自动复制，请手动复制提交信息');
+              }
+            }}
+          >
+            复制 PR 摘要
           </Button>
         </Stack>
         <Stack spacing={1} sx={{ mt: 1.2 }}>

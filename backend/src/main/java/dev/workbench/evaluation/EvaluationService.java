@@ -202,32 +202,23 @@ public class EvaluationService {
         config.maxTools() == null ? sample.maxTools() : Math.min(sample.maxTools(), config.maxTools());
     int seconds =
         config.maxSeconds() == null ? SeedSuite.MAX_SECONDS : config.maxSeconds();
-    return new CreateTaskRequest(
-        "评测：" + sample.title(),
-        sample.scenario(),
-        rounds,
-        tools,
-        seconds,
-        "mock",
-        workspaceId,
-        null,
-        sample.writeCase(),
-        sample.bugId(),
-        false,
-        null,
-        List.of(),
-        List.of(),
-        null,
-        sample.maxIdenticalTools(),
-        sample.entryKind(),
-        null,
-        null,
-        files,
-        null,
-        null,
-        sample.workflowTemplate(),
-        false,
-        null);
+    return CreateTaskRequest.builder()
+        .goal("评测：" + sample.title())
+        .scenario(sample.scenario())
+        .limits(rounds, tools, seconds)
+        .modelMode("mock")
+        .workspace(workspaceId, null)
+        .writeEnabled(sample.writeCase())
+        .bugId(sample.bugId())
+        .memoryEnabled(false)
+        .constraints(List.of())
+        .acceptanceCriteria(List.of())
+        .maxIdenticalTools(sample.maxIdenticalTools())
+        .entryKind(sample.entryKind())
+        .fileScopes(files)
+        .workflowTemplate(sample.workflowTemplate())
+        .reviewPlan(false)
+        .build();
   }
 
   private WorkspaceService.Workspace createFixture(SeedCase sample, String batchId) {

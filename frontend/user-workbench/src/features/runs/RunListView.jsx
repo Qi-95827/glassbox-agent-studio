@@ -21,7 +21,7 @@ import { dateTime, duration, nodeDuration, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
 import PlanAdjustmentEditor from '../workflows/PlanAdjustmentEditor';
 import RunExtensionsPanel from '../workflows/RunExtensionsPanel';
-import BugEvidencePanel from '../bugs/BugEvidencePanel';
+import BugEvidencePanel from '../bug/BugEvidencePanel';
 import RunEvidencePanel from './RunEvidencePanel';
 
 function Section({ title, subtitle, children, action }) {

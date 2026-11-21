@@ -11,6 +11,7 @@ export default function NewWorkspaceDialog({ open, onClose, onCreated }) {
   const queryClient = useQueryClient();
   const [repositoryPath, setRepositoryPath] = useState('');
   const [baseBranch, setBaseBranch] = useState('main');
+  const [workBranch, setWorkBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -24,12 +25,14 @@ export default function NewWorkspaceDialog({ open, onClose, onCreated }) {
     try {
       const workspace = await workspacesApi.create({
         repositoryPath: repositoryPath.trim(),
-        baseBranch: baseBranch.trim() || 'main'
+        baseBranch: baseBranch.trim() || 'main',
+        workBranch: workBranch.trim() || undefined
       });
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
       toast.success('独立工作区已创建');
       onCreated?.(workspace);
       setRepositoryPath('');
+      setWorkBranch('');
       onClose();
     } catch (failure) {
       setError(failure.message);
@@ -63,9 +66,17 @@ export default function NewWorkspaceDialog({ open, onClose, onCreated }) {
           autoFocus
         />
         <TextField
-          label="基础分支"
+          label="基础分支（切出基准）"
           value={baseBranch}
           onChange={event => setBaseBranch(event.target.value)}
+          placeholder="例如 main 或 dev"
+          size="small"
+        />
+        <TextField
+          label="自定义开发分支名（可选）"
+          value={workBranch}
+          onChange={event => setWorkBranch(event.target.value)}
+          placeholder="留空自动生成 agent/work-xxxx，例如 feat/cyber-muyu"
           size="small"
         />
       </Stack>

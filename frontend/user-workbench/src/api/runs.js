@@ -1,16 +1,16 @@
-import { get, post } from './client';
+import { get, post, put } from './client';
 
 export function reportUrl(runId, view) {
   return `/api/runs/${runId}/report${view ? `?view=${encodeURIComponent(view)}` : ''}`;
 }
 
 export const runsApi = {
-  get: (runId, includeEvents = false) =>
-    get(`/runs/${runId}?includeEvents=${includeEvents ? 'true' : 'false'}`),
-  executionView: runId => get(`/runs/${runId}/execution-view`),
-  nodeDetail: (runId, nodeId) =>
-    get(`/runs/${runId}/execution-view/nodes/${encodeURIComponent(nodeId)}`),
-  agentMetrics: runId => get(`/runs/${runId}/agent-metrics`),
+  get: (runId, includeEvents = false, options) =>
+    get(`/runs/${runId}?includeEvents=${includeEvents ? 'true' : 'false'}`, options),
+  executionView: (runId, options) => get(`/runs/${runId}/execution-view`, options),
+  nodeDetail: (runId, nodeId, options) =>
+    get(`/runs/${runId}/execution-view/nodes/${encodeURIComponent(nodeId)}`, options),
+  agentMetrics: (runId, options) => get(`/runs/${runId}/agent-metrics`, options),
   skills: runId => get(`/runs/${runId}/skills`),
   memoryLoad: runId => get(`/runs/${runId}/memory-load`),
   agentSessions: runId => get(`/runs/${runId}/agent-sessions`),
@@ -26,7 +26,7 @@ export const runsApi = {
     post(`/runs/${runId}/supplements/${requestId}`, payload),
   takeHandover: (runId, note) => post(`/runs/${runId}/handover`, { note }),
   returnHandover: (runId, note) => post(`/runs/${runId}/handover/return`, { note }),
-  delivery: runId => get(`/runs/${runId}/delivery`),
+  delivery: (runId, options) => get(`/runs/${runId}/delivery`, options),
   deliveryFile: (runId, path) =>
     get(`/runs/${runId}/delivery/files?path=${encodeURIComponent(path)}`),
   planProposal: (runId, payload) => post(`/runs/${runId}/plan-proposals`, payload),
@@ -34,5 +34,6 @@ export const runsApi = {
     post(`/runs/${runId}/plan-proposals/${proposalId}/apply`),
   sourceArtifacts: (runId, payload) => post(`/runs/${runId}/source-artifacts`, payload),
   revokeScope: (runId, directory) => post(`/runs/${runId}/workspace-scope/revoke`, { directory }),
-  reconcileExternalAction: actionId => post(`/external-actions/${actionId}/reconcile`)
+  reconcileExternalAction: actionId => post(`/external-actions/${actionId}/reconcile`),
+  updateDebugControl: (runId, payload) => put(`/runs/${runId}/debug-control`, payload)
 };

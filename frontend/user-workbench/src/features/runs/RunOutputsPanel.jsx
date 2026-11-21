@@ -21,11 +21,12 @@ import TaskAltRounded from '@mui/icons-material/TaskAltRounded';
 import { Link as RouterLink } from 'react-router-dom';
 import StatusChip from '../../components/StatusChip';
 import EmptyState from '../../components/EmptyState';
+import MarkdownView from '../../components/MarkdownView';
 import { Readout, TraceSection } from '../../components/WorkbenchDialog';
 import { useRunDelivery } from '../../hooks/useRunExecution';
 import { runsApi, reportUrl } from '../../api/runs';
 import { useToast } from '../../components/ToastProvider';
-import { CHECK_STATUS_LABELS, RUN_STATES } from '../../constants/labels';
+import { CHECK_STATUS_LABELS, RUN_STATES, statusLabel } from '../../constants/labels';
 import { oneLine, parseJson, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
 
@@ -177,9 +178,14 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
   const writerNodes = (data?.nodes ?? []).filter(node => node.files?.length);
   const handoffNodes = (data?.nodes ?? []).filter(node => node.inbound?.length);
   const status = settledLabels[run?.STATUS];
+  const taskStatus = task?.TASK_STATUS || run?.STATUS || 'PENDING';
+  const workspaceDelivered = Boolean(task?.WORKSPACE_DELIVERED);
   const passed = checks.filter(check => check.status === 'PASSED').length;
   const failed = checks.filter(check => ['FAILED', 'BLOCKED'].includes(check.status)).length;
-  const unverified = data?.unverified ?? [];
+  const rawUnverified = data?.unverified ?? [];
+  const unverified = workspaceDelivered
+    ? rawUnverified.filter(item => !String(item).includes('等待核对工作区差异'))
+    : rawUnverified;
 
   return (
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
@@ -200,7 +206,12 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
           >
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
               <Typography sx={{ fontSize: 16, fontWeight: 500 }}>本次运行结论</Typography>
-              <StatusChip value={run?.STATUS ?? 'PENDING'} />
+              <StatusChip value={taskStatus} />
+              {run?.STATUS && taskStatus !== run.STATUS && (
+                <Typography variant="caption" color="text.secondary">
+                  Agent：{statusLabel(run.STATUS)}
+                </Typography>
+              )}
             </Stack>
             <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
               <Chip size="small" label={`产出文件 ${files.length}`} sx={{ bgcolor: '#FFFFFF' }} />
@@ -219,29 +230,26 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
               )}
             </Stack>
           </Stack>
-          {run?.REASON && (
-            <Alert severity="warning" sx={{ mt: 1.2 }}>
-              {run.REASON}
-            </Alert>
-          )}
-          <Typography
-            component="pre"
-            sx={{
-              mt: 1.5,
-              mb: 0,
-              mx: 0,
-              fontFamily: 'inherit',
-              fontSize: 14,
-              lineHeight: 1.7,
-              whiteSpace: 'pre-wrap',
-              overflowWrap: 'anywhere',
-              maxHeight: 260,
-              overflowY: 'auto'
-            }}
-          >
-            {run?.RESULT?.trim() ||
-              (status ? '本次运行未留下最终输出。' : '最终输出会在运行结算后显示。')}
-          </Typography>
+          {run?.REASON &&
+            (workspaceDelivered ? (
+              <Alert severity="success" sx={{ mt: 1.2 }}>
+                工作区已完成 Git 交付，相关写入记录已提交并核对（Agent 执行终态：
+                {statusLabel(run?.STATUS)}）。
+              </Alert>
+            ) : (
+              <Alert severity="warning" sx={{ mt: 1.2 }}>
+                {run.REASON}
+              </Alert>
+            ))}
+          <Box sx={{ mt: 1.5 }}>
+            <MarkdownView
+              maxHeight={320}
+              text={
+                run?.RESULT?.trim() ||
+                (status ? '本次运行未留下最终输出。' : '最终输出会在运行结算后显示。')
+              }
+            />
+          </Box>
         </Box>
 
         {unverified.length > 0 && (

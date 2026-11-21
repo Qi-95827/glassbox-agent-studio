@@ -22,7 +22,7 @@ import { useTasks } from '../../hooks/useTasks';
 import { usePageChrome } from '../../layout/pageChrome';
 import { useToast } from '../../components/ToastProvider';
 import { tasksApi } from '../../api/tasks';
-import { ENTRY_KINDS, RUN_STATES } from '../../constants/labels';
+import { ENTRY_KINDS, RUN_STATES, statusLabel } from '../../constants/labels';
 import { dateTime, oneLine, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
 
@@ -40,7 +40,10 @@ export default function RunHistoryPage() {
 
   const rows = (tasks.data ?? [])
     .filter(task => task.archived === archived)
-    .filter(task => status === 'ALL' || task.status === status)
+    .filter(
+      task =>
+        status === 'ALL' || (task.taskStatus || task.status) === status || task.status === status
+    )
     .filter(task => {
       if (!keyword.trim()) return true;
       const query = keyword.trim().toLowerCase();
@@ -117,7 +120,15 @@ export default function RunHistoryPage() {
             <MenuItem value="ALL">全部状态</MenuItem>
             {Object.entries(RUN_STATES)
               .filter(([key]) =>
-                ['PENDING', 'RUNNING', 'PAUSED', 'COMPLETED', 'FAILED', 'INTERRUPTED'].includes(key)
+                [
+                  'IN_PROGRESS',
+                  'AWAITING_REVIEW',
+                  'DELIVERED',
+                  'COMPLETED',
+                  'BLOCKED',
+                  'FAILED',
+                  'CANCELLED'
+                ].includes(key)
               )
               .map(([key, label]) => (
                 <MenuItem key={key} value={key}>
@@ -166,7 +177,7 @@ export default function RunHistoryPage() {
                   spacing={0.9}
                   sx={{ alignItems: 'center', flexWrap: 'wrap' }}
                 >
-                  <StatusChip value={task.status} />
+                  <StatusChip value={task.taskStatus || task.status} />
                   <Typography sx={{ fontSize: 14, fontWeight: 500 }}>
                     {oneLine(task.goal, 90) || '未命名任务'}
                   </Typography>
@@ -178,6 +189,9 @@ export default function RunHistoryPage() {
                     color="text.secondary"
                   >
                     #{shortId(task.runId)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Agent：{statusLabel(task.status)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     {ENTRY_KINDS[task.entryKind] || '通用目标'}

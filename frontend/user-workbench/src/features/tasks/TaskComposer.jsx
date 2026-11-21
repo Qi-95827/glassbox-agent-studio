@@ -403,6 +403,8 @@ export default function TaskComposer({ onCreated, onModelChange }) {
 
       <TaskIdeaDialog
         open={ideaOpen}
+        initialIdea={draft.goal}
+        initialModelMode={draft.model}
         onClose={() => setIdeaOpen(false)}
         onManual={value => {
           applyManualDraft(value);

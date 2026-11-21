@@ -4,6 +4,7 @@ import dev.workbench.domain.EventType;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
+import dev.workbench.framework.trace.GlassboxModels;
 import java.util.UUID;
 
 /** 框架适配层向项目运行控制器报告调用，不能绕过限制。 */
@@ -11,6 +12,9 @@ public interface AgentRuntime {
   void beforeModel(ModelKind modelName);
 
   void modelResult(Integer inputTokens, Integer outputTokens);
+
+  /** 记录单次模型调用的完整请求与响应透视快照（脱敏后存储）。 */
+  default void modelTrace(GlassboxModels.ModelCallPayload payload) {}
 
   /** 价格版本允许的单次输出上限；没有硬费用预算时为空。 */
   default Integer maxOutputTokens() {
@@ -38,4 +42,7 @@ public interface AgentRuntime {
 
   /** 已启动的调用被输入校验拒绝，保留失败状态与安全错误摘要。 */
   void toolRejected(String safeMessage);
+
+  /** 记录单次工具调用的入参、ToolGateway 安检明细与完整结果。 */
+  default void toolTrace(UUID callId, GlassboxModels.ToolCallTrace trace) {}
 }

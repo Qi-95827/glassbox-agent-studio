@@ -3,6 +3,9 @@
 export const RUN_STATES = {
   PENDING: '排队中',
   RUNNING: '运行中',
+  IN_PROGRESS: '进行中',
+  AWAITING_REVIEW: '待验收',
+  DELIVERED: '已交付',
   CANCELLING: '正在取消',
   PAUSED: '已暂停',
   COMPLETED: '已完成',
@@ -178,7 +181,10 @@ const TONE_BY_STATUS = {
   REUSED: 'info',
   GENERATING: 'info',
   READY: 'info',
-  CONSUMED: 'success'
+  CONSUMED: 'success',
+  IN_PROGRESS: 'active',
+  AWAITING_REVIEW: 'warning',
+  DELIVERED: 'success'
 };
 
 export function statusTone(value) {

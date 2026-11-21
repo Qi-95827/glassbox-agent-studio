@@ -63,13 +63,23 @@ public class WorkspaceService {
 
   /** 用户显式指定仓库和分支；只允许创建独立工作区，不覆盖当前工作区。 */
   public synchronized Workspace create(String repository, String branch) {
-    return create(repository, branch, false);
+    return create(repository, branch, null, false);
+  }
+
+  /** 支持用户可选自定义隔离开发分支名；留空时自动生成 agent/work-xxxx。 */
+  public synchronized Workspace create(String repository, String branch, String workBranch) {
+    return create(repository, branch, workBranch, false);
+  }
+
+  private synchronized Workspace create(String repository, String branch, boolean internal) {
+    return create(repository, branch, null, internal);
   }
 
   /**
    * @param internal 服务端自建的独立交付仓库不使用用户仓库授权；用户导入必须先通过仓库授权。
    */
-  private synchronized Workspace create(String repository, String branch, boolean internal) {
+  private synchronized Workspace create(
+      String repository, String branch, String workBranch, boolean internal) {
     if (repository == null || branch == null || branch.isBlank() || branch.startsWith("-"))
       throw new IllegalArgumentException("请填写本地仓库目录与基础分支。");
     Path repo;
@@ -96,6 +106,17 @@ public class WorkspaceService {
     if (!commit.matches("[0-9a-fA-F]{40,64}")) throw new IllegalStateException("无法确定基础提交。");
     String id = dev.workbench.domain.WorkbenchIds.newId();
     String name = "agent/work-" + id.substring(0, 12);
+    if (workBranch != null && !workBranch.isBlank()) {
+      String custom = workBranch.strip();
+      if (custom.startsWith("-") || !custom.matches("[A-Za-z0-9._/-]{1,80}")) {
+        throw new IllegalArgumentException("自定义分支名无效：仅支持 1-80 位字母、数字、.、_、- 或 /。");
+      }
+      if (custom.equals(branch)) {
+        throw new IllegalArgumentException("开发分支名不能与基础分支相同，必须使用独立分支。");
+      }
+      git.runGit(root, "check-ref-format", "refs/heads/" + custom);
+      name = custom;
+    }
     Path target = workspaceRoot.resolve(id).normalize();
     if (!target.startsWith(workspaceRoot)) throw new IllegalStateException("工作区路径越界。");
     try {
