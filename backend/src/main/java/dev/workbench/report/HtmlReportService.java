@@ -6,7 +6,11 @@ import dev.workbench.planning.PlanService;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.observability.RunMetricsService;
 import dev.workbench.domain.Handoff;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunCountStore;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.WorkspaceService;
@@ -18,7 +22,11 @@ import org.springframework.web.util.HtmlUtils;
 /** 从持久化的运行事实生成静态 HTML；不可信内容只作为文本展示。 */
 @Service
 public class HtmlReportService {
-  private final RunRecordService repository;
+  private final RunStateStore repository;
+  private final TaskRecordService tasks;
+  private final AgentAssemblyRecordService agents;
+  private final RunEvidenceRecordService evidence;
+  private final RunCountStore counts;
   private final WorkspaceService workspaces;
   private final BugService bugs;
   private final BugIntakeService intakes;
@@ -29,7 +37,11 @@ public class HtmlReportService {
   private final WorkflowExecutionService workflows;
 
   public HtmlReportService(
-      RunRecordService repository,
+      RunStateStore repository,
+      TaskRecordService tasks,
+      AgentAssemblyRecordService agents,
+      RunEvidenceRecordService evidence,
+      RunCountStore counts,
       WorkspaceService workspaces,
       BugService bugs,
       BugIntakeService intakes,
@@ -39,6 +51,10 @@ public class HtmlReportService {
       MemoryService memories,
       WorkflowExecutionService workflows) {
     this.repository = repository;
+    this.tasks = tasks;
+    this.agents = agents;
+    this.evidence = evidence;
+    this.counts = counts;
     this.workspaces = workspaces;
     this.bugs = bugs;
     this.intakes = intakes;
@@ -53,7 +69,7 @@ public class HtmlReportService {
   public String renderSummary(String runId) {
     var run = repository.runSnapshot(runId);
     var nodes = plans.find(runId);
-    var tokens = repository.reportedTokens(runId);
+    var tokens = counts.reportedTokens(runId);
     StringBuilder html =
         new StringBuilder(
             "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta"
@@ -82,14 +98,14 @@ public class HtmlReportService {
     html.append("</ul></section>");
     appendBudgetPolicies(
         html,
-        repository.roleBudgets(run.taskId().toString()),
-        repository.toolBudgets(run.taskId().toString()));
+        tasks.roleBudgets(run.taskId().toString()),
+        tasks.toolBudgets(run.taskId().toString()));
     html.append("<section><h2>调用统计</h2><p>本运行 Agent 调用：")
-        .append(repository.agents(runId).size())
+        .append(agents.agents(runId).size())
         .append("；模型调用：")
-        .append(repository.models(runId).size())
+        .append(agents.models(runId).size())
         .append("；工具调用：")
-        .append(repository.tools(runId).size())
+        .append(agents.tools(runId).size())
         .append("。</p><p>本运行及恢复祖先的已报告 Token：")
         .append(tokens.knownTokens())
         .append("；用量未知的模型调用：")
@@ -100,8 +116,8 @@ public class HtmlReportService {
 
   public String render(String runId) {
     Map<String, Object> run = repository.run(runId),
-        task = repository.task(run.get("TASK_ID").toString());
-    var taskDefinition = repository.taskDefinition(run.get("TASK_ID").toString());
+        task = tasks.task(run.get("TASK_ID").toString());
+    var taskDefinition = tasks.taskDefinition(run.get("TASK_ID").toString());
     StringBuilder html =
         new StringBuilder(
             "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta"
@@ -139,7 +155,7 @@ public class HtmlReportService {
     appendHandoffs(html, runId);
     appendCalls(html, runId);
     html.append("<section><h2>执行记录</h2><p>以下内容来自本次运行记录，模拟工具、模型推断和真实验证必须区分。</p><ul>");
-    for (Map<String, Object> event : repository.events(runId))
+    for (Map<String, Object> event : evidence.events(runId))
       html.append("<li>")
           .append(escape(event.get("CREATED_AT")))
           .append(" · ")
@@ -398,7 +414,7 @@ public class HtmlReportService {
   }
 
   private void appendRequirements(StringBuilder html, String taskId) {
-    var task = repository.taskDefinition(taskId);
+    var task = tasks.taskDefinition(taskId);
     html.append("<section><h2>任务约束与验收要求</h2><p>以下是用户提出的要求，不代表已经验证通过。</p><ul>");
     if (!task.fileScopes().isEmpty()) {
       for (String path : task.fileScopes())
@@ -449,9 +465,9 @@ public class HtmlReportService {
     }
     if (nodes.isEmpty()) html.append("<li>历史运行没有计划记录。</li>");
     html.append("</ul><p>以下技能仅表示已装配方法，不证明模型遵循。</p><ul>");
-    var skills = repository.skills(runId);
-    var toolGrants = repository.agentToolGrants(runId);
-    for (var agent : repository.agents(runId)) {
+    var skills = agents.skills(runId);
+    var toolGrants = agents.agentToolGrants(runId);
+    for (var agent : agents.agents(runId)) {
       String agentId = agent.get("ID").toString();
       html.append("<li>")
           .append(escape(agent.get("ROLE_NAME")))
@@ -535,7 +551,7 @@ public class HtmlReportService {
 
   private void appendHandoffs(StringBuilder html, String runId) {
     html.append("<section><h2>结构化交接</h2><p>模型摘要和推断需结合证据核实。</p><ul>");
-    var handoffs = repository.handoffs(runId);
+    var handoffs = evidence.handoffs(runId);
     for (var row : handoffs) {
       Handoff item = (Handoff) row.get("PAYLOAD");
       html.append("<li>")
@@ -613,7 +629,7 @@ public class HtmlReportService {
     }
     if (stats.isEmpty()) html.append("<li>没有 Agent 调用记录。</li>");
     html.append("</ul><h3>工具调用</h3><ul>");
-    var tools = repository.tools(runId);
+    var tools = agents.tools(runId);
     for (var tool : tools)
       html.append("<li>")
           .append(escape(tool.get("TOOL_NAME")))
@@ -632,7 +648,7 @@ public class HtmlReportService {
 
   private void appendCheckpoints(StringBuilder html, String runId) {
     html.append("<section><h2>检查点</h2><p>有效性仅针对当前实现的安全边界，不表示外部副作用已回退。</p><ul>");
-    var checkpoints = repository.checkpoints(runId);
+    var checkpoints = evidence.checkpoints(runId);
     for (var cp : checkpoints)
       html.append("<li>")
           .append(escape(cp.get("STAGE")))

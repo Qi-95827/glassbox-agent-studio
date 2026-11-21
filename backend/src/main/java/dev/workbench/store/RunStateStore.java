@@ -165,47 +165,6 @@ public class RunStateStore {
     creation.createRun(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxReportedTokens, maxIdenticalTools, maxSeconds, elapsed, includeCoder, maxAgentRounds, maxAgentTools);
   }
 
-  void createRunForWorkflow(
-      String id,
-      String taskId,
-      String parent,
-      int rounds,
-      int tools,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxPerTool,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      Integer maxSeconds,
-      long elapsed,
-      boolean includeCoder,
-      Integer maxAgentRounds,
-      Integer maxAgentTools,
-      WorkflowTemplate workflow,
-      boolean reviewRequired) {
-    creation.createRunForWorkflow(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxReportedTokens, maxIdenticalTools, maxSeconds, elapsed, includeCoder, maxAgentRounds, maxAgentTools, workflow, reviewRequired);
-  }
-
-  void createRunForCandidatePlan(
-      String id,
-      String taskId,
-      String parent,
-      int rounds,
-      int tools,
-      Integer maxRounds,
-      Integer maxTools,
-      Integer maxPerTool,
-      Long maxReportedTokens,
-      Integer maxIdenticalTools,
-      Integer maxSeconds,
-      long elapsed,
-      boolean includeCoder,
-      Integer maxAgentRounds,
-      Integer maxAgentTools,
-      dev.workbench.framework.workflow.plan.CandidateRunPlan plan) {
-    creation.createRunForCandidatePlan(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxReportedTokens, maxIdenticalTools, maxSeconds, elapsed, includeCoder, maxAgentRounds, maxAgentTools, plan);
-  }
-
   public void createRecoveryRun(
       UUID runId, RunSnapshot original, CheckpointSnapshot checkpoint) {
     creation.createRecoveryRun(runId, original, checkpoint);

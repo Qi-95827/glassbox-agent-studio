@@ -20,7 +20,9 @@ import dev.workbench.framework.workflow.plan.WorkflowAttempt;
 import dev.workbench.framework.workflow.plan.WorkflowCheck;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.planning.PlanService;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.orchestration.TaskSupplementService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.workspace.RunHandoverService;
@@ -35,7 +37,9 @@ import org.springframework.stereotype.Component;
 /** 执行图的只读投影：流程、节点、依赖、焦点、阻塞与可用操作。 */
 @Component
 final class ExecutionGraphProjector {
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final AgentAssemblyRecordService agents;
+  private final TaskRecordService tasks;
   private final PlanService plans;
   private final WorkflowExecutionService workflows;
   private final TaskSupplementService supplements;
@@ -46,7 +50,9 @@ final class ExecutionGraphProjector {
   private final ExecutionSummaryProjector summaries;
 
   ExecutionGraphProjector(
-      RunRecordService runs,
+      RunStateStore runs,
+      AgentAssemblyRecordService agents,
+      TaskRecordService tasks,
       PlanService plans,
       WorkflowExecutionService workflows,
       TaskSupplementService supplements,
@@ -56,6 +62,8 @@ final class ExecutionGraphProjector {
       ExecutionOperationProjector operations,
       ExecutionSummaryProjector summaries) {
     this.runs = runs;
+    this.agents = agents;
+    this.tasks = tasks;
     this.plans = plans;
     this.workflows = workflows;
     this.supplements = supplements;
@@ -74,8 +82,8 @@ final class ExecutionGraphProjector {
     var nodes = plans.find(runId);
     var attempts = workflows.workflowAttempts(runId);
     var checks = workflows.workflowChecks(runId);
-    var models = runs.models(runId);
-    var tools = runs.tools(runId);
+    var models = agents.models(runId);
+    var tools = agents.tools(runId);
     var byNodeAttempts = ExecutionViewSupport.groupAttempts(attempts);
     var byNodeChecks = ExecutionViewSupport.groupChecks(checks);
     var nodeViews = new ArrayList<NodeView>();
@@ -94,7 +102,7 @@ final class ExecutionGraphProjector {
                 operations.recoveryCheckpoints(runId, plan),
                 handover,
                 revalidationRequired));
-    int taskVersion = runs.taskVersion(snapshot.taskId().toString());
+    int taskVersion = tasks.taskVersion(snapshot.taskId().toString());
     var supplementRequest = supplements.latestRequest(runId);
     if (supplementRequest != null && "OPEN".equals(supplementRequest.status()))
       actions.add(

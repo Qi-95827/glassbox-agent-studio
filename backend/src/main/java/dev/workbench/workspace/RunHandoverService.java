@@ -8,7 +8,9 @@ import dev.workbench.domain.RunStatus;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.persistence.entity.RunHandoverEntity;
 import dev.workbench.persistence.repository.RunHandoverRepository;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -21,19 +23,25 @@ import org.springframework.stereotype.Service;
 @Service
 public class RunHandoverService {
   private final RunHandoverRepository rows;
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final RunEvidenceRecordService evidence;
   private final WorkspaceService workspaces;
   private final ApprovalService approvals;
   private final AuditService audit;
 
   public RunHandoverService(
       RunHandoverRepository rows,
-      RunRecordService runs,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      RunEvidenceRecordService evidence,
       WorkspaceService workspaces,
       ApprovalService approvals,
       AuditService audit) {
     this.rows = rows;
     this.runs = runs;
+    this.tasks = tasks;
+    this.evidence = evidence;
     this.workspaces = workspaces;
     this.approvals = approvals;
     this.audit = audit;
@@ -43,7 +51,7 @@ public class RunHandoverService {
     RunSnapshot run = runs.runSnapshot(runId);
     if (run.status() != RunStatus.PAUSED)
       throw new IllegalStateException("只有已暂停的运行可以人工接手。");
-    var task = runs.taskDefinition(run.taskId().toString());
+    var task = tasks.taskDefinition(run.taskId().toString());
     if (task.workspaceId() == null)
       throw new IllegalStateException("没有工作区的任务不需要人工接手。");
     if (activeRow(runId) != null) throw new IllegalStateException("该运行已处于人工接手状态。");
@@ -63,7 +71,7 @@ public class RunHandoverService {
             safeNote(note),
             now,
             null));
-    runs.event(runId, EventType.HANDOVER_TAKEN, "用户已人工接手工作区；运行保持暂停。");
+    evidence.event(runId, EventType.HANDOVER_TAKEN, "用户已人工接手工作区；运行保持暂停。");
     audit.record("RUN_HANDOVER_TAKE", "RUN", runId, "ACTIVE", "工作区 " + task.workspaceId());
     return findByRun(runId);
   }
@@ -77,7 +85,7 @@ public class RunHandoverService {
     rows.save(active);
     // 触发审批按当前版本重新校验；旧批准会转为 STALE，不会被继续复用。
     approvals.list(active.getWorkspaceId());
-    runs.event(
+    evidence.event(
         runId,
         EventType.HANDOVER_RETURNED,
         changed

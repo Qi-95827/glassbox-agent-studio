@@ -12,14 +12,22 @@ import dev.workbench.framework.context.AgentInput;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.control.StopExecution;
 import dev.workbench.framework.tool.UncertainToolEffectException;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunCheckpointStore;
+import dev.workbench.store.RunCreationStore;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.task.CostService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.List;
 
 /** 未使用动态计划的单 Agent 顺序执行：分析、按需开发、回归和审查交接。 */
 final class DirectRunExecutor {
-  private final RunRecordService repository;
+  private final RunCreationStore creation;
+  private final RunStateStore runs;
+  private final RunEvidenceRecordService evidence;
+  private final RunCheckpointStore checkpointStore;
+  private final AgentAssemblyRecordService assemblyRecords;
   private final AgentExecutor agent;
   private final AgentContextAssembler contexts;
   private final BugService bugs;
@@ -33,7 +41,11 @@ final class DirectRunExecutor {
   private final CostService costs;
 
   DirectRunExecutor(
-      RunRecordService repository,
+      RunCreationStore creation,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
+      RunCheckpointStore checkpointStore,
+      AgentAssemblyRecordService assemblyRecords,
       AgentExecutor agent,
       AgentContextAssembler contexts,
       BugService bugs,
@@ -45,7 +57,11 @@ final class DirectRunExecutor {
       RunReviewCoordinator review,
       WorkspaceAuthorizationService workspaceAuthorization,
       CostService costs) {
-    this.repository = repository;
+    this.creation = creation;
+    this.runs = runs;
+    this.evidence = evidence;
+    this.checkpointStore = checkpointStore;
+    this.assemblyRecords = assemblyRecords;
     this.agent = agent;
     this.contexts = contexts;
     this.bugs = bugs;
@@ -72,7 +88,7 @@ final class DirectRunExecutor {
       finishUnsuccessful(state, StopCause.INTERRUPTED, "进程停止，调用结果可能未知。");
     } catch (WorkspaceRecoveryConflictException e) {
       if (state.recovery && !state.agentStarted && state.run.parentId() != null) {
-        repository.rejectRecoveryPrecondition(
+        creation.rejectRecoveryPrecondition(
             state.runId,
             state.control.rounds(),
             state.control.tools(),
@@ -96,7 +112,7 @@ final class DirectRunExecutor {
 
   private boolean runAnalysisPhase(ExecutionState state) throws InterruptedException {
     state.control.check();
-    repository.event(state.runId, EventType.RUN_STARTED, "运行开始。");
+    evidence.event(state.runId, EventType.RUN_STARTED, "运行开始。");
     if (state.task.bugId() != null && !reproduce(state)) return false;
     if (state.stage == CheckpointStage.BEFORE_REVIEW && state.recovery) {
       reuseAnalysis(state);
@@ -110,7 +126,7 @@ final class DirectRunExecutor {
   }
 
   private boolean reproduce(ExecutionState state) {
-    repository.event(state.runId, EventType.TEST_STARTED, "正在容器中观察模拟 Bug 的测试状态。");
+    evidence.event(state.runId, EventType.TEST_STARTED, "正在容器中观察模拟 Bug 的测试状态。");
     state.initial =
         bugs.runForTask(
             state.runId,
@@ -119,7 +135,7 @@ final class DirectRunExecutor {
             BugService.CheckKind.REPRODUCE,
             state.control::check);
     intakes.triage(state.initial);
-    repository.event(
+    evidence.event(
         state.runId,
         EventType.TEST_FINISHED,
         "检测记录 "
@@ -130,7 +146,7 @@ final class DirectRunExecutor {
     if (state.initial.status() == BugService.CheckStatus.FAILURES_OBSERVED) return true;
     String reason = "未观察到测试失败或验证条件不足，暂停自动修改；检测结果：" + state.initial.status();
     state.control.save(RunStatus.BLOCKED, reason, null, StopCause.VALIDATION_MISSING);
-    repository.event(state.runId, EventType.BLOCKED, reason);
+    evidence.event(state.runId, EventType.BLOCKED, reason);
     return false;
   }
 
@@ -142,24 +158,24 @@ final class DirectRunExecutor {
     WorkspaceReviewCheckpoint workspaceCheckpoint = null;
     String analysisReference = state.previousResult;
     if (state.task.workspaceId() != null) {
-      workspaceCheckpoint = repository.workspaceReviewPayload(state.previousResult);
+      workspaceCheckpoint = evidence.workspaceReviewPayload(state.previousResult);
       checkpoints.requireUnchangedWorkspace(state.task, workspaceCheckpoint);
       analysisReference = workspaceCheckpoint.analysisReference();
     }
     var source =
-        repository.checkpointAnalysisSource(
+        evidence.checkpointAnalysisSource(
             state.run.parentId().toString(), analysisReference);
     state.evidenceRun = source.runId().toString();
     state.agentId = source.agentId().toString();
     state.answer = source.result();
-    repository.reuseAnalysis(state.runId, source.agentId());
-    repository.event(
+    evidence.reuseAnalysis(state.runId, source.agentId());
+    evidence.event(
         state.runId, EventType.HANDOFF, "已校验并复用历史分析结果；本次运行未重新调用分析 Agent。");
     String reference =
-        repository.ancestorAnalysisReference(
+        evidence.ancestorAnalysisReference(
             state.runId, state.evidenceRun, source.agentId());
     if (workspaceCheckpoint == null) {
-      repository.checkpoint(
+      checkpointStore.checkpoint(
           state.runId,
           CheckpointStage.BEFORE_REVIEW,
           state.control.rounds(),
@@ -167,7 +183,7 @@ final class DirectRunExecutor {
           state.control.elapsed(),
           reference);
     } else {
-      repository.workspaceReviewCheckpoint(
+      checkpointStore.workspaceReviewCheckpoint(
           state.runId,
           state.control.rounds(),
           state.control.tools(),
@@ -182,20 +198,20 @@ final class DirectRunExecutor {
   private void analyze(ExecutionState state) throws InterruptedException {
     String beforeAnalysis = checkpoints.fingerprintIfEligible(state.task);
     Handoff delegation = handoffs.delegation(state.run, state.task, state.agentId);
-    repository.startAgentWithDelegation(state.agentId, state.runId, state.task.goal(), delegation);
+    assemblyRecords.startAgentWithDelegation(state.agentId, state.runId, state.task.goal(), delegation);
     state.agentStarted = true;
-    repository.event(
+    evidence.event(
         state.runId,
         EventType.DELEGATED,
         state.recovery
             ? "协调者从检查点重新委派 AgentScope 分析 Agent。"
             : "协调者将分析子任务委派给 AgentScope 分析 Agent。");
-    repository.event(
+    evidence.event(
         state.runId,
         EventType.AGENT_STARTED,
         "AgentScope 分析 Agent 开始执行，实例：" + state.agentId);
     if (state.stage == CheckpointStage.BEFORE_TOOL && !state.recovery) {
-      repository.checkpoint(
+      checkpointStore.checkpoint(
           state.runId,
           state.stage,
           state.control.rounds(),
@@ -203,7 +219,7 @@ final class DirectRunExecutor {
           state.control.elapsed(),
           null);
     }
-    var analystDefinition = repository.plannedDefinitionForAgent(state.runId, state.agentId);
+    var analystDefinition = assemblyRecords.plannedDefinitionForAgent(state.runId, state.agentId);
     String answer =
         agent.execute(
             new AgentExecutionRequest(
@@ -227,9 +243,9 @@ final class DirectRunExecutor {
     Handoff analysisResult =
         handoffs.analysisResult(
             state.run, state.task, state.agentId, answer, state.evidenceRun, state.initial);
-    repository.finishAgentWithResult(state.agentId, answer, analysisResult);
+    assemblyRecords.finishAgentWithResult(state.agentId, answer, analysisResult);
     state.agentStarted = false;
-    repository.event(
+    evidence.event(
         state.runId, EventType.HANDOFF, "分析 Agent 已提交结构化结果。准备交给审查 Agent。");
     checkpoints.recordAnalysisCheckpoint(
         state.runId, state.task, state.control, state.agentId, beforeAnalysis);
@@ -247,16 +263,16 @@ final class DirectRunExecutor {
             coderId,
             state.initial);
     AgentInput codingPrompt = handoffs.input(codingInput);
-    repository.handoff(HandoffDirection.AGENT_TRANSFER, codingInput);
-    repository.event(state.runId, EventType.DELEGATED, "分析交接已准备，计划接收实例：" + coderId);
-    repository.startAgentFromHandoff(
+    evidence.handoff(HandoffDirection.AGENT_TRANSFER, codingInput);
+    evidence.event(state.runId, EventType.DELEGATED, "分析交接已准备，计划接收实例：" + coderId);
+    assemblyRecords.startAgentFromHandoff(
         coderId, state.runId, state.task.goal(), AgentRole.CODER, codingInput.handoffId());
     state.agentId = coderId;
     state.activeRole = AgentRole.CODER;
     state.agentStarted = true;
-    repository.event(
+    evidence.event(
         state.runId, EventType.AGENT_STARTED, "AgentScope 开发 Agent 开始执行，实例：" + coderId);
-    var coderDefinition = repository.plannedDefinitionForAgent(state.runId, coderId);
+    var coderDefinition = assemblyRecords.plannedDefinitionForAgent(state.runId, coderId);
     String answer =
         agent.execute(
             new AgentExecutionRequest(
@@ -289,15 +305,15 @@ final class DirectRunExecutor {
                 HandoffStatus.COMPLETED,
                 answer,
                 state.runId,
-                repository.toolEvidence(state.runId),
+                evidence.toolEvidence(state.runId),
                 state.task.modelMode() == ModelMode.DEEPSEEK
                     ? HandoffSource.DEEPSEEK_FLASH
                     : HandoffSource.MOCK_MODEL,
                 null),
             state.initial);
-    repository.finishAgentWithResult(coderId, answer, codingResult);
+    assemblyRecords.finishAgentWithResult(coderId, answer, codingResult);
     state.agentStarted = false;
-    repository.event(
+    evidence.event(
         state.runId, EventType.HANDOFF, "开发 Agent 已返回结果；是否修改和测试通过以实际记录为准。");
     state.upstreamParty = HandoffParty.CODING_AGENT;
     state.control.check();
@@ -305,7 +321,7 @@ final class DirectRunExecutor {
 
   private void runRegression(ExecutionState state) {
     if (state.task.bugId() == null || !state.task.writeEnabled()) return;
-    repository.event(state.runId, EventType.TEST_STARTED, "正在容器中执行回归检查。");
+    evidence.event(state.runId, EventType.TEST_STARTED, "正在容器中执行回归检查。");
     state.regression =
         bugs.runForTask(
             state.runId,
@@ -314,7 +330,7 @@ final class DirectRunExecutor {
             BugService.CheckKind.REGRESSION,
             state.control::check);
     intakes.regression(state.regression);
-    repository.event(
+    evidence.event(
         state.runId,
         EventType.TEST_FINISHED,
         "回归检测记录 "
@@ -338,7 +354,15 @@ final class DirectRunExecutor {
 
   private AgentRuntime runtimeFor(String runId, String agentId, RunControl control) {
     return new ControlledAgentRuntime(
-        runId, agentId, control, repository, null, costs, workspaceAuthorization);
+        runId,
+        agentId,
+        control,
+        assemblyRecords,
+        runs,
+        evidence,
+        null,
+        costs,
+        workspaceAuthorization);
   }
 
   private static dev.workbench.framework.context.InitialCheck initialCheck(BugService.Check check) {

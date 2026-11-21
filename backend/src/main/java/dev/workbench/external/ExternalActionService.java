@@ -5,7 +5,6 @@ import dev.workbench.persistence.entity.ExternalActionCheckEntity;
 import dev.workbench.persistence.entity.ExternalActionEntity;
 import dev.workbench.persistence.repository.ExternalActionCheckRepository;
 import dev.workbench.persistence.repository.ExternalActionRepository;
-import dev.workbench.store.RunRecordService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

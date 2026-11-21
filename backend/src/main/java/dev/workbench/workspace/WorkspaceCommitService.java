@@ -3,7 +3,6 @@ package dev.workbench.workspace;
 import dev.workbench.audit.AuditService;
 import dev.workbench.persistence.entity.GitActionEntity;
 import dev.workbench.persistence.repository.GitActionRepository;
-import dev.workbench.store.RunRecordService;
 import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.util.List;

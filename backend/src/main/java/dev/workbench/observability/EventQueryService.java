@@ -3,7 +3,7 @@ package dev.workbench.observability;
 import dev.workbench.domain.EventType;
 import dev.workbench.persistence.entity.EventEntity;
 import dev.workbench.persistence.repository.EventRepository;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -20,9 +20,9 @@ import dev.workbench.framework.event.RunEvent;
 @Service
 public class EventQueryService {
   private final EventRepository events;
-  private final RunRecordService runs;
+  private final RunStateStore runs;
 
-  public EventQueryService(EventRepository events, RunRecordService runs) {
+  public EventQueryService(EventRepository events, RunStateStore runs) {
     this.events = events;
     this.runs = runs;
   }

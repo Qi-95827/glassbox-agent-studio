@@ -444,8 +444,8 @@ public class RunEvidenceRecordService {
   }
 
   /** 已完成分析的引用与摘要；结果正文保留在原 Agent 调用中。 */
-  record AnalysisSourceData(UUID agentId, String result) {}
+  public record AnalysisSourceData(UUID agentId, String result) {}
 
   /** 检查点复用的真实分析来源，不把祖先 Agent 当成本次调用。 */
-  record CheckpointAnalysisSourceData(UUID runId, UUID agentId, String result) {}
+  public record CheckpointAnalysisSourceData(UUID runId, UUID agentId, String result) {}
 }

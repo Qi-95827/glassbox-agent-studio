@@ -6,7 +6,6 @@ import dev.workbench.persistence.entity.EvaluationCheckEntity;
 import dev.workbench.persistence.repository.EvaluationBatchRepository;
 import dev.workbench.persistence.repository.EvaluationCaseRepository;
 import dev.workbench.persistence.repository.EvaluationCheckRepository;
-import dev.workbench.store.RunRecordService;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

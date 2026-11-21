@@ -6,7 +6,6 @@ import dev.workbench.persistence.entity.TaskEntity;
 import dev.workbench.persistence.entity.TaskWorkspaceScopeEntity;
 import dev.workbench.persistence.repository.TaskRepository;
 import dev.workbench.persistence.repository.TaskWorkspaceScopeRepository;
-import dev.workbench.store.RunRecordService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

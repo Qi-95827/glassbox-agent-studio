@@ -5,7 +5,9 @@ import dev.workbench.domain.*;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.agent.execution.AgentExecutor;
 import dev.workbench.framework.context.AgentInput;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.store.ReviewCompletion;
 import dev.workbench.task.CostService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
@@ -13,7 +15,9 @@ import java.util.List;
 
 /** 审查交接、审查 Agent 调用和最终运行结算。 */
 final class RunReviewCoordinator {
-  private final RunRecordService repository;
+  private final RunStateStore runs;
+  private final AgentAssemblyRecordService assemblyRecords;
+  private final RunEvidenceRecordService evidence;
   private final AgentExecutor agent;
   private final RunCommandService commands;
   private final RunHandoffFactory handoffs;
@@ -22,14 +26,18 @@ final class RunReviewCoordinator {
   private final Object stateLock;
 
   RunReviewCoordinator(
-      RunRecordService repository,
+      RunStateStore runs,
+      AgentAssemblyRecordService assemblyRecords,
+      RunEvidenceRecordService evidence,
       AgentExecutor agent,
       RunCommandService commands,
       RunHandoffFactory handoffs,
       WorkspaceAuthorizationService workspaceAuthorization,
       CostService costs,
       Object stateLock) {
-    this.repository = repository;
+    this.runs = runs;
+    this.assemblyRecords = assemblyRecords;
+    this.evidence = evidence;
     this.agent = agent;
     this.commands = commands;
     this.handoffs = handoffs;
@@ -64,16 +72,16 @@ final class RunReviewCoordinator {
             state.initial,
             state.regression);
     AgentInput reviewInput = handoffs.input(transfer);
-    repository.handoff(HandoffDirection.AGENT_TRANSFER, transfer);
-    repository.event(state.runId, EventType.DELEGATED, "审查交接已准备，计划接收实例：" + reviewerId);
-    repository.startAgentFromHandoff(
+    evidence.handoff(HandoffDirection.AGENT_TRANSFER, transfer);
+    evidence.event(state.runId, EventType.DELEGATED, "审查交接已准备，计划接收实例：" + reviewerId);
+    assemblyRecords.startAgentFromHandoff(
         reviewerId, state.runId, state.task.goal(), AgentRole.REVIEWER, transfer.handoffId());
     state.agentId = reviewerId;
     state.activeRole = AgentRole.REVIEWER;
     state.agentStarted = true;
-    repository.event(
+    evidence.event(
         state.runId, EventType.AGENT_STARTED, "AgentScope 审查 Agent 开始执行，实例：" + reviewerId);
-    var reviewDefinition = repository.plannedDefinitionForAgent(state.runId, reviewerId);
+    var reviewDefinition = assemblyRecords.plannedDefinitionForAgent(state.runId, reviewerId);
     String review =
         agent.execute(
             new AgentExecutionRequest(
@@ -104,7 +112,7 @@ final class RunReviewCoordinator {
                 HandoffStatus.COMPLETED,
                 review,
                 state.evidenceRun,
-                repository.toolEvidence(state.evidenceRun),
+                evidence.toolEvidence(state.evidenceRun),
                 state.task.modelMode() == ModelMode.DEEPSEEK
                     ? HandoffSource.DEEPSEEK_FLASH
                     : HandoffSource.MOCK_MODEL,
@@ -146,7 +154,7 @@ final class RunReviewCoordinator {
             reason = "回归检查未通过或无法执行；不得报告 Bug 已修复。";
             cause = StopCause.CHECK_FAILED;
           }
-          repository.finishReviewedRun(
+          runs.finishReviewedRun(
               new ReviewCompletion(
                   java.util.UUID.fromString(state.runId),
                   java.util.UUID.fromString(outcome.reviewerId()),
@@ -160,7 +168,7 @@ final class RunReviewCoordinator {
                   state.control.tools(),
                   state.control.elapsed()));
         } else {
-          repository.finishReviewedRun(
+          runs.finishReviewedRun(
               new ReviewCompletion(
                   java.util.UUID.fromString(state.runId),
                   java.util.UUID.fromString(outcome.reviewerId()),
@@ -186,7 +194,9 @@ final class RunReviewCoordinator {
         runId,
         reviewerId,
         state.control,
-        repository,
+        assemblyRecords,
+        runs,
+        evidence,
         null,
         costs,
         workspaceAuthorization);

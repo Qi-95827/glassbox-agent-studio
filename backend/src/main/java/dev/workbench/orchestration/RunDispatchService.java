@@ -2,7 +2,8 @@ package dev.workbench.orchestration;
 
 import dev.workbench.domain.CheckpointStage;
 import dev.workbench.domain.StopCause;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunCreationStore;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.store.StopCompletion;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -11,13 +12,19 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 /** 提交后派发、运行内顺序提交与队列拒绝收口。 */
 final class RunDispatchService {
-  private final RunRecordService repository;
+  private final RunStateStore runs;
+  private final RunCreationStore creation;
   private final ExecutorService executor;
   private final RunService owner;
   private volatile RunExecutionEngine engine;
 
-  RunDispatchService(RunRecordService repository, ExecutorService executor, RunService owner) {
-    this.repository = repository;
+  RunDispatchService(
+      RunStateStore runs,
+      RunCreationStore creation,
+      ExecutorService executor,
+      RunService owner) {
+    this.runs = runs;
+    this.creation = creation;
     this.executor = executor;
     this.owner = owner;
   }
@@ -49,7 +56,7 @@ final class RunDispatchService {
       executor.submit(() -> engine.execute(runId, CheckpointStage.BEFORE_TOOL, null, false));
     } catch (RejectedExecutionException e) {
       String reason = "运行未能加入执行队列，尚未启动 Agent。";
-      repository.finishStoppedRun(
+      runs.finishStoppedRun(
           new StopCompletion(
               java.util.UUID.fromString(runId),
               null,
@@ -76,7 +83,7 @@ final class RunDispatchService {
     try {
       executor.submit(() -> engine.execute(nextId, stage, previousResult, true));
     } catch (RejectedExecutionException e) {
-      repository.rejectRecoveryBeforeDispatch(nextId);
+      creation.rejectRecoveryBeforeDispatch(nextId);
     }
   }
 }

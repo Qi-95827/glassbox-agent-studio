@@ -11,16 +11,16 @@ import dev.workbench.domain.ModelMode;
 import dev.workbench.domain.RunSnapshot;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.framework.context.AgentInput;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
 import java.util.List;
 
 /** 组装协调者、分析与审查之间的版本化交接，保持持久化内容与发送给 Agent 的内容一致。 */
 final class RunHandoffFactory {
-  private final RunRecordService repository;
+  private final RunEvidenceRecordService evidence;
   private final ObjectMapper json;
 
-  RunHandoffFactory(RunRecordService repository, ObjectMapper json) {
-    this.repository = repository;
+  RunHandoffFactory(RunEvidenceRecordService evidence, ObjectMapper json) {
+    this.evidence = evidence;
     this.json = json;
   }
 
@@ -100,7 +100,7 @@ final class RunHandoffFactory {
             HandoffStatus.COMPLETED,
             answer,
             evidenceRun,
-            repository.toolEvidence(evidenceRun),
+            evidence.toolEvidence(evidenceRun),
             source,
             null),
         initial);
@@ -128,7 +128,7 @@ final class RunHandoffFactory {
             HandoffStatus.COMPLETED,
             analysisAnswer,
             evidenceRun,
-            repository.toolEvidence(evidenceRun),
+            evidence.toolEvidence(evidenceRun),
             source(task),
             coderId);
     return attachTestChecks(codingInput, initial);
@@ -161,7 +161,7 @@ final class RunHandoffFactory {
             HandoffStatus.COMPLETED,
             task.writeEnabled() ? "分析结论：\n" + analysisAnswer + "\n开发结论：\n" + answer : answer,
             evidenceRun,
-            repository.toolEvidence(evidenceRun),
+            evidence.toolEvidence(evidenceRun),
             source(task),
             reviewerId);
     return attachTestChecks(transfer, initial, regression);

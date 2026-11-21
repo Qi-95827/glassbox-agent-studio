@@ -10,17 +10,21 @@ import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.framework.control.RunControl;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.store.StopCompletion;
 import java.util.List;
 
 /** 结算未成功运行：关闭已开始的调用并按角色记录系统交接，不把未知结果写成成功。 */
 final class RunFailureHandler {
-  private final RunRecordService repository;
+  private final RunStateStore runs;
+  private final RunEvidenceRecordService evidence;
   private final RunHandoffFactory handoffs;
 
-  RunFailureHandler(RunRecordService repository, RunHandoffFactory handoffs) {
-    this.repository = repository;
+  RunFailureHandler(
+      RunStateStore runs, RunEvidenceRecordService evidence, RunHandoffFactory handoffs) {
+    this.runs = runs;
+    this.evidence = evidence;
     this.handoffs = handoffs;
   }
 
@@ -57,11 +61,11 @@ final class RunFailureHandler {
               HandoffStatus.valueOf(status.name()),
               reason,
               runId,
-              repository.toolEvidence(runId),
+              evidence.toolEvidence(runId),
               HandoffSource.SYSTEM,
               null);
     }
-    repository.finishStoppedRun(
+    runs.finishStoppedRun(
         new StopCompletion(
             java.util.UUID.fromString(runId),
             agentStarted ? java.util.UUID.fromString(agentId) : null,

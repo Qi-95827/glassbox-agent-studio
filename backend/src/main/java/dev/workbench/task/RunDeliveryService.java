@@ -13,7 +13,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.store.ReviewCompletion;
 import dev.workbench.store.StopCompletion;
 
@@ -25,7 +27,9 @@ import dev.workbench.store.StopCompletion;
 @Service
 public class RunDeliveryService {
   private final PlanService plans;
-  private final RunRecordService records;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final AgentAssemblyRecordService agents;
   private final WorkspaceService workspaces;
   private final WorkspaceAuthorizationService workspaceAuthorization;
   private final WorkflowExecutionService workflowRuns;
@@ -33,13 +37,17 @@ public class RunDeliveryService {
 
   public RunDeliveryService(
       PlanService plans,
-      RunRecordService records,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      AgentAssemblyRecordService agents,
       WorkspaceService workspaces,
       WorkspaceAuthorizationService workspaceAuthorization,
       WorkflowExecutionService workflowRuns,
       dev.workbench.ownership.OwnershipService ownership) {
     this.plans = plans;
-    this.records = records;
+    this.runs = runs;
+    this.tasks = tasks;
+    this.agents = agents;
     this.workspaces = workspaces;
     this.workspaceAuthorization = workspaceAuthorization;
     this.workflowRuns = workflowRuns;
@@ -93,15 +101,15 @@ public class RunDeliveryService {
 
   public Delivery delivery(String runId) {
     ownership.requireRun(runId);
-    var run = records.runSnapshot(runId);
-    var runRow = records.run(runId);
-    var task = records.taskDefinition(run.taskId().toString());
+    var run = runs.runSnapshot(runId);
+    var runRow = runs.run(runId);
+    var task = tasks.taskDefinition(run.taskId().toString());
     var nodes = plans.find(runId);
     var specs = plans.specsByNode(runId);
-    var agents = new LinkedHashMap<String, Map<String, Object>>();
-    for (var agent : records.agents(runId)) agents.put(String.valueOf(agent.get("ID")), agent);
+    var agentRows = new LinkedHashMap<String, Map<String, Object>>();
+    for (var agent : agents.agents(runId)) agentRows.put(String.valueOf(agent.get("ID")), agent);
     var toolsByAgent = new LinkedHashMap<String, List<Map<String, Object>>>();
-    for (var tool : records.tools(runId)) {
+    for (var tool : agents.tools(runId)) {
       if (!ToolKind.WORKSPACE_WRITE.recordName().equals(String.valueOf(tool.get("TOOL_NAME")))
           || !"COMPLETED".equals(String.valueOf(tool.get("STATUS")))
           || tool.get("RESOURCE_VERSION") == null) continue;
@@ -149,7 +157,7 @@ public class RunDeliveryService {
         if (node.id().equals(handoff.senderNodeId()))
           outbound.add(handoff(handoff, nodeById, false));
       }
-      var agent = node.agentId() == null ? null : agents.get(node.agentId().toString());
+      var agent = node.agentId() == null ? null : agentRows.get(node.agentId().toString());
       deliveries.add(
           new NodeDelivery(
               node.id().toString(),
@@ -215,7 +223,7 @@ public class RunDeliveryService {
             .filter(item -> item.path().equals(normalized))
             .findFirst()
             .orElseThrow(() -> new IllegalArgumentException("该路径不属于此运行的交付文件。"));
-    var task = records.taskDefinition(records.runSnapshot(runId).taskId().toString());
+    var task = tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString());
     // 读取前复核当前授权：目录撤权后，即使内容未变也不能再读取正文。
     workspaceAuthorization.requireCurrent(task.id().toString());
     var scope = workspaceAuthorization.find(task.id().toString());

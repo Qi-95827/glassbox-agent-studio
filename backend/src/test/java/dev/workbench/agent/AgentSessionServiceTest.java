@@ -4,7 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.state.VersionedState;
@@ -15,16 +16,16 @@ import org.junit.jupiter.api.Test;
 import dev.workbench.infrastructure.agentscope.AgentSessionService;
 import dev.workbench.framework.agent.session.AgentSessionInfo;
 import dev.workbench.framework.agent.session.AgentSessionStatus;
-import dev.workbench.store.RunRecordService;
 
 /** 观察信息必须区分缺失和读取失败，不能返回状态正文。 */
 class AgentSessionServiceTest {
   @Test
   void distinguishesSavedMissingAndUnavailable() {
-    var runs = mock(RunRecordService.class);
+    var runs = mock(RunStateStore.class);
+    var agents = mock(AgentAssemblyRecordService.class);
     var states = mock(AgentStateStore.class);
     UUID saved = UUID.randomUUID(), missing = UUID.randomUUID(), failed = UUID.randomUUID();
-    when(runs.agents("run"))
+    when(agents.agents("run"))
         .thenReturn(
             List.of(
                 Map.of("ID", saved.toString()),
@@ -41,7 +42,7 @@ class AgentSessionServiceTest {
     when(states.getVersioned(
             isNull(), eq(failed.toString()), eq("agent_state"), eq(AgentState.class)))
         .thenThrow(new IllegalStateException("读取失败"));
-    var result = new AgentSessionService(runs, states).forRun("run");
+    var result = new AgentSessionService(runs, agents, states).forRun("run");
     assertEquals(
         List.of(
             AgentSessionStatus.SAVED, AgentSessionStatus.NOT_SAVED, AgentSessionStatus.UNAVAILABLE),

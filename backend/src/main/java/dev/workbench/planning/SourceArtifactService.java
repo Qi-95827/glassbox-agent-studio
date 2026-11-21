@@ -23,7 +23,9 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 
 /**
  * 任务 8：把已有文档、代码差异或测试成果接入待确认计划。
@@ -38,19 +40,25 @@ public class SourceArtifactService {
     TEST_EVIDENCE
   }
 
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final AgentAssemblyRecordService agents;
   private final SourceArtifactRepository store;
   private final TransactionTemplate tx;
   private final ObjectMapper json;
   private final WorkspaceService workspaces;
 
   public SourceArtifactService(
-      RunRecordService runs,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      AgentAssemblyRecordService agents,
       SourceArtifactRepository store,
       TransactionTemplate tx,
       ObjectMapper json,
       WorkspaceService workspaces) {
     this.runs = runs;
+    this.tasks = tasks;
+    this.agents = agents;
     this.store = store;
     this.tx = tx;
     this.json = json;
@@ -67,13 +75,13 @@ public class SourceArtifactService {
     if (kind == null) throw new IllegalArgumentException("请选择成果类型。");
     RunSnapshot target = runs.runSnapshot(targetRunId);
     RunSnapshot source = runs.runSnapshot(sourceRunId);
-    TaskDefinition targetTask = runs.taskDefinition(target.taskId().toString());
-    TaskDefinition sourceTask = runs.taskDefinition(source.taskId().toString());
+    TaskDefinition targetTask = tasks.taskDefinition(target.taskId().toString());
+    TaskDefinition sourceTask = tasks.taskDefinition(source.taskId().toString());
     if (target.status() != RunStatus.PENDING)
       throw new IllegalStateException("只有待执行/待确认运行可以接入既有成果，已结束运行不可再修改来源。");
-    if (runs.taskVersion(targetTask.id().toString()) != expectedTargetTaskVersion)
+    if (tasks.taskVersion(targetTask.id().toString()) != expectedTargetTaskVersion)
       throw new IllegalStateException("目标任务版本已变化，请重新读取后再接入成果。");
-    if (runs.taskVersion(sourceTask.id().toString()) != expectedSourceTaskVersion)
+    if (tasks.taskVersion(sourceTask.id().toString()) != expectedSourceTaskVersion)
       throw new IllegalStateException("来源任务版本已变化，请重新确认来源。");
     if (source.status().canCancel())
       throw new IllegalStateException("来源运行尚未结算，不能作为既有成果。");
@@ -148,7 +156,7 @@ public class SourceArtifactService {
 
   /** 执行前核对来源仍存在、任务版本未变、当前授权仍覆盖来源文件且内容摘要未变。 */
   public void requireCurrent(String taskId) {
-    TaskDefinition target = runs.taskDefinition(taskId);
+    TaskDefinition target = tasks.taskDefinition(taskId);
     for (SourceArtifactEntity row : store.findByTaskIdOrderByCreatedAtAsc(taskId)) {
       RunSnapshot source;
       try {
@@ -156,8 +164,8 @@ public class SourceArtifactService {
       } catch (RuntimeException e) {
         throw new IllegalStateException("接入成果的来源运行已不可用。");
       }
-      TaskDefinition sourceTask = runs.taskDefinition(source.taskId().toString());
-      if (runs.taskVersion(sourceTask.id().toString()) != row.getSourceTaskVersion())
+      TaskDefinition sourceTask = tasks.taskDefinition(source.taskId().toString());
+      if (tasks.taskVersion(sourceTask.id().toString()) != row.getSourceTaskVersion())
         throw new IllegalStateException("接入成果的来源任务版本已变化：" + row.getSummary());
       String current = currentContent(row, source, sourceTask, target);
       String currentSha =
@@ -175,13 +183,13 @@ public class SourceArtifactService {
 
   /** 页面预览：当前授权或文件版本失效时隐藏正文，避免展示已撤权内容。 */
   public List<Artifact> find(String taskId) {
-    TaskDefinition target = runs.taskDefinition(taskId);
+    TaskDefinition target = tasks.taskDefinition(taskId);
     return store.findByTaskIdOrderByCreatedAtAsc(taskId).stream()
         .map(
             row -> {
               try {
                 RunSnapshot source = runs.runSnapshot(row.getSourceRunId());
-                TaskDefinition sourceTask = runs.taskDefinition(source.taskId().toString());
+                TaskDefinition sourceTask = tasks.taskDefinition(source.taskId().toString());
                 String content = currentContent(row, source, sourceTask, target);
                 return toArtifact(row, content, true);
               } catch (RuntimeException e) {
@@ -193,12 +201,12 @@ public class SourceArtifactService {
 
   /** 供工作流输入装配；重新核对目标当前授权和文件版本，失效时拒绝装配。 */
   public List<String> constraints(String taskId) {
-    TaskDefinition target = runs.taskDefinition(taskId);
+    TaskDefinition target = tasks.taskDefinition(taskId);
     return store.findByTaskIdOrderByCreatedAtAsc(taskId).stream()
         .map(
             row -> {
               RunSnapshot source = runs.runSnapshot(row.getSourceRunId());
-              TaskDefinition sourceTask = runs.taskDefinition(source.taskId().toString());
+              TaskDefinition sourceTask = tasks.taskDefinition(source.taskId().toString());
               String content = currentContent(row, source, sourceTask, target);
               return "接入成果："
                   + row.getKind()
@@ -233,7 +241,7 @@ public class SourceArtifactService {
     if (sourceTask.workspaceId() == null)
       throw new IllegalStateException("来源任务没有工作区，不能接入代码差异。");
     var versions = new LinkedHashMap<String, String>();
-    for (var tool : runs.tools(source.id().toString())) {
+    for (var tool : agents.tools(source.id().toString())) {
       if (!"COMPLETED".equals(String.valueOf(tool.get("STATUS")))) continue;
       if (!ToolKind.WORKSPACE_WRITE.recordName().equals(String.valueOf(tool.get("TOOL_NAME")))) continue;
       Object raw = tool.get("RESOURCE_VERSION");
@@ -353,7 +361,7 @@ public class SourceArtifactService {
 
   private String toolsJson(String runId) {
     try {
-      return json.writeValueAsString(runs.tools(runId));
+      return json.writeValueAsString(agents.tools(runId));
     } catch (JsonProcessingException e) {
       throw new IllegalStateException("来源成果证据无法整理。", e);
     }

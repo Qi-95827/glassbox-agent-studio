@@ -20,7 +20,9 @@ import dev.workbench.framework.workflow.check.SystemCheckResult;
 import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.planning.SourceArtifactService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.task.WorkflowRecoveryService;
@@ -38,7 +40,9 @@ import dev.workbench.store.StopCompletion;
 /** 按持久化依赖顺序执行受控计划；整个运行共享一个控制器。 */
 @Component
 class WorkflowScheduler {
-  private final RunRecordService repository;
+  private final RunEvidenceRecordService evidence;
+  private final AgentAssemblyRecordService agents;
+  private final RunStateStore runs;
   private final PlanService plans;
   private final WorkflowExecutionService workflowRuns;
   private final WorkflowRecoveryService recovery;
@@ -53,7 +57,9 @@ class WorkflowScheduler {
   private final dev.workbench.privateagent.PrivateAgentCatalog privateAgents;
 
   WorkflowScheduler(
-      RunRecordService repository,
+      RunEvidenceRecordService evidence,
+      AgentAssemblyRecordService agents,
+      RunStateStore runs,
       PlanService plans,
       WorkflowExecutionService workflowRuns,
       WorkflowRecoveryService recovery,
@@ -66,7 +72,9 @@ class WorkflowScheduler {
       WorkspaceAuthorizationService workspaceAuthorization,
       dev.workbench.ownership.OwnershipService ownership,
       dev.workbench.privateagent.PrivateAgentCatalog privateAgents) {
-    this.repository = repository;
+    this.evidence = evidence;
+    this.agents = agents;
+    this.runs = runs;
     this.plans = plans;
     this.workflowRuns = workflowRuns;
     this.recovery = recovery;
@@ -118,7 +126,7 @@ class WorkflowScheduler {
           privateAgents.requireRunUse(ownerScope, node.definitionRef());
       workspaceAuthorization.requireCurrent(task.id().toString());
       sourceArtifacts.requireCurrent(task.id().toString());
-      repository.event(runId, EventType.RUN_STARTED, "已保存的工作流开始执行。");
+      evidence.event(runId, EventType.RUN_STARTED, "已保存的工作流开始执行。");
       control.atBoundary(
           stateLock,
           () -> {
@@ -274,7 +282,15 @@ class WorkflowScheduler {
             CheckpointStage.BEFORE_TOOL,
             null,
             new ControlledAgentRuntime(
-                runId, id, control, repository, nodePolicy, costs, workspaceAuthorization),
+                runId,
+                id,
+                control,
+                agents,
+                runs,
+                evidence,
+                nodePolicy,
+                costs,
+                workspaceAuthorization),
             node.definitionRef(),
             node.definitionSha256(),
             writeFiles);

@@ -32,6 +32,77 @@ public class RunCreationStore {
     this.tasks = tasks;
   }
 
+  /** 首运行及计划与任务、创建事件同事务，避免持久化出孤立的半成品。 */
+  public void createTaskAndFirstRun(
+      TaskDefinition task, UUID runId, RunLimits limits, String message) {
+    createTaskAndFirstRun(task, runId, limits, message, null, false);
+  }
+
+  public void createTaskAndFirstRun(
+      TaskDefinition task,
+      UUID runId,
+      RunLimits limits,
+      String message,
+      WorkflowTemplate workflow,
+      boolean reviewRequired) {
+    tx.executeWithoutResult(
+        status -> {
+          tasks.createTaskRow(task);
+          createRunForWorkflow(
+              runId.toString(),
+              task.id().toString(),
+              null,
+              0,
+              0,
+              limits.maxRounds(),
+              limits.maxTools(),
+              limits.maxPerTool(),
+              limits.maxReportedTokens(),
+              limits.maxIdenticalTools(),
+              limits.maxSeconds(),
+              0,
+              task.writeEnabled(),
+              limits.maxAgentRounds(),
+              limits.maxAgentTools(),
+              workflow,
+              reviewRequired);
+          evidence.event(runId.toString(), EventType.TASK_CREATED, message);
+        });
+  }
+
+  /** 已确认候选计划的任务、运行、计划、节点规格和创建事件一起提交。 */
+  public void createTaskAndFirstRunFromPlan(
+      TaskDefinition task,
+      UUID runId,
+      RunLimits limits,
+      String message,
+      CandidateRunPlan plan,
+      String planTime) {
+    tx.executeWithoutResult(
+        status -> {
+          tasks.createTaskRow(task);
+          createRunForCandidatePlan(
+              runId.toString(),
+              task.id().toString(),
+              null,
+              0,
+              0,
+              limits.maxRounds(),
+              limits.maxTools(),
+              limits.maxPerTool(),
+              limits.maxReportedTokens(),
+              limits.maxIdenticalTools(),
+              limits.maxSeconds(),
+              0,
+              task.writeEnabled(),
+              limits.maxAgentRounds(),
+              limits.maxAgentTools(),
+              plan);
+          evidence.event(runId.toString(), EventType.TASK_CREATED, message);
+          evidence.event(runId.toString(), EventType.PLAN_APPROVED, "用户确认候选计划并创建运行。");
+        });
+  }
+
   public void createRun(
       String id,
       String taskId,

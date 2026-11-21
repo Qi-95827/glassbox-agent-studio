@@ -7,24 +7,31 @@ import dev.workbench.domain.StopCause;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.store.StopCompletion;
 
 /** 运行执行入口：认领待运行、构建运行控制、选择动态计划或直接执行路径。 */
 final class RunExecutionEngine {
-  private final RunRecordService repository;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final dev.workbench.framework.control.RunControlStore controls;
   private final WorkflowScheduler workflows;
   private final RunCommandService commands;
   private final DirectRunExecutor direct;
   private final Object stateLock;
 
   RunExecutionEngine(
-      RunRecordService repository,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      dev.workbench.framework.control.RunControlStore controls,
       WorkflowScheduler workflows,
       RunCommandService commands,
       DirectRunExecutor direct,
       Object stateLock) {
-    this.repository = repository;
+    this.runs = runs;
+    this.tasks = tasks;
+    this.controls = controls;
     this.workflows = workflows;
     this.commands = commands;
     this.direct = direct;
@@ -38,7 +45,7 @@ final class RunExecutionEngine {
         new RunControl(
             id,
             prepared.run(),
-            repository,
+            controls,
             commands.pauseMonitor(id),
             commands.paused(),
             commands.cancelled(),
@@ -71,13 +78,13 @@ final class RunExecutionEngine {
     WorkflowPlan workflow;
     // 与排队取消共享同一把锁，保证已取消的任务不会再次被启动。
     synchronized (stateLock) {
-      run = repository.runSnapshot(id);
+      run = runs.runSnapshot(id);
       if (run.status() != RunStatus.PENDING) return null;
       try {
-        task = repository.taskDefinition(run.taskId().toString());
+        task = tasks.taskDefinition(run.taskId().toString());
         workflow = workflows.plan(id);
       } catch (RuntimeException invalid) {
-        repository.finishStoppedRun(
+        runs.finishStoppedRun(
             new StopCompletion(
                 java.util.UUID.fromString(id),
                 null,
@@ -90,8 +97,7 @@ final class RunExecutionEngine {
         return null;
       }
       if (workflow != null && workflow.approvedAt() == null) return null;
-      repository.update(
-          id, RunStatus.RUNNING, null, null, run.rounds(), run.tools(), run.elapsedMs());
+      runs.update(id, RunStatus.RUNNING, null, null, run.rounds(), run.tools(), run.elapsedMs());
     }
     return new Prepared(run, task, workflow);
   }

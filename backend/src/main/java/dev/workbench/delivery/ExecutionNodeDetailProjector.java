@@ -23,7 +23,8 @@ import dev.workbench.framework.workflow.plan.WorkflowCheck;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
 import dev.workbench.persistence.repository.EventRepository;
 import dev.workbench.planning.PlanService;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.task.WorkflowExecutionService;
 import java.time.Instant;
 import java.util.Comparator;
@@ -36,7 +37,8 @@ import org.springframework.stereotype.Component;
 /** 单节点详情与尝试、模型、工具、检查、交接和事件证据投影。 */
 @Component
 final class ExecutionNodeDetailProjector {
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final AgentAssemblyRecordService agents;
   private final PlanService plans;
   private final WorkflowExecutionService workflows;
   private final EventRepository events;
@@ -44,13 +46,15 @@ final class ExecutionNodeDetailProjector {
   private final dev.workbench.ownership.OwnershipService ownership;
 
   ExecutionNodeDetailProjector(
-      RunRecordService runs,
+      RunStateStore runs,
+      AgentAssemblyRecordService agents,
       PlanService plans,
       WorkflowExecutionService workflows,
       EventRepository events,
       ExecutionGraphProjector graph,
       dev.workbench.ownership.OwnershipService ownership) {
     this.runs = runs;
+    this.agents = agents;
     this.plans = plans;
     this.workflows = workflows;
     this.events = events;
@@ -73,10 +77,10 @@ final class ExecutionNodeDetailProjector {
     var allChecks = workflows.workflowChecks(runId);
     var attempts = allAttempts.stream().filter(attempt -> attempt.nodeId().equals(nodeId)).toList();
     var checks = allChecks.stream().filter(check -> check.nodeId().equals(nodeId)).toList();
-    var models = runs.models(runId);
-    var tools = runs.tools(runId);
-    var agents = runs.agents(runId);
-    var assemblies = runs.agentAssemblies(runId);
+    var models = agents.models(runId);
+    var tools = agents.tools(runId);
+    var agentRows = agents.agents(runId);
+    var assemblies = agents.agentAssemblies(runId);
     var handoffs = workflows.workflowHandoffs(runId);
     return new NodeDetail(
         ExecutionViewService.SCHEMA_VERSION,
@@ -89,7 +93,7 @@ final class ExecutionNodeDetailProjector {
             ExecutionViewSupport.groupChecks(allChecks)),
         graph.dependencies(nodes, node),
         attempts.stream()
-            .map(attempt -> attemptView(attempt, models, tools, agents, assemblies))
+            .map(attempt -> attemptView(attempt, models, tools, agentRows, assemblies))
             .toList(),
         checks.stream().map(this::checkView).toList(),
         handoffs.stream()
@@ -115,7 +119,7 @@ final class ExecutionNodeDetailProjector {
                         receipt.evidence()))
             .toList(),
         nodeEvents(runId, nodeId),
-        nodeResult(node, attempts, checks, agents));
+        nodeResult(node, attempts, checks, agentRows));
   }
 
   private AttemptView attemptView(

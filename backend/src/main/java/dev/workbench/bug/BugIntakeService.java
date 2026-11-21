@@ -15,7 +15,6 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import dev.workbench.store.RunRecordService;
 
 /**
  * 模拟 Bug 的原始描述、来源版本与分诊状态。

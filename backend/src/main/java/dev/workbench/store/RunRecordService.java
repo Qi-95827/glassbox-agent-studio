@@ -12,9 +12,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionTemplate;
 
-/** 持久化边界的兼容门面：保留原有公开 API，按职责委托给读取、状态、装配和证据服务。 */
+/** 持久化边界的兼容门面：保留原有公开 API，按职责委托给任务、创建、状态、装配、证据、检查点与计数服务。 */
 @Service
 public class RunRecordService
     implements dev.workbench.framework.control.RunControlStore,
@@ -22,9 +21,9 @@ public class RunRecordService
         RunRecordReadPort {
   private final TaskRecordService tasks;
   private final RunStateStore runs;
+  private final RunCreationStore creation;
   private final AgentAssemblyRecordService agents;
   private final RunEvidenceRecordService evidence;
-  private final TransactionTemplate tx;
 
   @Override
   public TaskRecordService taskStore() {
@@ -44,14 +43,14 @@ public class RunRecordService
   public RunRecordService(
       TaskRecordService tasks,
       RunStateStore runs,
+      RunCreationStore creation,
       AgentAssemblyRecordService agents,
-      RunEvidenceRecordService evidence,
-      TransactionTemplate tx) {
+      RunEvidenceRecordService evidence) {
     this.tasks = tasks;
     this.runs = runs;
+    this.creation = creation;
     this.agents = agents;
     this.evidence = evidence;
-    this.tx = tx;
   }
 
   public static String id() {
@@ -147,29 +146,7 @@ public class RunRecordService
       String message,
       WorkflowTemplate workflow,
       boolean reviewRequired) {
-    tx.executeWithoutResult(
-        status -> {
-          tasks.createTaskRow(task);
-          runs.createRunForWorkflow(
-              runId.toString(),
-              task.id().toString(),
-              null,
-              0,
-              0,
-              limits.maxRounds(),
-              limits.maxTools(),
-              limits.maxPerTool(),
-              limits.maxReportedTokens(),
-              limits.maxIdenticalTools(),
-              limits.maxSeconds(),
-              0,
-              task.writeEnabled(),
-              limits.maxAgentRounds(),
-              limits.maxAgentTools(),
-              workflow,
-              reviewRequired);
-          evidence.event(runId.toString(), EventType.TASK_CREATED, message);
-        });
+    creation.createTaskAndFirstRun(task, runId, limits, message, workflow, reviewRequired);
   }
 
   /** 已确认候选计划的任务、运行、计划、节点规格和创建事件一起提交。 */
@@ -180,29 +157,7 @@ public class RunRecordService
       String message,
       CandidateRunPlan plan,
       String planTime) {
-    tx.executeWithoutResult(
-        status -> {
-          tasks.createTaskRow(task);
-          runs.createRunForCandidatePlan(
-              runId.toString(),
-              task.id().toString(),
-              null,
-              0,
-              0,
-              limits.maxRounds(),
-              limits.maxTools(),
-              limits.maxPerTool(),
-              limits.maxReportedTokens(),
-              limits.maxIdenticalTools(),
-              limits.maxSeconds(),
-              0,
-              task.writeEnabled(),
-              limits.maxAgentRounds(),
-              limits.maxAgentTools(),
-              plan);
-          evidence.event(runId.toString(), EventType.TASK_CREATED, message);
-          evidence.event(runId.toString(), EventType.PLAN_APPROVED, "用户确认候选计划并创建运行。");
-        });
+    creation.createTaskAndFirstRunFromPlan(task, runId, limits, message, plan, planTime);
   }
 
   /** 恢复子运行、计划和创建事件一起保存，预算采用父运行与快照的较大值。 */

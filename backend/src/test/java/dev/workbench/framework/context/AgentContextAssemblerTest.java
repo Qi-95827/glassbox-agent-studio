@@ -9,10 +9,9 @@ import dev.workbench.domain.EventType;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.orchestration.BuiltInContextContributors;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import dev.workbench.store.RunRecordService;
 
 /** 上下文来源按确定的顺序执行，记忆仅在用户授权时装配。 */
 class AgentContextAssemblerTest {
@@ -36,7 +35,7 @@ class AgentContextAssemblerTest {
   @Test
   void memoryRequiresExplicitTaskAuthorizationAndRecordsLoading() {
     var memories = mock(MemoryService.class);
-    var repository = mock(RunRecordService.class);
+    var repository = mock(RunEvidenceRecordService.class);
     var task = mock(TaskDefinition.class);
     var contributor =
         new BuiltInContextContributors()

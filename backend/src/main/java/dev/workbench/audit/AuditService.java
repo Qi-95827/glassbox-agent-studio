@@ -2,7 +2,6 @@ package dev.workbench.audit;
 
 import dev.workbench.persistence.entity.AuditEventEntity;
 import dev.workbench.persistence.repository.AuditRepository;
-import dev.workbench.store.RunRecordService;
 import java.util.List;
 import java.util.Map;
 import org.springframework.data.domain.PageRequest;

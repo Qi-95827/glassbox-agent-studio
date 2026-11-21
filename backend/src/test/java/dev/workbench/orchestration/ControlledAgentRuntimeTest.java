@@ -15,20 +15,28 @@ import dev.workbench.framework.control.AgentBudgetPolicy;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.model.AgentModelRegistry.ModelReference;
 import dev.workbench.domain.RunLimits;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import dev.workbench.store.RunRecordService;
 
 /** 未完成装配或版本不符时，绝不能进入工具调用。 */
 class ControlledAgentRuntimeTest {
   @Test
   void toolCallsRequireSuccessfulMatchingRegistration() {
-    var repository = mock(RunRecordService.class);
+    var repository = mock(AgentAssemblyRecordService.class);
     var control = mock(RunControl.class);
-    var runtime = new ControlledAgentRuntime("run", "agent", control, repository);
+    var runtime =
+        new ControlledAgentRuntime(
+            "run",
+            "agent",
+            control,
+            repository,
+            mock(RunStateStore.class),
+            mock(RunEvidenceRecordService.class));
     var id = UUID.randomUUID();
     when(control.beginTool(eq("agent"), eq(ToolKind.WORKSPACE_READ), eq(2), anyString(), isNull()))
         .thenReturn(id);
@@ -55,10 +63,17 @@ class ControlledAgentRuntimeTest {
 
   @Test
   void failedRegistrationDoesNotAuthorizeToolsAndUsageIsRecordedBeforeBudgetCheck() {
-    var repository = mock(RunRecordService.class);
+    var repository = mock(AgentAssemblyRecordService.class);
     var control = mock(RunControl.class);
     budget(control);
-    var runtime = new ControlledAgentRuntime("run", "agent", control, repository);
+    var runtime =
+        new ControlledAgentRuntime(
+            "run",
+            "agent",
+            control,
+            repository,
+            mock(RunStateStore.class),
+            mock(RunEvidenceRecordService.class));
     doThrow(new IllegalStateException("登记失败"))
         .when(repository)
         .recordAgentAssembly(anyString(), anyString(), any());

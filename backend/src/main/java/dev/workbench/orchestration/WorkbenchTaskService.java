@@ -14,7 +14,11 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunCountStore;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.task.*;
 import dev.workbench.planning.PlanProposalService;
 import dev.workbench.planning.RecoveryLeaseService;
@@ -24,7 +28,11 @@ import dev.workbench.planning.SourceArtifactService;
 /** 工作台的任务与运行查询、任务归档及其审计。 */
 @Service
 public class WorkbenchTaskService {
-  private final RunRecordService repo;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final AgentAssemblyRecordService agents;
+  private final RunEvidenceRecordService evidence;
+  private final RunCountStore counts;
   private final PlanService plans;
   private final WorkflowExecutionService workflowRuns;
   private final WorkflowRecoveryService workflowRecovery;
@@ -44,7 +52,11 @@ public class WorkbenchTaskService {
   private final dev.workbench.ownership.OwnershipService ownership;
 
   public WorkbenchTaskService(
-      RunRecordService repo,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      AgentAssemblyRecordService agents,
+      RunEvidenceRecordService evidence,
+      RunCountStore counts,
       PlanService plans,
       WorkflowExecutionService workflowRuns,
       WorkflowRecoveryService workflowRecovery,
@@ -62,7 +74,11 @@ public class WorkbenchTaskService {
       CostService costs,
       ExternalActionService externalActions,
       dev.workbench.ownership.OwnershipService ownership) {
-    this.repo = repo;
+    this.runs = runs;
+    this.tasks = tasks;
+    this.agents = agents;
+    this.evidence = evidence;
+    this.counts = counts;
     this.plans = plans;
     this.workflowRuns = workflowRuns;
     this.workflowRecovery = workflowRecovery;
@@ -83,7 +99,7 @@ public class WorkbenchTaskService {
   }
 
   public List<Map<String, Object>> tasks() {
-    return repo.tasks().stream()
+    return tasks.tasks().stream()
         .filter(
             row -> {
               Object id = row.get("ID");
@@ -95,7 +111,7 @@ public class WorkbenchTaskService {
   @Transactional
   public void archive(String taskId, boolean archived) {
     ownership.requireTask(taskId);
-    repo.setTaskArchived(taskId, archived);
+    tasks.setTaskArchived(taskId, archived);
     audit.record(
         "TASK_ARCHIVE",
         "TASK",
@@ -106,11 +122,11 @@ public class WorkbenchTaskService {
 
   public Map<String, Object> run(String id, boolean includeEvents) {
     ownership.requireRun(id);
-    var run = repo.run(id);
+    var run = runs.run(id);
     String taskId = run.get("TASK_ID").toString();
     Map<String, Object> detail = new LinkedHashMap<>();
     detail.put("run", run);
-    detail.put("task", repo.task(taskId));
+    detail.put("task", tasks.task(taskId));
     detail.put("entryPolicy", entryPolicies.find(taskId));
     detail.put("entryRoute", entryRoutes.find(taskId));
     detail.put("sourceArtifacts", sourceArtifacts.find(taskId));
@@ -121,8 +137,8 @@ public class WorkbenchTaskService {
     detail.put("recoveryLease", leases.find(id));
     detail.put("costEstimate", costs.estimate(id));
     detail.put("externalActions", externalActions.findByRun(id));
-    detail.put("agents", repo.agents(id));
-    detail.put("agentAssemblies", repo.agentAssemblies(id));
+    detail.put("agents", agents.agents(id));
+    detail.put("agentAssemblies", agents.agentAssemblies(id));
     detail.put("planNodes", plans.find(id));
     detail.put("workflowMetrics", metrics.workflow(id));
     var workflow = plans.workflowPlan(id);
@@ -133,42 +149,42 @@ public class WorkbenchTaskService {
       detail.put("workflowHandoffs", workflowRuns.workflowHandoffs(id));
       detail.put("workflowCheckpoints", workflowRecovery.checkpoints(id, workflow));
     }
-    detail.put("tools", repo.tools(id));
-    detail.put("models", repo.models(id));
-    detail.put("handoffs", repo.handoffs(id));
-    detail.put("events", includeEvents ? repo.events(id) : List.of());
-    detail.put("checkpoints", repo.checkpoints(id));
-    detail.put("runs", repo.runs(taskId));
-    detail.put("roleBudgets", repo.roleBudgets(taskId));
-    detail.put("toolBudgets", repo.toolBudgets(taskId));
+    detail.put("tools", agents.tools(id));
+    detail.put("models", agents.models(id));
+    detail.put("handoffs", evidence.handoffs(id));
+    detail.put("events", includeEvents ? evidence.events(id) : List.of());
+    detail.put("checkpoints", evidence.checkpoints(id));
+    detail.put("runs", runs.runs(taskId));
+    detail.put("roleBudgets", tasks.roleBudgets(taskId));
+    detail.put("toolBudgets", tasks.toolBudgets(taskId));
     return detail;
   }
 
   public Object skills(String id) {
     ownership.requireRun(id);
-    repo.runSnapshot(id);
-    return repo.skills(id);
+    runs.runSnapshot(id);
+    return agents.skills(id);
   }
 
   public Object memoryLoad(String id) {
     ownership.requireRun(id);
-    repo.runSnapshot(id);
+    runs.runSnapshot(id);
     return memories.loadForRun(id);
   }
 
   public Object toolGrants(String id) {
     ownership.requireRun(id);
-    repo.runSnapshot(id);
-    return repo.agentToolGrants(id);
+    runs.runSnapshot(id);
+    return agents.agentToolGrants(id);
   }
 
   public Object handover(String id) {
     ownership.requireRun(id);
-    repo.runSnapshot(id);
+    runs.runSnapshot(id);
     return handovers.findByRun(id);
   }
 
   public Map<String, Object> overview() {
-    return repo.overview(ownership.readableTaskIds());
+    return counts.overview(ownership.readableTaskIds());
   }
 }

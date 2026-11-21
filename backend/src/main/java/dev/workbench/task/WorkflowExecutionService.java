@@ -35,7 +35,11 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunCountStore;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.store.HandoffValidator;
 import dev.workbench.store.ReviewCompletion;
 import dev.workbench.store.StopCompletion;
@@ -44,7 +48,11 @@ import dev.workbench.planning.RecoveryLeaseService;
 /** 维护动态计划的尝试与交接，复用运行仓库的实例与终态事务。 */
 @Service
 public class WorkflowExecutionService {
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final AgentAssemblyRecordService agents;
+  private final RunEvidenceRecordService evidence;
+  private final RunCountStore counts;
   private final WorkflowExecutionRepository records;
   private final TransactionTemplate tx;
   private final PlanService plans;
@@ -55,7 +63,11 @@ public class WorkflowExecutionService {
   private final SupplementRepository supplements;
 
   public WorkflowExecutionService(
-      RunRecordService runs,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      AgentAssemblyRecordService agents,
+      RunEvidenceRecordService evidence,
+      RunCountStore counts,
       WorkflowExecutionRepository records,
       TransactionTemplate tx,
       PlanService plans,
@@ -65,6 +77,10 @@ public class WorkflowExecutionService {
       PlanGraphRepository planRows,
       SupplementRepository supplements) {
     this.runs = runs;
+    this.tasks = tasks;
+    this.agents = agents;
+    this.evidence = evidence;
+    this.counts = counts;
     this.records = records;
     this.tx = tx;
     this.plans = plans;
@@ -94,7 +110,7 @@ public class WorkflowExecutionService {
           if (number > plans.workflowPlan(runId).maxAttempts())
             throw new IllegalStateException("节点尝试次数已经达到计划上限。");
           plans.startNode(runId, nodeId, agentId, time);
-          runs.insertAgent(agentId, runId, goal, node.role(), time);
+          agents.insertAgent(agentId, runId, goal, node.role(), time);
           records.insertAttempt(attemptId, nodeId.toString(), number, agentId);
           var upstream = results(runId, nodeId);
           if (upstream.size() != node.dependencyIds().size()
@@ -122,12 +138,12 @@ public class WorkflowExecutionService {
                   .withAttempt(UUID.fromString(attemptId))
                   .withAgent(UUID.fromString(agentId));
           if (!upstream.isEmpty())
-            runs.event(
+            evidence.event(
                 runId,
                 EventType.HANDOFF_ACCEPTED,
                 node.label() + "已接收 " + upstream.size() + " 条前置结果。",
                 startedRef);
-          runs.event(
+          evidence.event(
               runId, EventType.AGENT_STARTED, node.label() + "已启动 Agent，实例：" + agentId, startedRef);
           return new ClaimedNode(node, agentId, List.copyOf(upstream));
         });
@@ -184,7 +200,7 @@ public class WorkflowExecutionService {
                 AgentAssemblySnapshot.sha256(input.result()));
           }
 
-          runs.event(
+          evidence.event(
               runId,
               EventType.CHECK_STARTED,
               node.label() + "开始执行系统检查 " + node.checkRef() + "。",
@@ -263,7 +279,7 @@ public class WorkflowExecutionService {
                       .withPlan(checked.planVersionId())
                       .withNode(checked.id())
                       .withCheck(UUID.fromString(checkId));
-              runs.event(
+              evidence.event(
                   runId,
                   EventType.CHECK_FINISHED,
                   saved.label() + "检查结果：" + result.status().name() + "。",
@@ -279,7 +295,7 @@ public class WorkflowExecutionService {
                     tools,
                     elapsed,
                     StopCause.CHECK_FAILED);
-                runs.event(runId, EventType.BLOCKED, "系统检查未通过：" + result.summary(), checkRef);
+                evidence.event(runId, EventType.BLOCKED, "系统检查未通过：" + result.summary(), checkRef);
                 if (dev.workbench.domain.BlockReason.REPRODUCTION_MISSING_INFO.equals(result.reasonCode()))
                   openSupplementRequest(runId, checked, result.reasonCode());
                 return true;
@@ -313,10 +329,10 @@ public class WorkflowExecutionService {
         node.id().toString(),
         reasonCode,
         "缺少可执行测试或验证条件。请补充一个 tests/ 下的 test_*.py 文件内容；提交通过校验后将从安全边界继续并重新执行复现检查。",
-        runs.taskVersion(taskId),
+        tasks.taskVersion(taskId),
         dev.workbench.domain.WorkbenchTime.now());
 
-    runs.event(
+    evidence.event(
         runId,
         EventType.SUPPLEMENT_REQUESTED,
         "复现检查缺少可执行测试，已保存待补充事项；补充前不会启动任何下游节点。",
@@ -338,16 +354,16 @@ public class WorkflowExecutionService {
                       .orElseThrow(() -> new IllegalStateException("找不到可结算的节点尝试。"));
               var attempt = records.findAttemptIdentity(agentId);
               if (attempt.number() >= plans.workflowPlan(runId).maxAttempts()
-                  || runs.countAgentToolCalls(agentId) != 0
+                  || counts.countAgentToolCalls(agentId) != 0
                   || !records.canRetryRateLimit(
                       runId, agentId, ModelRateLimitException.SAFE_MESSAGE)) return false;
 
-              runs.finishAgent(agentId, InvocationStatus.FAILED, null);
+              agents.finishAgent(agentId, InvocationStatus.FAILED, null);
               recordAttemptStop(agentId, StopCause.MODEL_RATE_LIMIT);
               plans.requeueFailedNode(runId, node.id(), agentId);
               String attemptId = attempt.id();
 
-              runs.event(
+              evidence.event(
                   runId,
                   EventType.NODE_RETRY_SCHEDULED,
                   node.label() + "因模型限流安排再次尝试。",
@@ -407,7 +423,7 @@ public class WorkflowExecutionService {
   private CheckEvidencePreflight prepareCheckEvidence(String runId, UUID nodeId) {
     var upstream = results(runId, nodeId);
     if (upstream.stream().noneMatch(input -> input.kind() == PlanNodeKind.SYSTEM_CHECK)) return null;
-    var task = runs.taskDefinition(runs.runSnapshot(runId).taskId().toString());
+    var task = tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString());
     var dependencies =
         upstream.stream().map(input -> input.dependencyNodeId().toString()).toList();
     var evidence = new java.util.ArrayList<EvidenceSnapshot>();
@@ -500,7 +516,7 @@ public class WorkflowExecutionService {
         || !plan.id().equals(version)
         || plan.approvedAt() == null) throw new IllegalStateException("运行未执行，或有效计划尚未确认。");
     var nodes = plans.checkedWorkflowNodes(runId, plan);
-    plan.requireTaskAuthorization(runs.taskDefinition(run.taskId().toString()));
+    plan.requireTaskAuthorization(tasks.taskDefinition(run.taskId().toString()));
     recovery.validateReuse(runId, plan, nodes);
     return nodes;
   }
@@ -540,7 +556,7 @@ public class WorkflowExecutionService {
               // P07：开发节点没有写出全部必需文件时不能把节点算作完成，也不能放行依赖它的审查。
               var missing = missingRequiredFiles(runId, running.id(), agentId);
               if (!missing.isEmpty()) {
-                runs.finishAgent(agentId, InvocationStatus.FAILED, result);
+                agents.finishAgent(agentId, InvocationStatus.FAILED, result);
                 recordAttemptStop(agentId, StopCause.OUTPUT_MISSING);
                 String reason =
                     running.label()
@@ -556,10 +572,10 @@ public class WorkflowExecutionService {
                     tools,
                     elapsed,
                     StopCause.OUTPUT_MISSING);
-                runs.event(runId, EventType.BLOCKED, reason);
+                evidence.event(runId, EventType.BLOCKED, reason);
                 return true;
               }
-              runs.finishAgent(agentId, InvocationStatus.COMPLETED, result);
+              agents.finishAgent(agentId, InvocationStatus.COMPLETED, result);
               var updated = plans.find(runId);
               if (updated.stream()
                   .allMatch(
@@ -583,7 +599,7 @@ public class WorkflowExecutionService {
     var spec = plans.specsByNode(runId).get(nodeId);
     if (spec == null || spec.requiredFiles().isEmpty()) return List.of();
     var produced = new java.util.HashSet<String>();
-    for (var tool : runs.tools(runId)) {
+    for (var tool : agents.tools(runId)) {
       if (!agentId.equals(String.valueOf(tool.get("AGENT_ID")))
           || !"COMPLETED".equals(String.valueOf(tool.get("STATUS")))
           || !ToolKind.WORKSPACE_WRITE.recordName().equals(String.valueOf(tool.get("TOOL_NAME")))
@@ -636,7 +652,7 @@ public class WorkflowExecutionService {
         elapsed,
         cause);
     boolean blocked = cause != null;
-    runs.event(
+    evidence.event(
         runId,
         blocked ? EventType.BLOCKED : EventType.RUN_COMPLETED,
         blocked ? reason : "工作流已完成，已保存各步骤的模型结果。");
@@ -713,10 +729,10 @@ public class WorkflowExecutionService {
         || !plan.reviewRequired()
         || plan.approvedAt() != null) throw new IllegalStateException("当前运行没有待确认的该计划版本。");
     plans.checkedWorkflowNodes(runId, plan);
-    plan.requireTaskAuthorization(runs.taskDefinition(runs.runSnapshot(runId).taskId().toString()));
+    plan.requireTaskAuthorization(tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString()));
     int changed = planRows.approveIfPending(version.toString(), runId, dev.workbench.domain.WorkbenchTime.now());
     if (changed != 1) throw new IllegalStateException("当前运行没有待确认的该计划版本。");
-    runs.event(
+    evidence.event(
         runId, EventType.PLAN_APPROVED, "用户确认了工作流计划 " + version + "。", EventRef.plan(version));
   }
 
@@ -756,7 +772,7 @@ public class WorkflowExecutionService {
                   row.sha256(),
                   sourceMatches ? body : null));
     }
-    var task = runs.taskDefinition(runs.runSnapshot(runId).taskId().toString());
+    var task = tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString());
     String fingerprint = currentWorkspaceFingerprint(task.workspaceId());
     return records.findChecks(runId).stream()
         .map(
@@ -837,7 +853,7 @@ public class WorkflowExecutionService {
             if (!records.isRunningAttempt(runId, agentId.toString()))
               throw new IllegalStateException("工作流没有可结算的该尝试。");
 
-            runs.finishAgent(
+            agents.finishAgent(
                 agentId.toString(), InvocationStatus.fromRunStatus(cause.status()), null);
             recordAttemptStop(agentId.toString(), cause);
           }

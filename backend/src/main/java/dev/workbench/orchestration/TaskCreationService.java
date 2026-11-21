@@ -7,7 +7,7 @@ import dev.workbench.domain.TaskDefinition;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.task.CostService;
 import dev.workbench.domain.RunLimits;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunCreationStore;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -23,7 +23,7 @@ import dev.workbench.framework.workflow.plan.CandidateRunPlan;
  */
 @Service
 public class TaskCreationService implements dev.workbench.planning.CandidateRunPersister {
-  private final RunRecordService runs;
+  private final RunCreationStore runs;
   private final BugIntakeService intakes;
   private final EntryPolicyService entryPolicies;
   private final EntryRouteService entryRoutes;
@@ -32,7 +32,7 @@ public class TaskCreationService implements dev.workbench.planning.CandidateRunP
   private final TaskCreationHooks hooks;
 
   public TaskCreationService(
-      RunRecordService runs,
+      RunCreationStore runs,
       BugIntakeService intakes,
       EntryPolicyService entryPolicies,
       EntryRouteService entryRoutes,

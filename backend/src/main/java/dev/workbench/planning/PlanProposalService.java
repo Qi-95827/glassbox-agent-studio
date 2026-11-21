@@ -21,7 +21,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
 
 /**
  * 待确认计划的候选调整。
@@ -33,14 +33,14 @@ public class PlanProposalService {
   private final PlanService plans;
   private final PlanAdjustmentRepository adjustments;
   private final PlanGraphRepository graphStore;
-  private final RunRecordService runs;
+  private final RunStateStore runs;
   private final ObjectMapper json;
 
   public PlanProposalService(
       PlanService plans,
       PlanAdjustmentRepository adjustments,
       PlanGraphRepository graphStore,
-      RunRecordService runs,
+      RunStateStore runs,
       ObjectMapper json) {
     this.plans = plans;
     this.adjustments = adjustments;

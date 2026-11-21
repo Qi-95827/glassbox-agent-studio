@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.audit.AuditService;
 import dev.workbench.persistence.entity.EvaluationSuiteVersionEntity;
 import dev.workbench.persistence.repository.EvaluationSuiteVersionRepository;
-import dev.workbench.store.RunRecordService;
 import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.util.List;

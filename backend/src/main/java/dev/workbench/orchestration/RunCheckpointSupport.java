@@ -5,22 +5,28 @@ import dev.workbench.domain.CheckpointStage;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.domain.WorkspaceReviewCheckpoint;
 import dev.workbench.framework.control.RunControl;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunCheckpointStore;
+import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.workspace.WorkspaceService;
 
 /** 运行检查点的只读指纹、恢复前置校验和固定原因记录。 */
 final class RunCheckpointSupport {
-  private final RunRecordService repository;
+  private final RunEvidenceRecordService evidence;
+  private final RunCheckpointStore checkpoints;
   private final WorkspaceService workspaces;
 
-  RunCheckpointSupport(RunRecordService repository, WorkspaceService workspaces) {
-    this.repository = repository;
+  RunCheckpointSupport(
+      RunEvidenceRecordService evidence,
+      RunCheckpointStore checkpoints,
+      WorkspaceService workspaces) {
+    this.evidence = evidence;
+    this.checkpoints = checkpoints;
     this.workspaces = workspaces;
   }
 
   /** 仅记录固定原因，不将路径、文件内容或异常详情写入用户轨迹。 */
   void recordSkipped(String runId, CheckpointSkipReason reason) {
-    repository.checkpointSkipped(runId, reason);
+    evidence.checkpointSkipped(runId, reason);
   }
 
   /** 仅只读、无 Bug、未启用项目记忆的工作区可尝试形成检查点。 */
@@ -62,8 +68,8 @@ final class RunCheckpointSupport {
       String agentId,
       String beforeAnalysis) {
     if (task.workspaceId() == null && task.bugId() == null) {
-      String reference = repository.analysisReference(runId, agentId);
-      repository.checkpoint(
+      String reference = evidence.analysisReference(runId, agentId);
+      checkpoints.checkpoint(
           runId,
           CheckpointStage.BEFORE_REVIEW,
           control.rounds(),
@@ -85,8 +91,8 @@ final class RunCheckpointSupport {
       } else if (!beforeAnalysis.equals(afterAnalysis)) {
         recordSkipped(runId, CheckpointSkipReason.WORKSPACE_CHANGED);
       } else {
-        String reference = repository.analysisReference(runId, agentId);
-        repository.workspaceReviewCheckpoint(
+        String reference = evidence.analysisReference(runId, agentId);
+        checkpoints.workspaceReviewCheckpoint(
             runId,
             control.rounds(),
             control.tools(),

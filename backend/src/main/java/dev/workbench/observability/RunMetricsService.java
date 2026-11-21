@@ -4,7 +4,8 @@ import dev.workbench.domain.InvocationStatus;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
 import dev.workbench.planning.PlanService;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.task.WorkflowExecutionService;
 import java.time.Duration;
 import java.time.Instant;
@@ -16,12 +17,17 @@ import org.springframework.stereotype.Service;
 /** 按真实 Agent 实例关联调用；统计是数据库快照，不推算未知用量。 */
 @Service
 public class RunMetricsService {
-  private final RunRecordService records;
+  private final RunStateStore runs;
+  private final AgentAssemblyRecordService records;
   private final PlanService plans;
   private final WorkflowExecutionService workflows;
 
   public RunMetricsService(
-      RunRecordService records, PlanService plans, WorkflowExecutionService workflows) {
+      RunStateStore runs,
+      AgentAssemblyRecordService records,
+      PlanService plans,
+      WorkflowExecutionService workflows) {
+    this.runs = runs;
     this.records = records;
     this.plans = plans;
     this.workflows = workflows;
@@ -33,7 +39,7 @@ public class RunMetricsService {
    * <p>检查节点不产生模型或工具调用；“未执行检查”指没有检查记录且节点未完成的系统检查。
    */
   public WorkflowMetrics workflow(String runId) {
-    records.runSnapshot(runId);
+    runs.runSnapshot(runId);
     var nodes = plans.find(runId);
     var checks = workflows.workflowChecks(runId);
     var models = records.models(runId);
@@ -68,7 +74,7 @@ public class RunMetricsService {
   }
 
   public List<AgentMetrics> agents(String runId) {
-    records.runSnapshot(runId);
+    runs.runSnapshot(runId);
     var models = records.models(runId);
     var tools = records.tools(runId);
     return records.agents(runId).stream()

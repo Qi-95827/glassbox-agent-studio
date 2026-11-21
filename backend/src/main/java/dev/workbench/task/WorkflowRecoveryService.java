@@ -36,7 +36,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import dev.workbench.domain.RunLimits;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunCreationStore;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.store.ReviewCompletion;
 import dev.workbench.store.StopCompletion;
 import dev.workbench.planning.RecoveryLeaseService;
@@ -45,7 +48,10 @@ import dev.workbench.planning.RunSnapshotService;
 /** 验证纯文本和只读工作区的节点边界并创建恢复运行。*/
 @Service
 public class WorkflowRecoveryService {
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final RunCreationStore creation;
+  private final TaskRecordService tasks;
+  private final RunEvidenceRecordService runEvents;
   private final PlanService plans;
   private final WorkflowRecoveryEvidenceRepository evidenceStore;
   private final WorkflowCheckpointRepository checkpointRepository;
@@ -58,7 +64,10 @@ public class WorkflowRecoveryService {
   private final CostService costs;
 
   public WorkflowRecoveryService(
-      RunRecordService runs,
+      RunStateStore runs,
+      RunCreationStore creation,
+      TaskRecordService tasks,
+      RunEvidenceRecordService runEvents,
       PlanService plans,
       WorkflowRecoveryEvidenceRepository evidenceStore,
       WorkflowCheckpointRepository checkpointRepository,
@@ -70,6 +79,9 @@ public class WorkflowRecoveryService {
       RecoveryLeaseService leases,
       CostService costs) {
     this.runs = runs;
+    this.creation = creation;
+    this.tasks = tasks;
+    this.runEvents = runEvents;
     this.plans = plans;
     this.evidenceStore = evidenceStore;
     this.checkpointRepository = checkpointRepository;
@@ -91,7 +103,7 @@ public class WorkflowRecoveryService {
         || nodes.stream().allMatch(node -> node.status() == PlanNodeStatus.COMPLETED)) return;
     if (plan.scope() == WorkflowTemplate.Scope.TEXT_ONLY
         && evidenceStore.hasRateLimitAttempt(runId)) {
-      runs.event(runId, EventType.CHECKPOINT_SKIPPED, "当前恢复策略不覆盖已有重试记录的工作流。");
+      runEvents.event(runId, EventType.CHECKPOINT_SKIPPED, "当前恢复策略不覆盖已有重试记录的工作流。");
       return;
     }
     var run = runs.runSnapshot(runId);
@@ -99,7 +111,7 @@ public class WorkflowRecoveryService {
     try {
       boundary = checkedBoundary(run, plan, nodes, run.rounds(), run.tools(), elapsed);
     } catch (UnsafeBoundaryException e) {
-      runs.event(runId, EventType.CHECKPOINT_SKIPPED, "当前边界不能安全恢复，已跳过检查点：" + e.getMessage());
+      runEvents.event(runId, EventType.CHECKPOINT_SKIPPED, "当前边界不能安全恢复，已跳过检查点：" + e.getMessage());
       return;
     }
     checkpointRepository.saveAndFlush(
@@ -113,7 +125,7 @@ public class WorkflowRecoveryService {
             Instant.now().toString()));
     // 同一事务保存周期快照，记录事件位置、累计预算和工作区指纹。
     snapshots.capture(runId, plan, nodes, elapsed);
-    runs.event(runId, EventType.CHECKPOINT_SAVED, "已保存工作流节点边界。");
+    runEvents.event(runId, EventType.CHECKPOINT_SAVED, "已保存工作流节点边界。");
   }
 
   /**
@@ -177,7 +189,7 @@ public class WorkflowRecoveryService {
             if (run.status() != RunStatus.INTERRUPTED || runs.hasRecovery(runId))
               throw new IllegalStateException("该运行当前无法申请恢复。");
             var stored = verifyStoredBoundary(run, plan, checkpointId);
-            runs.createWorkflowRecoveryRun(
+            creation.createWorkflowRecoveryRun(
                 nextRunId,
                 run,
                 stored.boundary().template(),
@@ -189,7 +201,7 @@ public class WorkflowRecoveryService {
             var reused = new LinkedHashMap<String, UUID>();
             stored.boundary().sources().forEach((key, source) -> reused.put(key, source.agentId()));
             plans.attachRecovery(nextRunId.toString(), checkpointId, reused, dev.workbench.domain.WorkbenchTime.now());
-            runs.event(nextRunId.toString(), EventType.RECOVERY_STARTED, "已从动态工作流检查点恢复，保留原运行及累计消耗。");
+            runEvents.event(nextRunId.toString(), EventType.RECOVERY_STARTED, "已从动态工作流检查点恢复，保留原运行及累计消耗。");
           });
     } finally {
       // 恢复尝试无论成功或失败都释放租约；重复恢复由父运行已有子运行和状态条件阻止。
@@ -264,7 +276,7 @@ public class WorkflowRecoveryService {
       int tools,
       long elapsed) {
     String runId = run.id().toString();
-    var task = runs.taskDefinition(run.taskId().toString());
+    var task = tasks.taskDefinition(run.taskId().toString());
     try {
       plan.requireTaskAuthorization(task);
     } catch (IllegalStateException e) {

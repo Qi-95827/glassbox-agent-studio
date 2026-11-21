@@ -16,7 +16,9 @@ import dev.workbench.framework.workflow.plan.WorkflowCheck;
 import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.persistence.repository.SupplementRepository;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunCountStore;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.task.WorkflowRecoveryService;
 import dev.workbench.workspace.RunHandoverService;
 import java.util.List;
@@ -27,15 +29,21 @@ import org.springframework.stereotype.Component;
 /** 执行视图的预算、计数、恢复与补充/接手摘要投影。 */
 @Component
 final class ExecutionSummaryProjector {
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final RunCountStore counts;
+  private final TaskRecordService tasks;
   private final WorkflowRecoveryService recovery;
   private final ExecutionOperationProjector operations;
 
   ExecutionSummaryProjector(
-      RunRecordService runs,
+      RunStateStore runs,
+      RunCountStore counts,
+      TaskRecordService tasks,
       WorkflowRecoveryService recovery,
       ExecutionOperationProjector operations) {
     this.runs = runs;
+    this.counts = counts;
+    this.tasks = tasks;
     this.recovery = recovery;
     this.operations = operations;
   }
@@ -104,7 +112,7 @@ final class ExecutionSummaryProjector {
   }
 
   BudgetView budgetView(RunSnapshot snapshot, String runId) {
-    var tokens = runs.reportedTokens(runId);
+    var tokens = counts.reportedTokens(runId);
     Long remainingTokens =
         snapshot.maxReportedTokens() == null
             ? null
@@ -141,7 +149,7 @@ final class ExecutionSummaryProjector {
     if (snapshot.status() != RunStatus.INTERRUPTED) return null;
     if (runs.hasRecovery(runId))
       return new RecoverySupportView(false, "此运行已经发起恢复，请查看关联子运行。");
-    var task = runs.taskDefinition(snapshot.taskId().toString());
+    var task = tasks.taskDefinition(snapshot.taskId().toString());
     if (plan != null) {
       if (plan.sourceCheckpointId() != null) return new RecoverySupportView(false, "恢复子运行不支持再次恢复。");
       if (plan.scope() != dev.workbench.framework.workflow.plan.WorkflowTemplate.Scope.TEXT_ONLY

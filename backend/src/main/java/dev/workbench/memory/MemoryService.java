@@ -8,7 +8,6 @@ import dev.workbench.persistence.repository.MemoryHistoryRepository;
 import dev.workbench.persistence.repository.MemoryRecordRepository;
 import dev.workbench.persistence.repository.RunMemoryLoadRepository;
 import dev.workbench.persistence.repository.RunMemoryReferenceRepository;
-import dev.workbench.store.RunRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.text.Normalizer;
 import java.time.Instant;

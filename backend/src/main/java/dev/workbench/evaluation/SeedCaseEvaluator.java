@@ -8,7 +8,8 @@ import dev.workbench.framework.workflow.plan.PlanNodeStatus;
 import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowAttempt;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.task.WorkflowExecutionService;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,12 +19,17 @@ import org.springframework.stereotype.Component;
 /** 使用系统持久化记录展开固定评测断言，不信任模型自述。 */
 @Component
 public class SeedCaseEvaluator {
-  private final RunRecordService records;
+  private final RunStateStore runs;
+  private final AgentAssemblyRecordService records;
   private final PlanService plans;
   private final WorkflowExecutionService workflows;
 
   public SeedCaseEvaluator(
-      RunRecordService records, PlanService plans, WorkflowExecutionService workflows) {
+      RunStateStore runs,
+      AgentAssemblyRecordService records,
+      PlanService plans,
+      WorkflowExecutionService workflows) {
+    this.runs = runs;
     this.records = records;
     this.plans = plans;
     this.workflows = workflows;
@@ -73,13 +79,13 @@ public class SeedCaseEvaluator {
         checks.add(
             new EvaluationCheck(
                 EvaluationCheckCode.TOOL_NOT_STARTED, tools.isEmpty(), "已启动工具调用数：" + tools.size()));
-        int counted = records.runSnapshot(runId).tools();
+        int counted = runs.runSnapshot(runId).tools();
         checks.add(
             new EvaluationCheck(
                 EvaluationCheckCode.RUN_TOOL_COUNT_ZERO, counted == 0, "运行记录中的工具计数：" + counted));
       }
       case REPEAT_LIMIT -> {
-        Object rawCause = records.run(runId).get("STOP_CAUSE");
+        Object rawCause = runs.run(runId).get("STOP_CAUSE");
         dev.workbench.domain.StopCause actualCause = null;
         if (rawCause instanceof String code) {
           try {
@@ -172,7 +178,7 @@ public class SeedCaseEvaluator {
                   + tools.size()
                   + " 次。"));
     } else {
-      Object cause = records.run(runId).get("STOP_CAUSE");
+      Object cause = runs.run(runId).get("STOP_CAUSE");
       boolean blocked =
           "CHECK_FAILED".equals(String.valueOf(cause))
               && agents.isEmpty()
@@ -239,7 +245,7 @@ public class SeedCaseEvaluator {
             independent,
             "两个上游应使用同一版本定义，并分别形成已完成的尝试和实例。"));
 
-    var run = records.runSnapshot(runId);
+    var run = runs.runSnapshot(runId);
     var calls = records.models(runId);
     boolean correctCalls =
         calls.size() == sample.maxRounds()
@@ -279,7 +285,7 @@ public class SeedCaseEvaluator {
               joined,
               "汇合步骤应完成，并保存来自两个上游实际实例的回执。回执数 " + receipts.size() + "。"));
     } else {
-      Object cause = records.run(runId).get("STOP_CAUSE");
+      Object cause = runs.run(runId).get("STOP_CAUSE");
       boolean stopped =
           independent
               && summary != null

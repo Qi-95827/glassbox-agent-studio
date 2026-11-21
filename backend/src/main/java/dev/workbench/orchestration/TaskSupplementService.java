@@ -19,7 +19,9 @@ import dev.workbench.workspace.WorkspaceService;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 
 /**
  * 任务 2 的等待补充与安全继续。
@@ -28,7 +30,9 @@ import dev.workbench.store.RunRecordService;
  * 状态变更在同一事务内完成：不满足任何条件时整体回滚，运行保持阻塞，仅另行记录拒绝事件。继续只发生在零调用的安全边界（首个节点之前），已批准计划的授权摘要必须仍与当前任务一致，避免复用过期审批。 */
 @Service
 public class TaskSupplementService {
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final RunEvidenceRecordService evidence;
   private final PlanService plans;
   private final WorkspaceService workspaces;
   private final RunRepository runRows;
@@ -40,7 +44,9 @@ public class TaskSupplementService {
   private final RunService runService;
 
   public TaskSupplementService(
-      RunRecordService runs,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      RunEvidenceRecordService evidence,
       PlanService plans,
       WorkspaceService workspaces,
       RunRepository runRows,
@@ -51,6 +57,8 @@ public class TaskSupplementService {
       TransactionTemplate tx,
       RunService runService) {
     this.runs = runs;
+    this.tasks = tasks;
+    this.evidence = evidence;
     this.plans = plans;
     this.workspaces = workspaces;
     this.runRows = runRows;
@@ -119,7 +127,7 @@ if (request == null || !request.id().equals(requestId))
     if (path == null || path.isBlank()) throw new IllegalArgumentException("请提供测试文件路径。");
     if (content == null || content.isBlank() || content.length() > 20_000)
       throw new IllegalArgumentException("测试文件内容必须为 1 到 20000 个字符。");
-    var task = runs.taskDefinition(taskId);
+    var task = tasks.taskDefinition(taskId);
     if (task.workspaceId() == null) throw new IllegalArgumentException("任务没有关联工作区。");
     var plan = plans.workflowPlan(runId);
     if (plan == null) throw new IllegalStateException("运行没有已保存的动态计划。");
@@ -144,7 +152,7 @@ if (request == null || !request.id().equals(requestId))
               .filter(candidate -> candidate.id().toString().equals(request.nodeId()))
               .findFirst()
               .orElseThrow(() -> new IllegalStateException("补充请求关联的节点不存在。"));
-      runs.event(
+      evidence.event(
           runId,
           EventType.SUPPLEMENT_APPLIED,
           "用户补充测试文件 "
@@ -155,7 +163,7 @@ if (request == null || !request.id().equals(requestId))
               + (expectedTaskVersion + 1)
               + "。",
           EventRef.empty().withPlan(plan.id()).withNode(node.id()));
-      runs.event(
+      evidence.event(
           runId,
           EventType.CONTINUED_AFTER_SUPPLEMENT,
           "已从安全边界继续：复现检查将重新执行，首次失败的检查记录保留。",          EventRef.empty().withPlan(plan.id()).withNode(node.id()));
@@ -188,7 +196,7 @@ if (request == null || !request.id().equals(requestId))
     String reason = message == null || message.isBlank() ? "补充被拒绝" : message;
     try {
       tx.executeWithoutResult(
-          status -> runs.event(runId, EventType.SUPPLEMENT_REJECTED, "补充提交被拒绝：" + reason));
+          status -> evidence.event(runId, EventType.SUPPLEMENT_REJECTED, "补充提交被拒绝：" + reason));
     } catch (RuntimeException ignored) {
       // 拒绝事件写不进去时不改变返回给用户的原因。
     }

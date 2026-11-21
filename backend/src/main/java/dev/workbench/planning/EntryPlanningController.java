@@ -4,7 +4,8 @@ import dev.workbench.planning.EntryRouteService;
 import dev.workbench.domain.TaskEntryKind;
 import dev.workbench.planning.PlanProposalService;
 import dev.workbench.planning.RecoveryLeaseService;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.planning.RunSnapshotService;
 import dev.workbench.planning.SourceArtifactService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
@@ -21,7 +22,8 @@ public class EntryPlanningController {
   private final WorkspaceAuthorizationService authorization;
   private final RunSnapshotService snapshots;
   private final RecoveryLeaseService leases;
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
   private final dev.workbench.ownership.OwnershipService ownership;
 
   public EntryPlanningController(
@@ -31,7 +33,8 @@ public class EntryPlanningController {
       WorkspaceAuthorizationService authorization,
       RunSnapshotService snapshots,
       RecoveryLeaseService leases,
-      RunRecordService runs,
+      RunStateStore runs,
+      TaskRecordService tasks,
       dev.workbench.ownership.OwnershipService ownership) {
     this.routes = routes;
     this.proposals = proposals;
@@ -40,6 +43,7 @@ public class EntryPlanningController {
     this.snapshots = snapshots;
     this.leases = leases;
     this.runs = runs;
+    this.tasks = tasks;
     this.ownership = ownership;
   }
 
@@ -107,7 +111,7 @@ public class EntryPlanningController {
     ownership.requireRun(request.sourceRunId());
     if (request.expectedTargetTaskVersion() == null || request.expectedSourceTaskVersion() == null)
       throw new IllegalArgumentException("请携带读取页面时的目标任务和来源任务版本。");
-    int targetVersion = runs.taskVersion(runs.runSnapshot(runId).taskId().toString());
+    int targetVersion = tasks.taskVersion(runs.runSnapshot(runId).taskId().toString());
     if (targetVersion != request.expectedTargetTaskVersion())
       throw new IllegalStateException("目标任务版本已变化，请重新读取后再接入成果。");
     String taskId = runs.runSnapshot(runId).taskId().toString();

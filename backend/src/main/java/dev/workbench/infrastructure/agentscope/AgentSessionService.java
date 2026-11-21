@@ -2,7 +2,8 @@ package dev.workbench.infrastructure.agentscope;
 
 import dev.workbench.framework.agent.session.AgentSessionInfo;
 import dev.workbench.framework.agent.session.AgentSessionStatus;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunStateStore;
 import io.agentscope.core.state.AgentState;
 import io.agentscope.core.state.AgentStateStore;
 import java.util.List;
@@ -12,17 +13,20 @@ import org.springframework.stereotype.Service;
 /** 只读取 AgentScope 会话状态元数据，不允许由该接口修改或恢复会话。 */
 @Service
 public class AgentSessionService {
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final AgentAssemblyRecordService agents;
   private final AgentStateStore states;
 
-  public AgentSessionService(RunRecordService runs, AgentStateStore states) {
+  public AgentSessionService(
+      RunStateStore runs, AgentAssemblyRecordService agents, AgentStateStore states) {
     this.runs = runs;
+    this.agents = agents;
     this.states = states;
   }
 
   public List<AgentSessionInfo> forRun(String runId) {
     runs.runSnapshot(runId);
-    return runs.agents(runId).stream()
+    return agents.agents(runId).stream()
         .map(row -> describe(UUID.fromString(row.get("ID").toString())))
         .toList();
   }

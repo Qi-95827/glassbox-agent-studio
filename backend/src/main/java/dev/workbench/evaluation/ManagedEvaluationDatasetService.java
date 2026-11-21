@@ -18,7 +18,8 @@ import dev.workbench.persistence.repository.ManagedEvaluationBatchRepository;
 import dev.workbench.persistence.repository.ManagedEvaluationCaseRepository;
 import dev.workbench.report.SensitiveTextRedactor;
 import dev.workbench.store.RunCompletionWaiter;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -48,7 +49,8 @@ public class ManagedEvaluationDatasetService {
   private final ManagedEvaluationBatchRepository batches;
   private final ManagedEvaluationCaseRepository cases;
   private final RunService runs;
-  private final RunRecordService records;
+  private final RunStateStore records;
+  private final TaskRecordService tasks;
   private final ObjectMapper json;
   private final AuditService audit;
   private final ExecutorService executor;
@@ -60,7 +62,8 @@ public class ManagedEvaluationDatasetService {
       ManagedEvaluationBatchRepository batches,
       ManagedEvaluationCaseRepository cases,
       RunService runs,
-      RunRecordService records,
+      RunStateStore records,
+      TaskRecordService tasks,
       ObjectMapper json,
       AuditService audit,
       @org.springframework.beans.factory.annotation.Qualifier("evaluationExecutor")
@@ -72,6 +75,7 @@ public class ManagedEvaluationDatasetService {
     this.cases = cases;
     this.runs = runs;
     this.records = records;
+    this.tasks = tasks;
     this.json = json;
     this.audit = audit;
     this.executor = executor;
@@ -223,7 +227,7 @@ public class ManagedEvaluationDatasetService {
     if (run.status() == RunStatus.COMPLETED)
       throw new IllegalArgumentException("成功运行不能作为失败案例录入。");
     if (run.status().canCancel()) throw new IllegalStateException("运行尚未结算，不能录入。");
-    TaskDefinition task = records.taskDefinition(run.taskId().toString());
+    TaskDefinition task = tasks.taskDefinition(run.taskId().toString());
     String code =
         requestedCode == null || requestedCode.isBlank()
             ? "FROM_" + runId.substring(0, 8).toUpperCase(Locale.ROOT)

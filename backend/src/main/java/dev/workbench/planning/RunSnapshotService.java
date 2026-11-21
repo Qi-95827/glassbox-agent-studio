@@ -18,7 +18,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 
 /**
  * 周期保存可核验执行边界：计划版本、事件位置、工作区指纹、累计预算和节点完成数。
@@ -29,19 +30,22 @@ import dev.workbench.store.RunRecordService;
 public class RunSnapshotService {
   private final RunSnapshotRepository snapshots;
   private final EventRepository events;
-  private final RunRecordService runs;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
   private final WorkspaceService workspaces;
   private final ObjectMapper json;
 
   public RunSnapshotService(
       RunSnapshotRepository snapshots,
       EventRepository events,
-      RunRecordService runs,
+      RunStateStore runs,
+      TaskRecordService tasks,
       WorkspaceService workspaces,
       ObjectMapper json) {
     this.snapshots = snapshots;
     this.events = events;
     this.runs = runs;
+    this.tasks = tasks;
     this.workspaces = workspaces;
     this.json = json;
   }
@@ -54,7 +58,7 @@ public class RunSnapshotService {
       return snapshots.findByRunIdOrderByEventSeqAsc(runId).getLast();
     }
     var run = runs.runSnapshot(runId);
-    TaskDefinition task = runs.taskDefinition(run.taskId().toString());
+    TaskDefinition task = tasks.taskDefinition(run.taskId().toString());
     String workspaceFingerprint = null;
     if (plan.scope().hasWorkspace() && task.workspaceId() != null) {
       try {

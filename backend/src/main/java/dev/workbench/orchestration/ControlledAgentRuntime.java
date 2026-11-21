@@ -8,7 +8,9 @@ import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.task.CostService;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.Objects;
 import java.util.UUID;
@@ -18,7 +20,9 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final String runId;
   private final String agentId;
   private final RunControl control;
-  private final RunRecordService repository;
+  private final AgentAssemblyRecordService assemblyRecords;
+  private final RunStateStore runs;
+  private final RunEvidenceRecordService evidence;
   private final RunControl.NodePolicy nodePolicy;
   private final CostService costs;
   private final WorkspaceAuthorizationService authorization;
@@ -26,41 +30,54 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private CostService.Reservation costReservation = CostService.Reservation.NONE;
 
   ControlledAgentRuntime(
-      String runId, String agentId, RunControl control, RunRecordService repository) {
-    this(runId, agentId, control, repository, null, null, null);
+      String runId,
+      String agentId,
+      RunControl control,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence) {
+    this(runId, agentId, control, assemblyRecords, runs, evidence, null, null, null);
   }
 
   ControlledAgentRuntime(
       String runId,
       String agentId,
       RunControl control,
-      RunRecordService repository,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
       RunControl.NodePolicy nodePolicy) {
-    this(runId, agentId, control, repository, nodePolicy, null, null);
+    this(runId, agentId, control, assemblyRecords, runs, evidence, nodePolicy, null, null);
   }
 
   ControlledAgentRuntime(
       String runId,
       String agentId,
       RunControl control,
-      RunRecordService repository,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
       RunControl.NodePolicy nodePolicy,
       CostService costs) {
-    this(runId, agentId, control, repository, nodePolicy, costs, null);
+    this(runId, agentId, control, assemblyRecords, runs, evidence, nodePolicy, costs, null);
   }
 
   ControlledAgentRuntime(
       String runId,
       String agentId,
       RunControl control,
-      RunRecordService repository,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
       RunControl.NodePolicy nodePolicy,
       CostService costs,
       WorkspaceAuthorizationService authorization) {
     this.runId = Objects.requireNonNull(runId);
     this.agentId = Objects.requireNonNull(agentId);
     this.control = Objects.requireNonNull(control);
-    this.repository = Objects.requireNonNull(repository);
+    this.assemblyRecords = Objects.requireNonNull(assemblyRecords);
+    this.runs = Objects.requireNonNull(runs);
+    this.evidence = Objects.requireNonNull(evidence);
     this.nodePolicy = nodePolicy;
     this.costs = costs;
     this.authorization = authorization;
@@ -137,7 +154,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
             AgentAssemblySnapshot.VERSION,
             components,
             control.budgetPolicy(components.authorization().profile(), nodePolicy));
-    repository.recordAgentAssembly(runId, agentId, snapshot);
+    assemblyRecords.recordAgentAssembly(runId, agentId, snapshot);
     assembly = components;
   }
 
@@ -147,7 +164,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
       throw new IllegalStateException("工具版本与本次 Agent 装配记录不一致。");
     if (authorization != null)
       authorization.requireCurrent(
-          repository.runSnapshot(runId).taskId().toString());
+          runs.runSnapshot(runId).taskId().toString());
     return control.beginTool(agentId, tool, version, fingerprint, nodePolicy);
   }
 
@@ -158,7 +175,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void event(EventType type, String message) {
-    var ref = repository.eventRefForAgent(runId, agentId);
+    var ref = evidence.eventRefForAgent(runId, agentId);
     // 调用标识只在服务端已创建对应记录后写入；旧调用或拒绝前事件保持空值。
     if (type == EventType.MODEL_STARTED) ref = ref.withModelCall(control.currentModelCallId());
     else if (type == EventType.MODEL_FINISHED) ref = ref.withModelCall(control.lastModelCallId());
@@ -166,7 +183,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
         || type == EventType.TOOL_FINISHED
         || type == EventType.TOOL_REJECTED)
       ref = ref.withToolCall(control.currentToolCallId());
-    repository.event(runId, type, message, ref);
+    evidence.event(runId, type, message, ref);
   }
 
   @Override

@@ -5,7 +5,13 @@ import dev.workbench.bug.BugIntakeService;
 import dev.workbench.bug.BugService;
 import dev.workbench.framework.agent.execution.AgentExecutor;
 import dev.workbench.framework.context.AgentContextAssembler;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunCheckpointStore;
+import dev.workbench.store.RunCountStore;
+import dev.workbench.store.RunCreationStore;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.workspace.RunHandoverService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import dev.workbench.workspace.WorkspaceService;
@@ -19,7 +25,14 @@ import dev.workbench.planning.EntryRouteService;
 /** 兼容门面：保留既有运行 API，实际职责委派给创建、派发、命令与执行服务。 */
 @Service
 public class RunService implements dev.workbench.planning.CandidateRunDispatcher {
-  private final RunRecordService repository;
+  private final RunStateStore runs;
+  private final TaskRecordService tasks;
+  private final RunCreationStore creation;
+  private final AgentAssemblyRecordService agents;
+  private final RunEvidenceRecordService evidence;
+  private final RunCheckpointStore checkpointStore;
+  private final RunCountStore counts;
+  private final dev.workbench.framework.control.RunControlStore controls;
   private final WorkflowScheduler workflows;
   private final ExecutorService executor;
   private final Object stateLock = new Object();
@@ -35,7 +48,14 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
 
   @org.springframework.beans.factory.annotation.Autowired
   public RunService(
-      RunRecordService repository,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      RunCreationStore creation,
+      AgentAssemblyRecordService agents,
+      RunEvidenceRecordService evidence,
+      RunCheckpointStore checkpointStore,
+      RunCountStore counts,
+      dev.workbench.framework.control.RunControlStore controls,
       TaskCreationService taskCreations,
       AgentExecutor agent,
       ObjectMapper json,
@@ -51,22 +71,51 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
       WorkspaceAuthorizationService workspaceAuthorization,
       @org.springframework.beans.factory.annotation.Qualifier("workflowRunExecutor")
           ExecutorService executor) {
-    this.repository = repository;
+    this.runs = runs;
+    this.tasks = tasks;
+    this.creation = creation;
+    this.agents = agents;
+    this.evidence = evidence;
+    this.checkpointStore = checkpointStore;
+    this.counts = counts;
+    this.controls = controls;
     this.workflows = workflows;
     this.executor = executor;
-    RunDispatchService dispatch = new RunDispatchService(repository, executor, this);
-    RunCheckpointSupport checkpoints = new RunCheckpointSupport(repository, workspaces);
-    RunHandoffFactory handoffs = new RunHandoffFactory(repository, json);
-    RunFailureHandler failures = new RunFailureHandler(repository, handoffs);
+    RunDispatchService dispatch = new RunDispatchService(runs, creation, executor, this);
+    RunCheckpointSupport checkpoints =
+        new RunCheckpointSupport(evidence, checkpointStore, workspaces);
+    RunHandoffFactory handoffs = new RunHandoffFactory(evidence, json);
+    RunFailureHandler failures = new RunFailureHandler(runs, evidence, handoffs);
     this.commands =
         new RunCommandService(
-            stateLock, repository, handovers, workflows, costs, checkpoints, dispatch);
+            stateLock,
+            runs,
+            creation,
+            tasks,
+            evidence,
+            handovers,
+            workflows,
+            costs,
+            checkpoints,
+            dispatch);
     RunReviewCoordinator review =
         new RunReviewCoordinator(
-            repository, agent, commands, handoffs, workspaceAuthorization, costs, stateLock);
+            runs,
+            agents,
+            evidence,
+            agent,
+            commands,
+            handoffs,
+            workspaceAuthorization,
+            costs,
+            stateLock);
     DirectRunExecutor direct =
         new DirectRunExecutor(
-            repository,
+            creation,
+            runs,
+            evidence,
+            checkpointStore,
+            agents,
             agent,
             contexts,
             bugs,
@@ -79,7 +128,7 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
             workspaceAuthorization,
             costs);
     RunExecutionEngine engine =
-        new RunExecutionEngine(repository, workflows, commands, direct, stateLock);
+        new RunExecutionEngine(runs, tasks, controls, workflows, commands, direct, stateLock);
     dispatch.setEngine(engine);
     this.dispatcher = dispatch;
     this.creations =
@@ -97,7 +146,14 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
 
   /** 兼容只构造队列控制边界的单元测试；入口路由、目录授权和费用在完整上下文中由 Spring 注入。 */
   public RunService(
-      RunRecordService repository,
+      RunStateStore runs,
+      TaskRecordService tasks,
+      RunCreationStore creation,
+      AgentAssemblyRecordService agents,
+      RunEvidenceRecordService evidence,
+      RunCheckpointStore checkpointStore,
+      RunCountStore counts,
+      dev.workbench.framework.control.RunControlStore controls,
       TaskCreationService taskCreations,
       AgentExecutor agent,
       ObjectMapper json,
@@ -110,7 +166,14 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
       WorkflowScheduler workflows,
       ExecutorService executor) {
     this(
-        repository,
+        runs,
+        tasks,
+        creation,
+        agents,
+        evidence,
+        checkpointStore,
+        counts,
+        controls,
         taskCreations,
         agent,
         json,
@@ -130,7 +193,7 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
   /** 重启后不能假设此前未结束的调用已经成功。 */
   @PostConstruct
   void initialize() {
-    repository.interruptRunning();
+    runs.interruptRunning();
   }
 
   @PreDestroy

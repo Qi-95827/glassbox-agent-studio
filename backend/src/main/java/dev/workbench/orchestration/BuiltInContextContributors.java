@@ -11,7 +11,7 @@ import dev.workbench.framework.context.AgentInput;
 import dev.workbench.framework.context.AgentInput.Kind;
 import dev.workbench.framework.context.AgentInput.Source;
 import dev.workbench.memory.MemoryService;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunEvidenceRecordService;
 import java.util.List;
 import java.util.function.Function;
 import org.springframework.context.annotation.Bean;
@@ -67,7 +67,7 @@ public class BuiltInContextContributors {
 
   @Bean
   public AgentContextContributor projectMemoryContext(
-      ObjectMapper json, MemoryService memories, RunRecordService repository) {
+      ObjectMapper json, MemoryService memories, RunEvidenceRecordService repository) {
     return contributor(
         "project-memory",
         20,

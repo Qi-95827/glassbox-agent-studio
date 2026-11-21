@@ -5,7 +5,7 @@ import dev.workbench.domain.RunStatus;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
 import dev.workbench.store.RunCompletionWaiter;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
 import dev.workbench.workspace.WorkspaceService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -24,7 +24,7 @@ import dev.workbench.domain.CaseStatus;
 public class EvaluationService {
   private final EvaluationRepository evaluations;
   private final RunService runs;
-  private final RunRecordService records;
+  private final RunStateStore records;
   private final SeedCaseEvaluator evaluator;
   private final WorkspaceService workspaces;
   private final EvaluationSuiteService suites;
@@ -40,7 +40,7 @@ public class EvaluationService {
   public EvaluationService(
       EvaluationRepository evaluations,
       RunService runs,
-      RunRecordService records,
+      RunStateStore records,
       SeedCaseEvaluator evaluator,
       WorkspaceService workspaces,
       EvaluationSuiteService suites,

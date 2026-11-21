@@ -2,7 +2,7 @@ package dev.workbench.evaluation;
 
 import dev.workbench.observability.AgentMetrics;
 import dev.workbench.observability.RunMetricsService;
-import dev.workbench.store.RunRecordService;
+import dev.workbench.store.RunStateStore;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Map;
@@ -15,13 +15,13 @@ import dev.workbench.domain.CaseStatus;
 @Service
 public class EvaluationComparisonService {
   private final EvaluationRepository repository;
-  private final RunRecordService runs;
+  private final RunStateStore runs;
   private final RunMetricsService metrics;
   private final com.fasterxml.jackson.databind.ObjectMapper json;
 
   public EvaluationComparisonService(
       EvaluationRepository repository,
-      RunRecordService runs,
+      RunStateStore runs,
       RunMetricsService metrics,
       com.fasterxml.jackson.databind.ObjectMapper json) {
     this.repository = repository;
