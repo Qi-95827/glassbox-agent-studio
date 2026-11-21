@@ -19,6 +19,17 @@ public interface RunControlStore {
       int tools,
       long elapsedMs);
 
+  /** 终态同时保存机器可读停止原因。 */
+  void update(
+      String runId,
+      RunStatus status,
+      String reason,
+      String result,
+      int rounds,
+      int tools,
+      long elapsedMs,
+      dev.workbench.domain.StopCause stopCause);
+
   void event(String runId, EventType type, String message);
 
   int countAgentModelCalls(String agentId);

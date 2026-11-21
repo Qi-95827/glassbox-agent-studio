@@ -72,8 +72,10 @@ class PlanCandidateConfirmationService {
         ModelMode.fromCode(request.modelMode() == null ? "mock" : request.modelMode().strip());
     var actualModes = actualModes(validated.nodes(), requestedMode);
     var actualModels = actualModels(actualModes, requestedMode);
-    if (request.maxCostMicros() != null)
-      budgetValidator.requireBudgetPricing(actualModels, request.maxCostMicros());
+    BudgetPricing pricing =
+        request.maxCostMicros() == null
+            ? null
+            : budgetValidator.requireBudgetPricing(actualModels, request.maxCostMicros());
     ModelMode mode = actualModes.size() == 1 ? actualModes.iterator().next() : requestedMode;
     String workspaceId = workspaces.prepare(row, input);
     var prepared = workspaces.prepareScope(workspaceId, input);
@@ -98,6 +100,7 @@ class PlanCandidateConfirmationService {
                 limits,
                 plan,
                 prepared,
+                pricing,
                 alreadyCreated));
     if (alreadyCreated.get() != null) return confirmed(alreadyCreated.get());
     // 事务提交后才派发；创建失败时不会留下已派发但没有计划或授权的运行。
@@ -117,6 +120,7 @@ class PlanCandidateConfirmationService {
       RunLimits limits,
       CandidateRunPlan plan,
       WorkspaceAuthorizationService.Prepared prepared,
+      BudgetPricing pricing,
       AtomicReference<String> alreadyCreated) {
     var locked = store.lockById(id, scope.ownerScopeKey()).orElseThrow(() -> new org.springframework.dao.EmptyResultDataAccessException(1));
     if (locked.getRunId() != null) {
@@ -133,7 +137,7 @@ class PlanCandidateConfirmationService {
         "候选计划已确认并创建运行。",
         plan,
         prepared,
-        request.maxCostMicros());
+        pricing);
     if (store.consume(id, runId) != 1)
       throw new IllegalStateException("候选已被其他确认消费，请刷新后查看运行。");
   }

@@ -1,8 +1,8 @@
 package dev.workbench.planning;
 
 import dev.workbench.domain.RunLimits;
-import dev.workbench.framework.workflow.plan.CandidateRunPlan;
 import dev.workbench.domain.TaskDefinition;
+import dev.workbench.framework.workflow.plan.CandidateRunPlan;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.UUID;
 
@@ -15,5 +15,5 @@ public interface CandidateRunPersister {
       String message,
       CandidateRunPlan plan,
       WorkspaceAuthorizationService.Prepared workspaceScope,
-      Long maxCostMicros);
+      BudgetPricing pricing);
 }

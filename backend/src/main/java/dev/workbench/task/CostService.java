@@ -1,5 +1,6 @@
 package dev.workbench.task;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ModelMode;
 import dev.workbench.domain.StopCause;
@@ -35,17 +36,20 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
   private final CostReservationRepository reservations;
   private final TransactionTemplate tx;
   private final TransactionTemplate settlementTx;
+  private final ObjectMapper json;
 
   public CostService(
       ProviderPriceVersionRepository prices,
       RunCostLimitRepository limits,
       CostReservationRepository reservations,
       TransactionTemplate tx,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      ObjectMapper json) {
     this.prices = prices;
     this.limits = limits;
     this.reservations = reservations;
     this.tx = tx;
+    this.json = json;
     this.settlementTx = new TransactionTemplate(transactionManager);
     this.settlementTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
@@ -108,18 +112,60 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
     return toPrice(saved, publishedBy);
   }
 
-  /** 在任务创建事务内绑定价格版本；没有费用上限时不创建。 */
+  /** 兼容直接创建任务的单模型预算绑定。 */
   @Transactional
   public void bindLimit(String runId, ModelMode mode, Long maxCostMicros) {
     if (maxCostMicros == null) return;
-    if (maxCostMicros < 1 || maxCostMicros > 1_000_000_000L)
-      throw new IllegalArgumentException("费用硬预算须在 1 至 1000000000 微单位之间。");
     ProviderPriceVersionEntity price = defaultPrice(mode);
     if (price == null)
       throw new IllegalArgumentException("至少配置一个生效价格版本，才能启用费用硬预算。");
+    bindLimit(
+        runId,
+        new dev.workbench.planning.BudgetPricing(
+            maxCostMicros,
+            java.util.List.of(
+                new dev.workbench.planning.BudgetPricing.ModelPrice(
+                    ModelKind.forMode(mode), price.getId(), price.getCurrency()))));
+  }
+
+  /**
+   * 在任务创建事务内冻结确认时解析出的每个实际模型价格版本。
+   *
+   * <p>后续发布同币种新版本只会让新运行使用新价格；本运行始终按这里保存的版本结算。
+   */
+  @Transactional
+  public void bindLimit(String runId, dev.workbench.planning.BudgetPricing pricing) {
+    if (pricing == null) return;
     if (limits.existsById(runId)) throw new IllegalStateException("运行已绑定费用预算。");
+    var byModel = new java.util.LinkedHashMap<String, String>();
+    String defaultPriceId = null;
+    String currency = null;
+    for (var binding : pricing.prices()) {
+      var price =
+          prices
+              .findById(binding.priceVersionId())
+              .orElseThrow(() -> new IllegalArgumentException("确认时的价格版本已不存在，请重新确认。"));
+      if (!price.getModel().equals(binding.model().code()))
+        throw new IllegalArgumentException("确认时的价格版本与模型不匹配：" + binding.model().code());
+      if (!price.getCurrency().equals(binding.currency()))
+        throw new IllegalArgumentException("确认时的价格币种已变化，请重新确认。");
+      if (currency == null) currency = price.getCurrency();
+      else if (!currency.equals(price.getCurrency()))
+        throw new IllegalArgumentException("确认时的模型价格币种不一致，请重新确认。");
+      byModel.put(binding.model().code(), price.getId());
+      if (defaultPriceId == null) defaultPriceId = price.getId();
+    }
+    if (defaultPriceId == null)
+      throw new IllegalArgumentException("费用硬预算没有绑定任何模型价格。");
     String time = Instant.now().toString();
-    limits.saveAndFlush(new RunCostLimitEntity(runId, maxCostMicros, price.getId(), time, time));
+    limits.saveAndFlush(
+        new RunCostLimitEntity(
+            runId,
+            pricing.maxCostMicros(),
+            defaultPriceId,
+            writeModelPrices(byModel),
+            time,
+            time));
   }
 
   /** 恢复子运行沿用父运行价格版本，并把已结算和未结算预留从可用额度中扣除。 */
@@ -133,7 +179,13 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
             0, parent.getMaxCostMicros() - parent.getSettledMicros() - parent.getReservedMicros());
     String time = Instant.now().toString();
     limits.save(
-        new RunCostLimitEntity(childRunId, remaining, parent.getPriceVersionId(), time, time));
+        new RunCostLimitEntity(
+            childRunId,
+            remaining,
+            parent.getPriceVersionId(),
+            parent.getModelPriceVersionsJson(),
+            time,
+            time));
   }
 
   /** 任务级预算只绑定默认价格；每次实际调用仍按 modelId 查表计价。 */
@@ -158,30 +210,76 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
                     "模型 " + model.code() + " 未配置生效价格版本，无法继续执行费用硬预算。"));
   }
 
+  /** 已确认运行固定使用绑定价格；仅旧运行缺少绑定映射时回退到原默认价格/当前生效价格。 */
+  private ProviderPriceVersionEntity boundPrice(RunCostLimitEntity limit, ModelKind model) {
+    var bindings = readModelPrices(limit.getModelPriceVersionsJson());
+    String priceId = bindings.get(model.code());
+    if (priceId == null && bindings.isEmpty()) priceId = limit.getPriceVersionId();
+    if (priceId != null) {
+      var bound = prices.findById(priceId);
+      if (bound.isPresent() && bound.get().getModel().equals(model.code())) return bound.get();
+      if (!bindings.isEmpty())
+        throw new StopExecution(
+            StopCause.COST_LIMIT,
+            "运行未绑定模型 " + model.code() + " 的确认价格版本，不能继续派发。");
+    }
+    return priceFor(model);
+  }
+
   /**
    * 确认前核对实际模型集合：每个模型都必须有生效价格，且硬预算只能在一个币种内汇总。
    *
    * <p>不同模型可以有不同的输入/输出单价与版本；拒绝的只是缺价和跨币种直接相加。
    */
   @Override
-  public void requireBudgetPricing(
+  public dev.workbench.planning.BudgetPricing requireBudgetPricing(
       java.util.Collection<ModelKind> models, long maxCostMicros) {
     if (maxCostMicros < 1 || maxCostMicros > 1_000_000_000L)
       throw new IllegalArgumentException("费用硬预算须在 1 到 1000000000 微单位之间。");
     var missing = new java.util.ArrayList<String>();
-    var currencies = new java.util.LinkedHashSet<String>();
+    var bindings = new java.util.ArrayList<dev.workbench.planning.BudgetPricing.ModelPrice>();
+    String currency = null;
     for (ModelKind model : models) {
-      var price = prices.findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(
-          PROVIDER, model.code());
-      if (price.isEmpty()) missing.add(model.code());
-      else currencies.add(price.get().getCurrency());
+      var price =
+          prices.findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(
+              PROVIDER, model.code());
+      if (price.isEmpty()) {
+        missing.add(model.code());
+        continue;
+      }
+      if (currency == null) currency = price.get().getCurrency();
+      else if (!currency.equals(price.get().getCurrency()))
+        throw new IllegalArgumentException(
+            "实际模型价格币种不一致（" + currency + ", " + price.get().getCurrency()
+                + "），不能汇总到同一硬预算。");
+      bindings.add(
+          new dev.workbench.planning.BudgetPricing.ModelPrice(
+              model, price.get().getId(), price.get().getCurrency()));
     }
     if (!missing.isEmpty())
       throw new IllegalArgumentException(
           "以下实际模型缺少生效价格，不能启用费用硬预算：" + String.join(", ", missing));
-    if (currencies.size() > 1)
-      throw new IllegalArgumentException(
-          "实际模型价格币种不一致（" + String.join(", ", currencies) + "），不能汇总到同一硬预算。");
+    return new dev.workbench.planning.BudgetPricing(maxCostMicros, bindings);
+  }
+
+  private String writeModelPrices(java.util.Map<String, String> byModel) {
+    try {
+      return json.writeValueAsString(byModel);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new IllegalStateException("无法保存运行模型价格绑定。", e);
+    }
+  }
+
+  private java.util.Map<String, String> readModelPrices(String value) {
+    if (value == null || value.isBlank()) return java.util.Map.of();
+    try {
+      return json.readValue(
+          value,
+          json.getTypeFactory()
+              .constructMapType(java.util.LinkedHashMap.class, String.class, String.class));
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new IllegalStateException("无法读取运行模型价格绑定。", e);
+    }
   }
 
   /** 派发前预留可计价上界；额度不足时抛出受控停止，不启动模型调用。 */
@@ -190,7 +288,7 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
         ignored -> {
           RunCostLimitEntity limit = limits.lockByRunId(runId).orElse(null);
           if (limit == null) return Reservation.NONE;
-          ProviderPriceVersionEntity price = priceFor(model);
+          ProviderPriceVersionEntity price = boundPrice(limit, model);
           var base = prices.findById(limit.getPriceVersionId()).orElse(null);
           if (base != null && !base.getCurrency().equals(price.getCurrency()))
             throw new StopExecution(

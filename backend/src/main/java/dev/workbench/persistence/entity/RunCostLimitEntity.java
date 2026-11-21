@@ -19,6 +19,10 @@ public class RunCostLimitEntity {
   @Column(name = "price_version_id", nullable = false, length = 36)
   private String priceVersionId;
 
+  /** 确认时冻结的 modelCode -> priceVersionId；旧运行为空时回退到 priceVersionId。 */
+  @Column(name = "model_price_versions_json", length = 4000)
+  private String modelPriceVersionsJson;
+
   @Column(name = "reserved_micros", nullable = false)
   private long reservedMicros;
 
@@ -45,9 +49,20 @@ public class RunCostLimitEntity {
       String priceVersionId,
       String createdAt,
       String updatedAt) {
+    this(runId, maxCostMicros, priceVersionId, null, createdAt, updatedAt);
+  }
+
+  public RunCostLimitEntity(
+      String runId,
+      long maxCostMicros,
+      String priceVersionId,
+      String modelPriceVersionsJson,
+      String createdAt,
+      String updatedAt) {
     this.runId = runId;
     this.maxCostMicros = maxCostMicros;
     this.priceVersionId = priceVersionId;
+    this.modelPriceVersionsJson = modelPriceVersionsJson;
     this.reservedMicros = 0;
     this.settledMicros = 0;
     this.unknownCalls = 0;
@@ -66,6 +81,10 @@ public class RunCostLimitEntity {
 
   public String getPriceVersionId() {
     return priceVersionId;
+  }
+
+  public String getModelPriceVersionsJson() {
+    return modelPriceVersionsJson;
   }
 
   public long getReservedMicros() {

@@ -262,7 +262,23 @@ public class RunStateStore {
             throw new IllegalStateException("运行不存在或已进入终态，不能再更新。");
           if (!status.canCancel()) plans.settle(id, RecordSupport.now());
         });
-    if (!status.canCancel()) completionWaiter.signal(id);
+    if (!status.canCancel()) signalAfterCommit(id);
+  }
+
+  /** 只有实际提交后才通知；回滚的外层事务不得唤醒等待方。 */
+  private void signalAfterCommit(String runId) {
+    if (org.springframework.transaction.support.TransactionSynchronizationManager
+        .isSynchronizationActive()) {
+      org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+          new org.springframework.transaction.support.TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              completionWaiter.signal(runId);
+            }
+          });
+    } else {
+      completionWaiter.signal(runId);
+    }
   }
 
   /** 审查完成、交接和整个运行终态一起提交，外部模型调用不在事务内。 */
@@ -293,7 +309,7 @@ public class RunStateStore {
             evidence.event(
                 runId, EventType.RUN_COMPLETED, "Agent 协作已结束；代码修改和测试需以实际证据为准。");
         });
-    if (!completion.status().canCancel()) completionWaiter.signal(completion.runId().toString());
+    if (!completion.status().canCancel()) signalAfterCommit(completion.runId().toString());
   }
 
   /** 受控停止与 Agent、运行终态、事件和系统交接一起提交。 */

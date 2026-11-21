@@ -111,6 +111,11 @@ public final class RunControl {
     repository.update(runId, status, reason, result, rounds, tools, elapsed());
   }
 
+  /** 保存终态时同时写入机器可读停止原因，供阻塞分类使用。 */
+  public void save(RunStatus status, String reason, String result, StopCause cause) {
+    repository.update(runId, status, reason, result, rounds, tools, elapsed(), cause);
+  }
+
   /** 合作式检查暂停、取消与时间限额；不强制撤销已发出的外部请求。 */
   public void check() {
     synchronized (pauseMonitor) {

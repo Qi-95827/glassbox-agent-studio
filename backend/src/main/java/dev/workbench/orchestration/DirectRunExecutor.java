@@ -129,7 +129,7 @@ final class DirectRunExecutor {
             + "。失败不自动证明特定 Bug 已复现。");
     if (state.initial.status() == BugService.CheckStatus.FAILURES_OBSERVED) return true;
     String reason = "未观察到测试失败或验证条件不足，暂停自动修改；检测结果：" + state.initial.status();
-    state.control.save(RunStatus.BLOCKED, reason, null);
+    state.control.save(RunStatus.BLOCKED, reason, null, StopCause.VALIDATION_MISSING);
     repository.event(state.runId, EventType.BLOCKED, reason);
     return false;
   }

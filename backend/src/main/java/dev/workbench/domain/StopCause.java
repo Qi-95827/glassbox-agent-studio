@@ -26,6 +26,8 @@ public enum StopCause {
   CHECK_FAILED(RunStatus.BLOCKED),
   /** 开发节点没有写出全部必需文件；已落地变更和证据保留，审查不会继续。 */
   OUTPUT_MISSING(RunStatus.BLOCKED),
+  /** 兼容 Bug 流程缺少可执行验证条件，暂停自动修改并等待用户补充。 */
+  VALIDATION_MISSING(RunStatus.BLOCKED),
   RECOVERY_PRECONDITION_FAILED(RunStatus.FAILED),
   UNCLASSIFIED_FAILURE(RunStatus.FAILED);
 

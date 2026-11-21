@@ -98,11 +98,11 @@ public class TaskCreationService implements dev.workbench.planning.CandidateRunP
       String message,
       dev.workbench.framework.workflow.plan.CandidateRunPlan plan,
       WorkspaceAuthorizationService.Prepared workspaceScope,
-      Long maxCostMicros) {
+      dev.workbench.planning.BudgetPricing pricing) {
     runs.createTaskAndFirstRunFromPlan(
         task, runId, limits, message, plan, java.time.Instant.now().toString());
     if (workspaceScope != null)
       workspaceAuthorization.save(task.id().toString(), task.workspaceId(), workspaceScope);
-    if (maxCostMicros != null) costs.bindLimit(runId.toString(), task.modelMode(), maxCostMicros);
+    if (pricing != null) costs.bindLimit(runId.toString(), pricing);
   }
 }
