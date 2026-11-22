@@ -8,7 +8,9 @@ public enum HandoffSource {
   /** 系统根据实际运行状态生成的结果，不是模型回答。 */
   SYSTEM("system"),
   MOCK_MODEL("mock-model"),
-  DEEPSEEK_FLASH("deepseek-flash");
+  DEEPSEEK_FLASH("deepseek-flash"),
+  /** 用户自带 Key 的模型连接输出。 */
+  MODEL_CONNECTION("user-model");
   private final String code;
 
   HandoffSource(String code) {

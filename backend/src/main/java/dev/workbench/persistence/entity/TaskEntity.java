@@ -63,6 +63,9 @@ public class TaskEntity implements Persistable<String> {
   @Column(name = "file_scopes_json", nullable = false, length = 20000)
   private String fileScopesJson;
 
+  @Column(name = "model_connection_id", length = 36)
+  private String modelConnectionId;
+
   public TaskEntity() {}
 
   @Override
@@ -186,5 +189,13 @@ public class TaskEntity implements Persistable<String> {
 
   public void setFileScopesJson(String fileScopesJson) {
     this.fileScopesJson = fileScopesJson;
+  }
+
+  public String getModelConnectionId() {
+    return modelConnectionId;
+  }
+
+  public void setModelConnectionId(String modelConnectionId) {
+    this.modelConnectionId = modelConnectionId;
   }
 }

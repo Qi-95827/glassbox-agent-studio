@@ -21,6 +21,8 @@ import BugReportOutlined from '@mui/icons-material/BugReportOutlined';
 import AddRounded from '@mui/icons-material/AddRounded';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { tasksApi } from '../../api/tasks';
+import { modelSelectionLabel, parseModelValue } from '../../api/modelConnections';
+import { useModelConnections } from '../../hooks/useModelConnections';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useEntryPolicies } from '../../hooks/useTasks';
 import { useToast } from '../../components/ToastProvider';
@@ -110,6 +112,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
   const queryClient = useQueryClient();
   const workspaces = useWorkspaces();
   const policies = useEntryPolicies();
+  const connections = useModelConnections();
   const goalRef = useRef(null);
   const focusGoal = searchParams.get('new') === '1';
   const [draft, update] = useReducer(draftReducer, initialDraft);
@@ -122,6 +125,10 @@ export default function TaskComposer({ onCreated, onModelChange }) {
   const [workspaceMenu, setWorkspaceMenu] = useState(null);
 
   const workspaceList = workspaces.data ?? [];
+  const connectionList = connections.data?.connections ?? [];
+  const builtInModels = connections.data?.builtIns ?? [];
+  const legacyDeepSeek = builtInModels.some(item => item.id === 'legacy-deepseek');
+  const selection = parseModelValue(draft.model);
   const workspace = workspaceList.find(item => item.id === draft.workspaceId) ?? null;
   const policy = (policies.data ?? []).find(item => item.kind === draft.entryKind);
   const hasPlannableRoute =
@@ -143,8 +150,9 @@ export default function TaskComposer({ onCreated, onModelChange }) {
   const patch = value => update(value);
 
   useEffect(() => {
-    onModelChange?.(draft.model);
-  }, [draft.model, onModelChange]);
+    // 顶栏只显示模型类别，不暴露具体连接标识。
+    onModelChange?.(selection.modelConnectionId ? 'user' : draft.model);
+  }, [draft.model, selection.modelConnectionId, onModelChange]);
 
   const create = async () => {
     if (!draft.goal.trim()) {
@@ -167,7 +175,8 @@ export default function TaskComposer({ onCreated, onModelChange }) {
         entryKind: draft.entryKind,
         workflowTemplate: draft.workflowTemplate,
         reviewPlan: hasPlannableRoute && draft.reviewPlan,
-        modelMode: draft.model,
+        modelMode: selection.modelMode,
+        modelConnectionId: selection.modelConnectionId,
         scenario: draft.scenario,
         maxRounds: numberOrNull(draft.rounds),
         maxTools: numberOrNull(draft.tools),
@@ -211,7 +220,9 @@ export default function TaskComposer({ onCreated, onModelChange }) {
       constraints: (value.constraints ?? []).join('\n'),
       acceptance: (value.acceptanceCriteria ?? []).join('\n'),
       reviewPlan: value.reviewPlan ?? draft.reviewPlan,
-      model: value.modelMode ?? draft.model,
+      model: value.modelConnectionId
+        ? `user:${value.modelConnectionId}`
+        : (value.modelMode ?? draft.model),
       workflowTemplate: value.entryKind === 'GENERAL' && value.reviewPlan ? 'dual-analysis' : null,
       workspaceId: '',
       fileScopes: '',
@@ -275,7 +286,8 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap' }}>
             <ConfigChip
               icon={<AutoAwesomeRounded sx={{ fontSize: 16, color: '#1A73E8' }} />}
-              label={draft.model === 'deepseek' ? 'DeepSeek Flash' : '模拟模型'}
+              label={modelSelectionLabel(connections.data, draft.model)}
+              strong={Boolean(selection.modelConnectionId)}
               onClick={event => setModelMenu(event.currentTarget)}
             />
 
@@ -322,15 +334,6 @@ export default function TaskComposer({ onCreated, onModelChange }) {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
       >
         <MenuItem
-          selected={draft.model === 'deepseek'}
-          onClick={() => {
-            patch({ model: 'deepseek' });
-            setModelMenu(null);
-          }}
-        >
-          DeepSeek Flash（真实调用）
-        </MenuItem>
-        <MenuItem
           selected={draft.model === 'mock'}
           onClick={() => {
             patch({ model: 'mock' });
@@ -338,6 +341,65 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           }}
         >
           模拟模型（无需密钥）
+        </MenuItem>
+        {legacyDeepSeek && (
+          <MenuItem
+            selected={draft.model === 'deepseek'}
+            onClick={() => {
+              patch({ model: 'deepseek' });
+              setModelMenu(null);
+            }}
+          >
+            DeepSeek Flash（本机密钥文件兜底）
+          </MenuItem>
+        )}
+        <Divider />
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: 'block', px: 2, py: 0.5 }}
+        >
+          我的模型（自带 Key）
+        </Typography>
+        {connectionList.length === 0 && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: 'block', px: 2, py: 0.5 }}
+          >
+            尚未配置。添加后即可使用自己的额度。
+          </Typography>
+        )}
+        {connectionList.map(connection => (
+          <MenuItem
+            key={connection.id}
+            disabled={!connection.enabled}
+            selected={selection.modelConnectionId === connection.id}
+            onClick={() => {
+              patch({ model: `user:${connection.id}` });
+              setModelMenu(null);
+            }}
+            sx={{ maxWidth: 380 }}
+          >
+            <Stack sx={{ minWidth: 0 }}>
+              <Typography sx={{ fontSize: 13 }} noWrap>
+                {connection.displayName}
+                {connection.isDefault ? ' · 默认' : ''}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" noWrap>
+                {connection.modelName} · {connection.keyMasked}
+              </Typography>
+            </Stack>
+          </MenuItem>
+        ))}
+        <Divider />
+        <MenuItem
+          onClick={() => {
+            setModelMenu(null);
+            navigate('/settings');
+          }}
+        >
+          <AddRounded fontSize="small" sx={{ mr: 1 }} /> + 配置我的 API Key
         </MenuItem>
       </Menu>
 
@@ -404,7 +466,8 @@ export default function TaskComposer({ onCreated, onModelChange }) {
       <TaskIdeaDialog
         open={ideaOpen}
         initialIdea={draft.goal}
-        initialModelMode={draft.model}
+        initialModelMode={selection.modelMode}
+        initialModelConnectionId={selection.modelConnectionId}
         onClose={() => setIdeaOpen(false)}
         onManual={value => {
           applyManualDraft(value);
@@ -440,7 +503,8 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           fileScopes,
           constraints,
           acceptanceCriteria,
-          deliverable: null
+          deliverable: null,
+          modelConnectionId: selection.modelConnectionId
         }}
       />
 

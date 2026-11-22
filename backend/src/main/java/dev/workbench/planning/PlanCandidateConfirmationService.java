@@ -33,6 +33,7 @@ class PlanCandidateConfirmationService {
   private final CandidateRunDispatcher runs;
   private final PlanningRunReader records;
   private final CandidateBudgetValidator budgetValidator;
+  private final dev.workbench.modelconnection.ModelConnectionService connections;
   private final TransactionTemplate tx;
 
   PlanCandidateConfirmationService(
@@ -43,6 +44,7 @@ class PlanCandidateConfirmationService {
       CandidateRunPersister taskCreations,
       CandidateRunDispatcher runs,
       PlanningRunReader records,
+      dev.workbench.modelconnection.ModelConnectionService connections,
       CandidateBudgetValidator budgetValidator,
       TransactionTemplate tx) {
     this.store = store;
@@ -52,6 +54,7 @@ class PlanCandidateConfirmationService {
     this.taskCreations = taskCreations;
     this.runs = runs;
     this.records = records;
+    this.connections = connections;
     this.budgetValidator = budgetValidator;
     this.tx = tx;
   }
@@ -70,8 +73,22 @@ class PlanCandidateConfirmationService {
     var validated = requireCurrentPlan(draft, input, row);
     ModelMode requestedMode =
         ModelMode.fromCode(request.modelMode() == null ? "mock" : request.modelMode().strip());
+    String connectionId =
+        request.modelConnectionId() == null || request.modelConnectionId().isBlank()
+            ? null
+            : connections.requireEnabledOwned(request.modelConnectionId());
+    if (requestedMode == ModelMode.USER && connectionId == null)
+      connectionId =
+          connections
+              .defaultConnectionId()
+              .orElseThrow(
+                  () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"));
+    if (requestedMode != ModelMode.USER) connectionId = null;
     var actualModes = actualModes(validated.nodes(), requestedMode);
     var actualModels = actualModels(actualModes, requestedMode);
+    if (request.maxCostMicros() != null
+        && actualModels.contains(ModelKind.USER_CONNECTION))
+      throw new IllegalArgumentException("自带 Key 模型使用你自己的额度，平台费用硬预算仅适用于内置模型。");
     BudgetPricing pricing =
         request.maxCostMicros() == null
             ? null
@@ -84,7 +101,9 @@ class PlanCandidateConfirmationService {
             validated.normalized(), row.getCandidateSha256(), validated.nodes());
     String taskId = UUID.randomUUID().toString();
     String runId = UUID.randomUUID().toString();
-    var task = taskDefinition(taskId, input, mode, workspaceId);
+    var task =
+        taskDefinition(
+            taskId, input, mode, workspaceId, mode == ModelMode.USER ? connectionId : null);
     var limits = new RunLimits(null, null, null, null, null, null, null, null);
     var alreadyCreated = new AtomicReference<String>();
     tx.executeWithoutResult(
@@ -216,7 +235,11 @@ class PlanCandidateConfirmationService {
   }
 
   private static TaskDefinition taskDefinition(
-      String taskId, PlanCandidateInput input, ModelMode mode, String workspaceId) {
+      String taskId,
+      PlanCandidateInput input,
+      ModelMode mode,
+      String workspaceId,
+      String modelConnectionId) {
     return new TaskDefinition(
         UUID.fromString(taskId),
         input.goal(),
@@ -232,6 +255,7 @@ class PlanCandidateConfirmationService {
         TaskEntryKind.CODE,
         input.fileScopes(),
         Map.of(),
-        Map.of());
+        Map.of(),
+        modelConnectionId);
   }
 }

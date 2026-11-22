@@ -84,10 +84,7 @@ final class RunHandoffFactory {
       String answer,
       String evidenceRun,
       BugService.Check initial) {
-    HandoffSource source =
-        task.modelMode() == ModelMode.DEEPSEEK
-            ? HandoffSource.DEEPSEEK_FLASH
-            : HandoffSource.MOCK_MODEL;
+    HandoffSource source = source(task);
     return attachTestChecks(
         new Handoff(
             task.id().toString(),
@@ -178,8 +175,10 @@ final class RunHandoffFactory {
   }
 
   private static HandoffSource source(TaskDefinition task) {
-    return task.modelMode() == ModelMode.DEEPSEEK
-        ? HandoffSource.DEEPSEEK_FLASH
-        : HandoffSource.MOCK_MODEL;
+    return switch (task.modelMode()) {
+      case DEEPSEEK -> HandoffSource.DEEPSEEK_FLASH;
+      case USER -> HandoffSource.MODEL_CONNECTION;
+      case MOCK -> HandoffSource.MOCK_MODEL;
+    };
   }
 }

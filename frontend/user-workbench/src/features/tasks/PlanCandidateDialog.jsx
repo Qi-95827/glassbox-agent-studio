@@ -8,6 +8,7 @@ import {
   CircularProgress,
   Divider,
   FormControlLabel,
+  ListSubheader,
   MenuItem,
   Stack,
   TextField,
@@ -21,6 +22,8 @@ import StatusChip from '../../components/StatusChip';
 import RunFlowGraph from '../workflows/RunFlowGraph';
 import { usePlanCandidate } from '../../hooks/usePlanCandidate';
 import { agentsApi } from '../../api/agents';
+import { parseModelValue } from '../../api/modelConnections';
+import { useModelConnections } from '../../hooks/useModelConnections';
 import { googleTokens } from '../../theme/googleTheme';
 
 const roleLabels = { ANALYZE: '分析', IMPLEMENT: '开发', REVIEW: '审查' };
@@ -137,11 +140,21 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
   const [mode, setMode] = useState(input.agentMode || 'BUILTIN');
   const [manualId, setManualId] = useState(input.manualAgentId || null);
   const [candidateIds, setCandidateIds] = useState(input.candidateAgentIds || []);
-  const [runModel, setRunModel] = useState('mock');
+  const [runModel, setRunModel] = useState(
+    input.modelConnectionId ? `user:${input.modelConnectionId}` : 'mock'
+  );
+  const [planModel, setPlanModel] = useState(
+    input.modelConnectionId ? `user:${input.modelConnectionId}` : ''
+  );
   const [maxCost, setMaxCost] = useState(maxCostMicros ?? null);
   const [error, setError] = useState('');
   const draftKey = useRef(requestId());
   const agents = useQuery({ queryKey: ['my-agents'], queryFn: agentsApi.myAgents, enabled: open });
+  const connections = useModelConnections(open);
+  const connectionList = connections.data?.connections ?? [];
+  const legacyDeepSeek = (connections.data?.builtIns ?? []).some(
+    item => item.id === 'legacy-deepseek'
+  );
 
   const effectiveInput = useMemo(
     () => ({
@@ -151,9 +164,10 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
       manualAgentVersion: null,
       candidateAgentIds: mode === 'RECOMMEND' ? candidateIds : [],
       readOnly: Boolean(input.readOnly),
-      writeEnabled: input.readOnly ? false : Boolean(input.writeEnabled)
+      writeEnabled: input.readOnly ? false : Boolean(input.writeEnabled),
+      modelConnectionId: planModel === 'mock' ? null : parseModelValue(planModel).modelConnectionId
     }),
-    [input, mode, manualId, candidateIds]
+    [input, mode, manualId, candidateIds, planModel]
   );
 
   const generate = previousId => {
@@ -186,12 +200,15 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
   const startRun = async () => {
     setError('');
     try {
+      const selection = parseModelValue(runModel);
       const created = await plan.createRun({
         expectedCandidateSha256: current.candidateSha256,
         expectedInputSha256: current.inputSha256,
         expectedInputVersion: current.inputVersion,
-        modelMode: runModel,
-        maxCostMicros: maxCost == null || maxCost === '' ? null : Number(maxCost)
+        modelMode: selection.modelMode,
+        modelConnectionId: selection.modelConnectionId,
+        maxCostMicros:
+          selection.modelConnectionId || maxCost == null || maxCost === '' ? null : Number(maxCost)
       });
       onRun?.(created.runId, created.workspaceId);
     } catch (failure) {
@@ -233,6 +250,23 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
               <MenuItem value="BUILTIN">沿用内置模板</MenuItem>
               <MenuItem value="MANUAL">指定私有 Agent 版本</MenuItem>
               <MenuItem value="RECOMMEND">允许规划器从勾选中推荐</MenuItem>
+            </TextField>
+            <TextField
+              select
+              size="small"
+              label="规划模型"
+              value={planModel}
+              onChange={event => setPlanModel(event.target.value)}
+              sx={{ minWidth: 210 }}
+            >
+              <ListSubheader>内置免 Key</ListSubheader>
+              <MenuItem value="">服务端内置规划模型</MenuItem>
+              <ListSubheader>我的模型（自带 Key）</ListSubheader>
+              {connectionList.map(connection => (
+                <MenuItem key={connection.id} value={`user:${connection.id}`}>
+                  {connection.displayName} · {connection.modelName}
+                </MenuItem>
+              ))}
             </TextField>
             {mode === 'MANUAL' && (
               <TextField
@@ -432,22 +466,33 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
                       label="运行模型"
                       value={runModel}
                       onChange={event => setRunModel(event.target.value)}
-                      sx={{ minWidth: 190 }}
+                      sx={{ minWidth: 230 }}
                     >
-                      <MenuItem value="mock">模拟模型</MenuItem>
-                      <MenuItem value="deepseek">DeepSeek Flash（真实调用）</MenuItem>
+                      <ListSubheader>内置免 Key 模型</ListSubheader>
+                      <MenuItem value="mock">模拟模型（内置）</MenuItem>
+                      {legacyDeepSeek && (
+                        <MenuItem value="deepseek">DeepSeek Flash（本机密钥文件）</MenuItem>
+                      )}
+                      <ListSubheader>我的模型（自带 Key）</ListSubheader>
+                      {connectionList.map(connection => (
+                        <MenuItem key={connection.id} value={`user:${connection.id}`}>
+                          {connection.displayName} · {connection.modelName}
+                        </MenuItem>
+                      ))}
                     </TextField>
-                    <TextField
-                      size="small"
-                      type="number"
-                      label="费用硬预算（微单位）"
-                      value={maxCost ?? ''}
-                      onChange={event =>
-                        setMaxCost(event.target.value === '' ? null : Number(event.target.value))
-                      }
-                      slotProps={{ htmlInput: { min: 1, max: 1000000000 } }}
-                      sx={{ minWidth: 210 }}
-                    />
+                    {!parseModelValue(runModel).modelConnectionId && (
+                      <TextField
+                        size="small"
+                        type="number"
+                        label="费用硬预算（微单位）"
+                        value={maxCost ?? ''}
+                        onChange={event =>
+                          setMaxCost(event.target.value === '' ? null : Number(event.target.value))
+                        }
+                        slotProps={{ htmlInput: { min: 1, max: 1000000000 } }}
+                        sx={{ minWidth: 210 }}
+                      />
+                    )}
 
                     <Button
                       variant="contained"
@@ -459,7 +504,8 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
                     </Button>
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
-                    固定模型节点使用发布时保存的模型；费用硬预算留空表示不限额。
+                    固定模型节点使用发布时保存的模型；自带 Key
+                    模型使用你自己的额度，平台费用硬预算不适用。
                   </Typography>
                 </Stack>
               </Alert>

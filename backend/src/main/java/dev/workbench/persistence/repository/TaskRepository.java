@@ -21,7 +21,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, String> {
         new dev.workbench.persistence.repository.TaskData(
           t.id, t.goal, t.scenario, t.createdAt, t.archivedAt, t.modelMode,
           t.workspaceId, t.fileScope, t.writeEnabled, t.bugId, t.memoryEnabled,
-          t.constraintsJson, t.acceptanceJson, t.entryKind, t.fileScopesJson, t.version),
+          t.constraintsJson, t.acceptanceJson, t.entryKind, t.fileScopesJson, t.version,
+          t.modelConnectionId),
         r.id, r.status,
         case when r.status = :pending and p.reviewRequired = true and p.approvedAt is null
           then true else false end)
@@ -40,7 +41,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, String> {
       select new dev.workbench.persistence.repository.TaskData(
         t.id, t.goal, t.scenario, t.createdAt, t.archivedAt, t.modelMode,
         t.workspaceId, t.fileScope, t.writeEnabled, t.bugId, t.memoryEnabled,
-        t.constraintsJson, t.acceptanceJson, t.entryKind, t.fileScopesJson, t.version)
+        t.constraintsJson, t.acceptanceJson, t.entryKind, t.fileScopesJson, t.version,
+        t.modelConnectionId)
       from TaskEntity t where t.id = :id
       """)
   Optional<TaskData> findTaskById(@Param("id") String id);

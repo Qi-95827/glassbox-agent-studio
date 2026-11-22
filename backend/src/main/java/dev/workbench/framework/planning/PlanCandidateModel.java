@@ -13,5 +13,10 @@ public interface PlanCandidateModel {
    */
   Reply propose(String instructions, String input);
 
+  /** 指定用户自带 Key 连接时优先使用该连接；默认实现忽略连接，保持本地规则与测试替身兼容。 */
+  default Reply propose(String instructions, String input, String modelConnectionId) {
+    return propose(instructions, input);
+  }
+
   record Reply(String text, String modelName, Integer inputTokens, Integer outputTokens) {}
 }

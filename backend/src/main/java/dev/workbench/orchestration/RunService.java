@@ -69,6 +69,7 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
       dev.workbench.task.CostService costs,
       EntryRouteService entryRoutes,
       WorkspaceAuthorizationService workspaceAuthorization,
+      dev.workbench.modelconnection.ModelConnectionService modelConnections,
       @org.springframework.beans.factory.annotation.Qualifier("workflowRunExecutor")
           ExecutorService executor) {
     this.runs = runs;
@@ -141,7 +142,8 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
             entryRoutes,
             workspaceAuthorization,
             workflows,
-            dispatch);
+            dispatch,
+            modelConnections);
   }
 
   /** 兼容只构造队列控制边界的单元测试；入口路由、目录授权和费用在完整上下文中由 Spring 注入。 */
@@ -184,6 +186,7 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
         entryPolicies,
         contexts,
         workflows,
+        null,
         null,
         null,
         null,

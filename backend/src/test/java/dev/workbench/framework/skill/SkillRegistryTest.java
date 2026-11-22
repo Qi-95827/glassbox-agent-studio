@@ -18,12 +18,12 @@ class SkillRegistryTest {
     assertEquals(SkillId.REVIEW_EVIDENCE, review.id());
     assertEquals(1, analysis.version());
     assertEquals(
-        "6b36011207aa95035cc31fc4c2af8fe4d945d15c273d14cd23ae72df515ad6e5",
+        "d6923a24aae310d14bc2d0d7a0f1c8b25ad6a37c463084732570f2d7cbee96c9",
         analysis.contentSha256());
     assertEquals(
-        "897f4828e422ab24d9db3cefd33aafaef8f24760df7a5a5b5b3287e2ee6a1cfd", coding.contentSha256());
+        "04dfcf9aa557322bf824f76b3e36a38f8dbe9472459a3da15ad1e8c52261ecd5", coding.contentSha256());
     assertEquals(
-        "c6a53ee69a370fac294d1eeea6adc681fb7fb3411554ed1204562e123c106424", review.contentSha256());
+        "ed02780c7e9c5723d101eff98fa829cef0e92b0f141e9907ab87d780dad83955", review.contentSha256());
   }
 
   @Test

@@ -4,5 +4,6 @@
 .idea/
 .vscode/
 /config/deepseek-api-key.txt
+/config/master.key
 /frontend/user-workbench/node_modules/
 /frontend/user-workbench/dist/

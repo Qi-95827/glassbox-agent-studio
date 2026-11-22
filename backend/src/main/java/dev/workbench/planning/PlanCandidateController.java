@@ -53,7 +53,8 @@ public class PlanCandidateController {
       String expectedInputSha256,
       int expectedInputVersion,
       String modelMode,
-      Long maxCostMicros) {}
+      Long maxCostMicros,
+      String modelConnectionId) {}
 
   /** 确认候选并创建唯一运行；请求必须携带确认时看到的候选与输入摘要。 */
   @PostMapping("/api/plan-candidates/{id}/runs")
@@ -66,6 +67,7 @@ public class PlanCandidateController {
             request.expectedInputSha256(),
             request.expectedInputVersion(),
             request.modelMode(),
-            request.maxCostMicros()));
+            request.maxCostMicros(),
+            request.modelConnectionId()));
   }
 }

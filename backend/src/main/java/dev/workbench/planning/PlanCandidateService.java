@@ -43,6 +43,7 @@ public class PlanCandidateService {
       TransactionTemplate tx,
       dev.workbench.ownership.OwnershipService ownership,
       dev.workbench.privateagent.PrivateAgentCatalog privateAgents,
+      dev.workbench.modelconnection.ModelConnectionService modelConnections,
       CandidateBudgetValidator budgetValidator,
       @org.springframework.beans.factory.annotation.Qualifier("planningExecutor")
           ExecutorService executor) {
@@ -59,6 +60,7 @@ public class PlanCandidateService {
             scopes,
             ownership,
             privateAgents,
+            modelConnections,
             json,
             tx,
             executor);
@@ -71,8 +73,46 @@ public class PlanCandidateService {
             taskCreations,
             runs,
             records,
+            modelConnections,
             budgetValidator,
             tx);
+  }
+
+  /** 兼容不使用 BYOK 的旧单元测试构造；生产装配必须显式传入连接服务。 */
+  public PlanCandidateService(
+      PlanCandidateRepository store,
+      PlanCandidateValidator validator,
+      dev.workbench.framework.planning.PlanCandidateModel model,
+      ExecutionScopeResolver scopes,
+      WorkspaceService workspaces,
+      WorkspaceAuthorizationService workspaceAuthorization,
+      CandidateRunPersister taskCreations,
+      CandidateRunDispatcher runs,
+      PlanningRunReader records,
+      ObjectMapper json,
+      TransactionTemplate tx,
+      dev.workbench.ownership.OwnershipService ownership,
+      dev.workbench.privateagent.PrivateAgentCatalog privateAgents,
+      CandidateBudgetValidator budgetValidator,
+      @org.springframework.beans.factory.annotation.Qualifier("planningExecutor")
+          ExecutorService executor) {
+    this(
+        store,
+        validator,
+        model,
+        scopes,
+        workspaces,
+        workspaceAuthorization,
+        taskCreations,
+        runs,
+        records,
+        json,
+        tx,
+        ownership,
+        privateAgents,
+        null,
+        budgetValidator,
+        executor);
   }
 
   public record GenerateRequest(
@@ -123,7 +163,24 @@ public class PlanCandidateService {
       String expectedInputSha256,
       int expectedInputVersion,
       String modelMode,
-      Long maxCostMicros) {}
+      Long maxCostMicros,
+      String modelConnectionId) {
+    /** 兼容未使用自带 Key 的旧调用。 */
+    public ConfirmRequest(
+        String expectedCandidateSha256,
+        String expectedInputSha256,
+        int expectedInputVersion,
+        String modelMode,
+        Long maxCostMicros) {
+      this(
+          expectedCandidateSha256,
+          expectedInputSha256,
+          expectedInputVersion,
+          modelMode,
+          maxCostMicros,
+          null);
+    }
+  }
 
   public record Confirmed(String runId, String taskId, String workspaceId) {}
 

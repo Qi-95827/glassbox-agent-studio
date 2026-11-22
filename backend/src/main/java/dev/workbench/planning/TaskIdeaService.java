@@ -21,10 +21,15 @@ public class TaskIdeaService {
       dev.workbench.framework.prompt.PromptResourceLoader.load("planning/task-idea.md");
   private final TaskIdeaModel model;
   private final ObjectMapper json;
+  private final dev.workbench.modelconnection.ModelConnectionService connections;
 
-  public TaskIdeaService(TaskIdeaModel model, ObjectMapper json) {
+  public TaskIdeaService(
+      TaskIdeaModel model,
+      ObjectMapper json,
+      dev.workbench.modelconnection.ModelConnectionService connections) {
     this.model = model;
     this.json = json;
+    this.connections = connections;
   }
 
   public enum DraftMode {
@@ -43,15 +48,26 @@ public class TaskIdeaService {
       List<String> suggestedFiles) {}
 
   public Draft draft(String idea, DraftMode mode) {
+    return draft(idea, mode, null);
+  }
+
+  public Draft draft(String idea, DraftMode mode, String modelConnectionId) {
     if (idea == null || idea.isBlank() || idea.length() > 2500)
       throw new IllegalArgumentException("请输入 1 至 2500 字的任务想法。");
     String input = idea.strip();
     if (mode == null || mode == DraftMode.LOCAL) return local(input);
+    String connectionId = null;
+    if (connections != null) {
+      if (modelConnectionId != null && !modelConnectionId.isBlank())
+        connectionId = connections.requireEnabledOwned(modelConnectionId);
+      // 未显式选择时优先使用当前用户的默认自带 Key 连接；没有才回退本机密钥文件。
+      else connectionId = connections.defaultConnectionId().orElse(null);
+    }
     try {
       Draft draft =
           json.readerFor(Draft.class)
               .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-              .readValue(model.draft(INSTRUCTIONS, input));
+              .readValue(model.draft(INSTRUCTIONS, input, connectionId));
       if (draft == null || draft.entryKind() == null || draft.entryKind() == TaskEntryKind.BUG)
         throw new IllegalArgumentException("任务入口无效。");
       List<String> constraints = items(draft.constraints());

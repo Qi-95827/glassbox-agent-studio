@@ -23,7 +23,40 @@ public record PlanCandidateInput(
     String manualAgentId,
     Integer manualAgentVersion,
     List<String> candidateAgentIds,
-    boolean readOnly) {
+    boolean readOnly,
+    String modelConnectionId) {
+  /** 兼容未选择自带 Key 连接的旧候选与客户端。 */
+  public PlanCandidateInput(
+      String goal,
+      TaskEntryKind entryKind,
+      String workspaceId,
+      boolean writeEnabled,
+      List<String> fileScopes,
+      List<String> constraints,
+      List<String> acceptanceCriteria,
+      String deliverable,
+      String agentMode,
+      String manualAgentId,
+      Integer manualAgentVersion,
+      List<String> candidateAgentIds,
+      boolean readOnly) {
+    this(
+        goal,
+        entryKind,
+        workspaceId,
+        writeEnabled,
+        fileScopes,
+        constraints,
+        acceptanceCriteria,
+        deliverable,
+        agentMode,
+        manualAgentId,
+        manualAgentVersion,
+        candidateAgentIds,
+        readOnly,
+        null);
+  }
+
   private static final int MAX_ITEMS = 10;
   private static final int MAX_ITEM_LENGTH = 300;
 
@@ -90,11 +123,37 @@ public record PlanCandidateInput(
     if ("RECOMMEND".equals(agentMode) && candidateAgentIds.isEmpty())
       throw new IllegalArgumentException("允许规划器推荐时至少勾选一个私有 Agent。");
     if (candidateAgentIds.size() > 8) throw new IllegalArgumentException("候选 Agent 最多 8 个。");
+    modelConnectionId =
+        modelConnectionId == null || modelConnectionId.isBlank()
+            ? null
+            : modelConnectionId.strip();
+    if (modelConnectionId != null && !modelConnectionId.matches("[A-Za-z0-9-]{1,36}"))
+      throw new IllegalArgumentException("模型连接标识无效。");
   }
 
   /** 已确认的授权快照；模型节点只能引用其中的文件。 */
   public List<String> authorizedFiles() {
     return fileScopes;
+  }
+
+  /** 冻结本次规划实际使用的连接；显式选择与默认回退走同一条路径。 */
+  public PlanCandidateInput withModelConnection(String connectionId) {
+    if (java.util.Objects.equals(modelConnectionId, connectionId)) return this;
+    return new PlanCandidateInput(
+        goal,
+        entryKind,
+        workspaceId,
+        writeEnabled,
+        fileScopes,
+        constraints,
+        acceptanceCriteria,
+        deliverable,
+        agentMode,
+        manualAgentId,
+        manualAgentVersion,
+        candidateAgentIds,
+        readOnly,
+        connectionId);
   }
 
   /** 输入摘要进入候选摘要；同一内容的重复请求得到同一指纹。 */
@@ -121,6 +180,8 @@ public record PlanCandidateInput(
       for (String id : candidateAgentIds) digest.field(id);
       digest.field(readOnly ? "read-only" : "write");
     }
+    // 未选择自带 Key 时保持历史输入摘要不变，旧候选仍可读取和校验。
+    if (modelConnectionId != null) digest.field(modelConnectionId);
     return digest.hex();
   }
 

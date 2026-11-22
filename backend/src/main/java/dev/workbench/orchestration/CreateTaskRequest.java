@@ -42,7 +42,8 @@ public record CreateTaskRequest(
     Map<String, WorkflowNodeBudget> nodeBudgets,
     List<String> directoryScopes,
     List<String> excludedPaths,
-    Long maxCostMicros) {
+    Long maxCostMicros,
+    String modelConnectionId) {
 
   /**
    * 兼容历史测试调用点的前缀参数写法。
@@ -81,7 +82,8 @@ public record CreateTaskRequest(
         cast(values, 24, Map.class),
         cast(values, 25, List.class),
         cast(values, 26, List.class),
-        longValue(values, 27));
+        longValue(values, 27),
+        text(values, 28));
   }
 
   public static Builder builder() {
@@ -89,9 +91,9 @@ public record CreateTaskRequest(
   }
 
   private static Object[] validated(Object[] values) {
-    if (values != null && values.length > 28)
+    if (values != null && values.length > 29)
       throw new IllegalArgumentException(
-          "CreateTaskRequest 参数过多：" + values.length + "（最多 28 个，请改用 builder()）。");
+          "CreateTaskRequest 参数过多：" + values.length + "（最多 29 个，请改用 builder()）。");
     return values;
   }
 
@@ -160,6 +162,7 @@ public record CreateTaskRequest(
     private List<String> directoryScopes;
     private List<String> excludedPaths;
     private Long maxCostMicros;
+    private String modelConnectionId;
 
     public Builder goal(String value) {
       goal = value;
@@ -285,6 +288,11 @@ public record CreateTaskRequest(
       return this;
     }
 
+    public Builder modelConnectionId(String value) {
+      modelConnectionId = value;
+      return this;
+    }
+
     public CreateTaskRequest build() {
       return new CreateTaskRequest(
           goal,
@@ -314,7 +322,8 @@ public record CreateTaskRequest(
           nodeBudgets,
           directoryScopes,
           excludedPaths,
-          maxCostMicros);
+          maxCostMicros,
+          modelConnectionId);
     }
   }
 }

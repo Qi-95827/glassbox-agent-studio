@@ -212,9 +212,12 @@ export const CHECK_STATUS_LABELS = {
 export const MODEL_LABELS = {
   mock: '模拟模型',
   deepseek: 'DeepSeek Flash',
+  user: '我的模型（自带 Key）',
   MOCK: '模拟模型',
   DEEPSEEK: 'DeepSeek Flash',
+  USER: '我的模型（自带 Key）',
   'deepseek-flash': 'DeepSeek Flash',
+  'user-connection': '我的模型（自带 Key）',
   deepseek_flash: 'DeepSeek Flash'
 };
 

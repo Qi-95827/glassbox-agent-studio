@@ -36,6 +36,7 @@ class PlanCandidateGenerationService {
   private final ExecutionScopeResolver scopes;
   private final dev.workbench.ownership.OwnershipService ownership;
   private final dev.workbench.privateagent.PrivateAgentCatalog privateAgents;
+  private final dev.workbench.modelconnection.ModelConnectionService connections;
   private final ObjectMapper json;
   private final TransactionTemplate tx;
   private final ExecutorService executor;
@@ -51,6 +52,7 @@ class PlanCandidateGenerationService {
       ExecutionScopeResolver scopes,
       dev.workbench.ownership.OwnershipService ownership,
       dev.workbench.privateagent.PrivateAgentCatalog privateAgents,
+      dev.workbench.modelconnection.ModelConnectionService connections,
       ObjectMapper json,
       TransactionTemplate tx,
       ExecutorService executor) {
@@ -61,6 +63,7 @@ class PlanCandidateGenerationService {
     this.scopes = scopes;
     this.ownership = ownership;
     this.privateAgents = privateAgents;
+    this.connections = connections;
     this.json = json;
     this.tx = tx;
     this.executor = executor;
@@ -77,6 +80,13 @@ class PlanCandidateGenerationService {
     PlanCandidateInput input = Objects.requireNonNull(request.input(), "任务输入不能为空");
     ExecutionScope scope = scopes.current();
     if (input.workspaceId() != null) ownership.requireWorkspace(input.workspaceId());
+    String planningConnection = connections == null ? null : input.modelConnectionId();
+    if (planningConnection != null)
+      planningConnection = connections.requireEnabledOwned(planningConnection);
+    else if (connections != null)
+      planningConnection = connections.defaultConnectionId().orElse(null);
+    if (planningConnection != null && input.modelConnectionId() == null)
+      input = input.withModelConnection(planningConnection);
     String requestId = requestId(request.requestId());
     String inputSha = input.sha256();
     var existing = store.findByRequestId(scope.ownerScopeKey(), requestId);
@@ -225,7 +235,9 @@ class PlanCandidateGenerationService {
     PlanCandidateModel.Reply reply = null;
     try {
       PlanningAgentSnapshot planning = store.readPlanning(row.getAgentAliasesJson());
-      reply = model.propose(INSTRUCTIONS, planningInput(input, planning));
+      reply =
+          model.propose(
+              INSTRUCTIONS, planningInput(input, planning), input.modelConnectionId());
       if (reply.text() == null || reply.text().length() > 200_000)
         throw new IllegalStateException("模型返回内容为空或超出计划容量。");
       PlanCandidateDraft draft =

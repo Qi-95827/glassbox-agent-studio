@@ -7,15 +7,20 @@ import {
   Chip,
   Divider,
   FormControlLabel,
+  ListSubheader,
   MenuItem,
   Stack,
   TextField,
   Typography
 } from '@mui/material';
 import AutoAwesomeOutlined from '@mui/icons-material/AutoAwesomeOutlined';
+import AddRounded from '@mui/icons-material/AddRounded';
+import { useNavigate } from 'react-router-dom';
 import WorkbenchDialog from '../../components/WorkbenchDialog';
 import { tasksApi } from '../../api/tasks';
 import { workspacesApi } from '../../api/workspaces';
+import { modelSelectionLabel, parseModelValue } from '../../api/modelConnections';
+import { useModelConnections } from '../../hooks/useModelConnections';
 import { ENTRY_KINDS } from '../../constants/labels';
 import { splitLines } from '../../utils/format';
 import PlanCandidateDialog from './PlanCandidateDialog';
@@ -27,14 +32,21 @@ export default function TaskIdeaDialog({
   open,
   initialIdea = '',
   initialModelMode = 'mock',
+  initialModelConnectionId = null,
   onClose,
   onCreated,
   onManual
 }) {
+  const navigate = useNavigate();
+  const connections = useModelConnections(open);
   const [idea, setIdea] = useState('');
-  const [mode, setMode] = useState('DEEPSEEK');
+  const [mode, setMode] = useState('LOCAL');
   const [form, setForm] = useState(null);
-  const [modelMode, setModelMode] = useState('mock');
+  const [modelValue, setModelValue] = useState('mock');
+  const connectionList = connections.data?.connections ?? [];
+  const legacyDeepSeek = (connections.data?.builtIns ?? []).some(
+    item => item.id === 'legacy-deepseek'
+  );
   const [reviewPlan, setReviewPlan] = useState(true);
   const [draftStatus, setDraftStatus] = useState({ phase: null, error: '' });
   const [draftMeta, setDraftMeta] = useState({ prepared: null, idea: null });
@@ -64,12 +76,18 @@ export default function TaskIdeaDialog({
   const generate = useCallback(
     async (overrideIdea, overrideMode) => {
       const targetIdea = (overrideIdea ?? idea).trim();
-      const targetMode = overrideMode ?? mode;
+      const selected = overrideMode ?? mode;
       if (!targetIdea) return;
+      const targetMode = selected === 'LOCAL' ? 'LOCAL' : 'DEEPSEEK';
+      const selectedConnection = parseModelValue(selected);
       setPhase('draft');
       setError('');
       try {
-        const draft = await tasksApi.draftIdea({ idea: targetIdea, mode: targetMode });
+        const draft = await tasksApi.draftIdea({
+          idea: targetIdea,
+          mode: targetMode,
+          modelConnectionId: selectedConnection.modelConnectionId
+        });
         setForm({
           entryKind: draft.entryKind,
           goal: draft.goal,
@@ -81,7 +99,13 @@ export default function TaskIdeaDialog({
           questions: draft.questions
         });
         setDraftIdea(targetIdea);
-        setModelMode(targetMode === 'DEEPSEEK' ? 'deepseek' : 'mock');
+        setModelValue(
+          selectedConnection.modelConnectionId
+            ? selected
+            : targetMode === 'DEEPSEEK'
+              ? 'deepseek'
+              : 'mock'
+        );
       } catch (failure) {
         setError(failure.message);
       } finally {
@@ -99,12 +123,17 @@ export default function TaskIdeaDialog({
     const incoming = initialIdea.trim();
     if (!incoming || incoming === lastAutoIdeaRef.current) return;
     lastAutoIdeaRef.current = incoming;
-    const nextMode = initialModelMode === 'deepseek' ? 'DEEPSEEK' : 'LOCAL';
+    const value = initialModelConnectionId
+      ? `user:${initialModelConnectionId}`
+      : initialModelMode === 'deepseek'
+        ? 'deepseek'
+        : 'mock';
+    const nextMode = value === 'mock' ? 'LOCAL' : value;
     setIdea(incoming);
     setMode(nextMode);
-    setModelMode(initialModelMode === 'deepseek' ? 'deepseek' : 'mock');
+    setModelValue(value);
     generate(incoming, nextMode);
-  }, [open, initialIdea, initialModelMode, generate]);
+  }, [open, initialIdea, initialModelMode, initialModelConnectionId, generate]);
 
   function taskInput() {
     if (!form) throw new Error('请先整理想法或手动填写。');
@@ -122,12 +151,14 @@ export default function TaskIdeaDialog({
     ) {
       throw new Error('约束（含交付物）及验收条件各最多 10 条，每条最多 300 字。');
     }
+    const selection = parseModelValue(modelValue);
     return {
       goal: form.goal.trim(),
       entryKind: form.entryKind,
       constraints,
       acceptanceCriteria,
-      modelMode,
+      modelMode: selection.modelMode,
+      modelConnectionId: selection.modelConnectionId,
       reviewPlan
     };
   }
@@ -200,12 +231,30 @@ export default function TaskIdeaDialog({
             size="small"
             label="整理方式"
             value={mode}
-            onChange={event => setMode(event.target.value)}
+            onChange={event => {
+              if (event.target.value === '__configure') {
+                onClose?.();
+                navigate('/settings');
+                return;
+              }
+              setMode(event.target.value);
+            }}
             disabled={busy}
-            sx={{ minWidth: 160 }}
+            sx={{ minWidth: 220 }}
           >
-            <MenuItem value="DEEPSEEK">DeepSeek</MenuItem>
-            <MenuItem value="LOCAL">本地规则</MenuItem>
+            <ListSubheader>内置免 Key</ListSubheader>
+            <MenuItem value="LOCAL">本地规则（不调用模型）</MenuItem>
+            {legacyDeepSeek && <MenuItem value="deepseek">DeepSeek Flash（本机密钥文件）</MenuItem>}
+            <ListSubheader>我的模型（自带 Key）</ListSubheader>
+            {connectionList.map(connection => (
+              <MenuItem key={connection.id} value={`user:${connection.id}`}>
+                {connection.displayName} · {connection.modelName}
+              </MenuItem>
+            ))}
+            <Divider />
+            <MenuItem value="__configure">
+              <AddRounded fontSize="small" sx={{ mr: 1 }} /> + 配置我的 API Key
+            </MenuItem>
           </TextField>
           <Button
             variant={form ? 'outlined' : 'contained'}
@@ -220,9 +269,10 @@ export default function TaskIdeaDialog({
             {form ? '填入完整表单' : '手动填写任务'}
           </Button>
         </Stack>
-        {mode === 'DEEPSEEK' && (
+        {mode !== 'LOCAL' && (
           <Typography variant="caption" color="text.secondary">
-            点击整理会将上方想法发送给 DeepSeek，可能产生费用。
+            点击整理会把上方想法发送给「{modelSelectionLabel(connections.data, mode)}」， 使用自带
+            Key 时费用由你的服务商结算。
           </Typography>
         )}
         {error && <Alert severity="error">{error}</Alert>}
@@ -254,12 +304,32 @@ export default function TaskIdeaDialog({
                 fullWidth
                 size="small"
                 label="执行模型"
-                value={modelMode}
+                value={modelValue}
                 disabled={busy}
-                onChange={event => setModelMode(event.target.value)}
+                onChange={event => {
+                  if (event.target.value === '__configure') {
+                    onClose?.();
+                    navigate('/settings');
+                    return;
+                  }
+                  setModelValue(event.target.value);
+                }}
               >
-                <MenuItem value="mock">模拟模型</MenuItem>
-                <MenuItem value="deepseek">DeepSeek Flash</MenuItem>
+                <ListSubheader>内置免 Key 模型</ListSubheader>
+                <MenuItem value="mock">模拟模型（免 Key）</MenuItem>
+                {legacyDeepSeek && (
+                  <MenuItem value="deepseek">DeepSeek Flash（本机密钥文件）</MenuItem>
+                )}
+                <ListSubheader>我的模型（自带 Key）</ListSubheader>
+                {connectionList.map(connection => (
+                  <MenuItem key={connection.id} value={`user:${connection.id}`}>
+                    {connection.displayName} · {connection.modelName}
+                  </MenuItem>
+                ))}
+                <Divider />
+                <MenuItem value="__configure">
+                  <AddRounded fontSize="small" sx={{ mr: 1 }} /> + 配置我的 API Key
+                </MenuItem>
               </TextField>
             </Stack>
             <TextField
@@ -401,7 +471,8 @@ export default function TaskIdeaDialog({
             fileScopes: files,
             constraints: splitLines(form.constraints),
             acceptanceCriteria: splitLines(form.acceptance),
-            deliverable: form.deliverable.trim() || null
+            deliverable: form.deliverable.trim() || null,
+            modelConnectionId: parseModelValue(modelValue).modelConnectionId
           }}
         />
       )}

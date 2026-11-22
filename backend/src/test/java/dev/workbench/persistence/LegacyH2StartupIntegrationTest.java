@@ -41,7 +41,19 @@ class LegacyH2StartupIntegrationTest {
   String datasourceUrl;
 
   static boolean legacyCopyAvailable() {
-    return Files.exists(SOURCE);
+    if (!Files.exists(SOURCE)) return false;
+    // 运行中的应用会锁住 H2 文件；探测能否复制，不能复制时跳过历史副本用例。
+    try {
+      Path probe = Files.createTempFile("agent-workbench-legacy-h2-probe-", ".mv.db");
+      try {
+        Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
+      } finally {
+        Files.deleteIfExists(probe);
+      }
+      return true;
+    } catch (java.io.IOException unavailable) {
+      return false;
+    }
   }
 
   @DynamicPropertySource

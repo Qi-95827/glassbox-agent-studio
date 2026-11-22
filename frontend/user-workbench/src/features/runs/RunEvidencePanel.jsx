@@ -1,6 +1,7 @@
 import { Alert, Box, Stack, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { runsApi } from '../../api/runs';
+import { modelConnectionsApi } from '../../api/modelConnections';
 import { TraceSection } from '../../components/WorkbenchDialog';
 import StatusChip from '../../components/StatusChip';
 import { SKILL_NAMES, TOOL_NAMES } from '../../constants/labels';
@@ -18,14 +19,16 @@ export default function RunEvidencePanel({ runId, detail }) {
   const evidence = useQuery({
     queryKey: ['run-evidence', runId],
     queryFn: async () => {
-      const [metrics, skills, memoryLoad, grants, sessions] = await Promise.all([
+      const [metrics, skills, memoryLoad, grants, sessions, estimate] = await Promise.all([
         runsApi.agentMetrics(runId),
         runsApi.skills(runId),
         runsApi.memoryLoad(runId),
         runsApi.toolGrants(runId),
-        runsApi.agentSessions(runId)
+        runsApi.agentSessions(runId),
+        // 历史运行或没有自带 Key 时估算不可用，不应拖垮其余证据读取。
+        modelConnectionsApi.estimateRun(runId).catch(() => null)
       ]);
-      return { metrics, skills, memoryLoad, grants, sessions };
+      return { metrics, skills, memoryLoad, grants, sessions, estimate };
     },
     enabled: Boolean(runId)
   });
@@ -36,6 +39,7 @@ export default function RunEvidencePanel({ runId, detail }) {
   const grants = data?.grants ?? [];
   const sessions = data?.sessions ?? [];
   const memory = data?.memoryLoad;
+  const estimate = data?.estimate;
   const handoffs = detail?.handoffs ?? [];
 
   return (
@@ -84,6 +88,46 @@ export default function RunEvidencePanel({ runId, detail }) {
                 </Box>
               ))}
             </Stack>
+          )}
+        </TraceSection>
+
+        <TraceSection
+          title="费用估算"
+          subtitle={
+            estimate?.byok
+              ? `${estimate.connectionName || '自带 Key 模型'} · ${estimate.label}`
+              : '未使用自带 Key 模型'
+          }
+        >
+          {estimate?.byok ? (
+            <Stack spacing={0.35}>
+              <Typography variant="caption" color="text.secondary">
+                模型 {estimate.modelName} · 输入 {estimate.inputTokens} Token · 输出{' '}
+                {estimate.outputTokens} Token
+                {estimate.unknownTokenCalls
+                  ? ` · ${estimate.unknownTokenCalls} 次调用用量未知`
+                  : ''}
+              </Typography>
+              {estimate.priced ? (
+                <Typography variant="body2">
+                  参考估算：{estimate.estimatedCost} {estimate.currency}
+                  {'（输入 '}
+                  {estimate.inputPricePer1m ?? 0} / 输出 {estimate.outputPricePer1m ?? 0} 每百万
+                  Token）
+                </Typography>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  未设参考单价（不扣平台费用）；Token 统计仍以服务端记录为准。
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                费用由你的模型服务商结算，这里只用于本机预算提示。
+              </Typography>
+            </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              此运行使用内置模型或历史记录，不产生自带 Key 参考估算。
+            </Typography>
           )}
         </TraceSection>
 

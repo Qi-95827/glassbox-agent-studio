@@ -125,6 +125,7 @@ public class TaskRecordService {
     row.put("ENTRY_KIND", task.entryKind());
     row.put("FILE_SCOPES_JSON", task.fileScopesJson());
     row.put("VERSION", task.version());
+    row.put("MODEL_CONNECTION_ID", task.modelConnectionId());
     return row;
   }
 
@@ -161,7 +162,8 @@ public class TaskRecordService {
         TaskEntryKind.valueOf(task.entryKind()),
         fileScopes,
         roleBudgets(id),
-        toolBudgets(id));
+        toolBudgets(id),
+        task.modelConnectionId());
   }
 
   /** 读取任务角色策略；未知版本或角色不能当作未设置。 */
@@ -239,7 +241,8 @@ public class TaskRecordService {
       List<String> constraints,
       List<String> acceptanceCriteria,
       TaskEntryKind entryKind,
-      List<String> fileScopes) {
+      List<String> fileScopes,
+      String modelConnectionId) {
     TaskEntity task = new TaskEntity();
     task.setId(id);
     task.setGoal(goal);
@@ -255,6 +258,7 @@ public class TaskRecordService {
     task.setAcceptanceJson(writeTextList(acceptanceCriteria));
     task.setEntryKind(entryKind.name());
     task.setFileScopesJson(writeTextList(fileScopes));
+    task.setModelConnectionId(modelConnectionId);
     taskRows.save(task);
     if (ownership != null) ownership.stamp(dev.workbench.ownership.OwnershipService.TASK, id);
   }
@@ -274,7 +278,8 @@ public class TaskRecordService {
         task.constraints(),
         task.acceptanceCriteria(),
         task.entryKind(),
-        task.fileScopes());
+        task.fileScopes(),
+        task.modelConnectionId());
     for (var entry : task.roleBudgets().entrySet()) {
       roleBudgetRows.save(
           new TaskRoleBudgetEntity(

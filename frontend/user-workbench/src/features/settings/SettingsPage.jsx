@@ -1,13 +1,26 @@
 import { useState } from 'react';
-import { Alert, Box, Button, Chip, Divider, Stack, Typography } from '@mui/material';
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Divider,
+  Stack,
+  Typography
+} from '@mui/material';
+import ExpandMoreRounded from '@mui/icons-material/ExpandMoreRounded';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthGate';
 import { usePageChrome } from '../../layout/pageChrome';
 import { evaluationApi } from '../../api/evaluations';
 import CostPricePanel from '../workflows/CostPricePanel';
+import ModelConnectionPanel from './ModelConnectionPanel';
 import { googleTokens } from '../../theme/googleTheme';
 
-/** 设置：账号、环境边界、自检与价格版本。 */
+/** 设置：账号、模型与 API Key、环境边界、自检与高级价格版本。 */
 export default function SettingsPage() {
   const { user, logout, loggingOut } = useAuth();
   const navigate = useNavigate();
@@ -34,7 +47,7 @@ export default function SettingsPage() {
           设置
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          账号、环境边界与本机自检。密钥与运行时凭据不会在页面回显。
+          账号、模型与 API Key、环境边界与本机自检。密钥只显示掩码，不会在页面回显明文。
         </Typography>
 
         <Stack spacing={2}>
@@ -75,6 +88,8 @@ export default function SettingsPage() {
             </Button>
           </Box>
 
+          <ModelConnectionPanel />
+
           <Box
             sx={{
               bgcolor: '#FFFFFF',
@@ -89,7 +104,7 @@ export default function SettingsPage() {
                 服务端：同源 <code>/api</code>，开发环境代理到 <code>127.0.0.1:8088</code>。
               </Typography>
               <Typography variant="body2">
-                模型：模拟模型与 DeepSeek Flash 分开标示；选择真实模型可能产生费用。
+                模型：模拟模型与真实模型分开标示；使用自带 Key 时费用由你的服务商结算。
               </Typography>
               <Typography variant="body2">
                 工作区：仅可信本地仓库；工作区不是代码执行沙箱，写入需要逐任务授权。
@@ -147,8 +162,32 @@ export default function SettingsPage() {
               p: 2.5
             }}
           >
-            <CostPricePanel />
-            <Divider sx={{ my: 2 }} />
+            <Accordion
+              disableGutters
+              sx={{
+                border: 'none',
+                bgcolor: 'transparent',
+                '&:before': { display: 'none' }
+              }}
+            >
+              <AccordionSummary
+                expandIcon={<ExpandMoreRounded fontSize="small" />}
+                sx={{ px: 0, minHeight: 40, '& .MuiAccordionSummary-content': { my: 0.5 } }}
+              >
+                <Box>
+                  <Typography sx={{ fontSize: 14, fontWeight: 600 }}>
+                    高级：平台内置模型价格版本
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    只影响平台内置模拟 / DeepSeek 模型的预算与估算；使用自带 Key 时无需维护这里。
+                  </Typography>
+                </Box>
+              </AccordionSummary>
+              <AccordionDetails sx={{ px: 0, pt: 0 }}>
+                <CostPricePanel />
+              </AccordionDetails>
+            </Accordion>
+            <Divider sx={{ my: 1.5 }} />
             <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.5 }}>关于前端重构</Typography>
             <Typography variant="caption" color="text.secondary">
               React 19 + Vite + MUI + React Flow + TanStack Query + React Router。全站使用 Google M3

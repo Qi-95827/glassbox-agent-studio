@@ -97,7 +97,8 @@ final class RunReviewCoordinator {
                 null,
                 runtimeFor(state.runId, reviewerId, state),
                 reviewDefinition.reference(),
-                reviewDefinition.sha256()));
+                reviewDefinition.sha256())
+            .withModelConnection(state.task.modelConnectionId()));
     if (review.length() > 1900) review = review.substring(0, 1890) + "…（结果已截断）";
     Handoff reviewResult =
         handoffs.attachTestChecks(
@@ -113,9 +114,11 @@ final class RunReviewCoordinator {
                 review,
                 state.evidenceRun,
                 evidence.toolEvidence(state.evidenceRun),
-                state.task.modelMode() == ModelMode.DEEPSEEK
-                    ? HandoffSource.DEEPSEEK_FLASH
-                    : HandoffSource.MOCK_MODEL,
+                switch (state.task.modelMode()) {
+                  case DEEPSEEK -> HandoffSource.DEEPSEEK_FLASH;
+                  case USER -> HandoffSource.MODEL_CONNECTION;
+                  case MOCK -> HandoffSource.MOCK_MODEL;
+                },
                 null),
             state.initial,
             state.regression);

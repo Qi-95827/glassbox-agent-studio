@@ -20,7 +20,44 @@ public record TaskDefinition(
     TaskEntryKind entryKind,
     List<String> fileScopes,
     Map<AgentRole, RoleBudget> roleBudgets,
-    Map<ToolKind, Integer> toolBudgets) {
+    Map<ToolKind, Integer> toolBudgets,
+    String modelConnectionId) {
+  /** 兼容未绑定用户模型连接的任务。 */
+  public TaskDefinition(
+      UUID id,
+      String goal,
+      Scenario scenario,
+      ModelMode modelMode,
+      String workspaceId,
+      String fileScope,
+      boolean writeEnabled,
+      String bugId,
+      boolean memoryEnabled,
+      List<String> constraints,
+      List<String> acceptanceCriteria,
+      TaskEntryKind entryKind,
+      List<String> fileScopes,
+      Map<AgentRole, RoleBudget> roleBudgets,
+      Map<ToolKind, Integer> toolBudgets) {
+    this(
+        id,
+        goal,
+        scenario,
+        modelMode,
+        workspaceId,
+        fileScope,
+        writeEnabled,
+        bugId,
+        memoryEnabled,
+        constraints,
+        acceptanceCriteria,
+        entryKind,
+        fileScopes,
+        roleBudgets,
+        toolBudgets,
+        null);
+  }
+
   /** 兼容尚未提供工具类型限额的任务。 */
   public TaskDefinition(
       UUID id,
@@ -129,5 +166,8 @@ public record TaskDefinition(
     if ((fileScopes.isEmpty() && fileScope != null)
         || (!fileScopes.isEmpty() && !fileScopes.getFirst().equals(fileScope)))
       throw new IllegalArgumentException("首个授权文件与文件集合不一致。");
+    if (modelConnectionId != null
+        && (modelMode != ModelMode.USER || !modelConnectionId.matches("[A-Za-z0-9-]{1,36}")))
+      throw new IllegalArgumentException("用户模型连接标识无效。");
   }
 }

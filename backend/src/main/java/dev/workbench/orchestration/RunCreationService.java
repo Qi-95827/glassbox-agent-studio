@@ -23,6 +23,7 @@ final class RunCreationService {
   private final WorkspaceAuthorizationService workspaceAuthorization;
   private final WorkflowScheduler workflows;
   private final RunDispatchService dispatcher;
+  private final dev.workbench.modelconnection.ModelConnectionService connections;
 
   RunCreationService(
       TaskCreationService taskCreations,
@@ -33,7 +34,8 @@ final class RunCreationService {
       EntryRouteService entryRoutes,
       WorkspaceAuthorizationService workspaceAuthorization,
       WorkflowScheduler workflows,
-      RunDispatchService dispatcher) {
+      RunDispatchService dispatcher,
+      dev.workbench.modelconnection.ModelConnectionService connections) {
     this.taskCreations = taskCreations;
     this.workspaces = workspaces;
     this.bugs = bugs;
@@ -43,6 +45,7 @@ final class RunCreationService {
     this.workspaceAuthorization = workspaceAuthorization;
     this.workflows = workflows;
     this.dispatcher = dispatcher;
+    this.connections = connections;
   }
 
   /** 创建一个个人示例任务并排队；不触发真实代码工具。 */
@@ -64,8 +67,36 @@ final class RunCreationService {
     }
     draft.scenario =
         Scenario.fromCode(request.scenario() == null ? "normal" : request.scenario());
-    draft.mode =
-        ModelMode.fromCode(request.modelMode() == null ? "mock" : request.modelMode());
+    String connectionId =
+        request.modelConnectionId() == null ? null : request.modelConnectionId().strip();
+    String requested =
+        request.modelMode() == null || request.modelMode().isBlank()
+            ? null
+            : request.modelMode().strip();
+    if (connections == null) {
+      // 兼容只构造队列边界的单元测试：没有 BYOK 服务时保持内置模式。
+      draft.mode = ModelMode.fromCode(requested == null ? "mock" : requested);
+      return;
+    }
+    if (connectionId != null && !connectionId.isEmpty()) {
+      draft.modelConnectionId = connections.requireEnabledOwned(connectionId);
+      draft.mode = ModelMode.USER;
+    } else if (requested == null) {
+      // 兼容旧客户端：未指定模型时优先使用当前用户的默认自带 Key 连接，否则回到 mock。
+      var fallback = connections.defaultConnectionId();
+      if (fallback.isPresent()) {
+        draft.modelConnectionId = fallback.get();
+        draft.mode = ModelMode.USER;
+      } else draft.mode = ModelMode.MOCK;
+    } else {
+      draft.mode = ModelMode.fromCode(requested);
+      if (draft.mode == ModelMode.USER)
+        draft.modelConnectionId =
+            connections
+                .defaultConnectionId()
+                .orElseThrow(
+                    () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"));
+    }
   }
 
   private void resolveWorkspace(CreateTaskRequest request, Draft draft) {
@@ -93,6 +124,8 @@ final class RunCreationService {
     draft.excludedPaths =
         request.excludedPaths() == null ? List.of() : request.excludedPaths();
     draft.maxCostMicros = request.maxCostMicros();
+    if (draft.mode == ModelMode.USER && draft.maxCostMicros != null)
+      throw new IllegalArgumentException("自带 Key 模型使用你自己的额度，平台费用硬预算仅适用于内置模型。");
     if (!draft.directoryScopes.isEmpty() && draft.workspaceId == null)
       throw new IllegalArgumentException("目录授权必须选择工作区。");
     if (!draft.excludedPaths.isEmpty() && draft.directoryScopes.isEmpty())
@@ -222,7 +255,8 @@ final class RunCreationService {
             draft.entryKind,
             draft.fileScopes,
             draft.roleBudgets,
-            draft.toolBudgets);
+            draft.toolBudgets,
+            draft.modelConnectionId);
     draft.limits =
         new RunLimits(
             request.maxRounds(),
@@ -250,7 +284,9 @@ final class RunCreationService {
     draft.createdMessage =
         draft.mode == ModelMode.DEEPSEEK
             ? "任务已创建：AgentScope 使用 DeepSeek Flash，可调用模拟工具。"
-            : "任务已创建：AgentScope 使用模拟模型和模拟工具。";
+            : draft.mode == ModelMode.USER
+                ? "任务已创建：使用你自带的模型连接与 API Key。"
+                : "任务已创建：AgentScope 使用模拟模型和模拟工具。";
   }
 
   private void persist(Draft draft) {
@@ -303,6 +339,7 @@ final class RunCreationService {
     String goal;
     Scenario scenario;
     ModelMode mode;
+    String modelConnectionId;
     String workspaceId;
     String fileScope;
     boolean hasFileList;

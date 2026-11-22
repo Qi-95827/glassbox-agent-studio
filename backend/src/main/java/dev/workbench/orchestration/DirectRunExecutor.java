@@ -236,7 +236,8 @@ final class DirectRunExecutor {
                 state.previousResult,
                 runtimeFor(state.runId, state.agentId, state.control),
                 analystDefinition.reference(),
-                analystDefinition.sha256()));
+                analystDefinition.sha256())
+            .withModelConnection(state.task.modelConnectionId()));
     if (answer.length() > 2000) answer = answer.substring(0, 1990) + "…（结果已截断）";
     state.answer = answer;
     state.evidenceRun = state.runId;
@@ -288,7 +289,8 @@ final class DirectRunExecutor {
                 null,
                 runtimeFor(state.runId, coderId, state.control),
                 coderDefinition.reference(),
-                coderDefinition.sha256()));
+                coderDefinition.sha256())
+            .withModelConnection(state.task.modelConnectionId()));
     if (answer.length() > 1900) answer = answer.substring(0, 1890) + "…（结果已截断）";
     state.answer = answer;
     Handoff codingResult =
@@ -306,9 +308,11 @@ final class DirectRunExecutor {
                 answer,
                 state.runId,
                 evidence.toolEvidence(state.runId),
-                state.task.modelMode() == ModelMode.DEEPSEEK
-                    ? HandoffSource.DEEPSEEK_FLASH
-                    : HandoffSource.MOCK_MODEL,
+                switch (state.task.modelMode()) {
+                  case DEEPSEEK -> HandoffSource.DEEPSEEK_FLASH;
+                  case USER -> HandoffSource.MODEL_CONNECTION;
+                  case MOCK -> HandoffSource.MOCK_MODEL;
+                },
                 null),
             state.initial);
     assemblyRecords.finishAgentWithResult(coderId, answer, codingResult);

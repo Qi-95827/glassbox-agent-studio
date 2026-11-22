@@ -25,7 +25,42 @@ public record AgentExecutionRequest(
     AgentRuntime runtime,
     AgentDefinitionRef definitionRef,
     String expectedDefinitionSha256,
-    List<String> writeFiles) {
+    List<String> writeFiles,
+    String modelConnectionId) {
+  /** 旧调用没有用户模型连接；保持内置 mock / deepseek 行为。 */
+  public AgentExecutionRequest(
+      AgentRole role,
+      String agentId,
+      AgentInput context,
+      String workspaceId,
+      List<String> fileScopes,
+      boolean writeEnabled,
+      Scenario scenario,
+      ModelMode modelMode,
+      CheckpointStage stage,
+      String previous,
+      AgentRuntime runtime,
+      AgentDefinitionRef definitionRef,
+      String expectedDefinitionSha256,
+      List<String> writeFiles) {
+    this(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeFiles,
+        null);
+  }
+
   /** 旧调用没有节点级写范围时，写入授权覆盖整个读取范围。 */
   public AgentExecutionRequest(
       AgentRole role,
@@ -165,7 +200,28 @@ public record AgentExecutionRequest(
         runtime,
         definitionRef,
         expectedDefinitionSha256,
-        writeFiles);
+        writeFiles,
+        modelMode == ModelMode.USER ? modelConnectionId : null);
+  }
+
+  public AgentExecutionRequest withModelConnection(String connectionId) {
+    if (java.util.Objects.equals(modelConnectionId, connectionId)) return this;
+    return new AgentExecutionRequest(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeFiles,
+        connectionId);
   }
 
   public AgentExecutionRequest {
@@ -187,6 +243,9 @@ public record AgentExecutionRequest(
     Objects.requireNonNull(modelMode, "模型模式不能为空");
     Objects.requireNonNull(stage, "检查点阶段不能为空");
     Objects.requireNonNull(runtime, "运行控制不能为空");
+    if (modelConnectionId != null
+        && (modelMode != ModelMode.USER || !modelConnectionId.matches("[A-Za-z0-9-]{1,36}")))
+      throw new IllegalArgumentException("用户模型连接标识无效。");
     if (expectedDefinitionSha256 != null
         && (definitionRef == null || !expectedDefinitionSha256.matches("[0-9a-f]{64}"))) {
       throw new IllegalArgumentException("计划中的 Agent 定义摘要无效。");

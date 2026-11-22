@@ -13,10 +13,11 @@ public class TaskIdeaController {
     this.ideas = ideas;
   }
 
-  public record IdeaRequest(String idea, TaskIdeaService.DraftMode mode) {}
+  public record IdeaRequest(
+      String idea, TaskIdeaService.DraftMode mode, String modelConnectionId) {}
 
   @PostMapping("/api/task-ideas/draft")
   TaskIdeaService.Draft draft(@RequestBody IdeaRequest request) {
-    return ideas.draft(request.idea(), request.mode());
+    return ideas.draft(request.idea(), request.mode(), request.modelConnectionId());
   }
 }

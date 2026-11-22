@@ -17,4 +17,5 @@ public record TaskData(
     String acceptanceJson,
     String entryKind,
     String fileScopesJson,
-    Integer version) {}
+    Integer version,
+    String modelConnectionId) {}

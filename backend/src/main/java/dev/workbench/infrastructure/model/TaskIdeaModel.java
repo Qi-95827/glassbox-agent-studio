@@ -1,5 +1,6 @@
 package dev.workbench.infrastructure.model;
 
+import dev.workbench.modelconnection.ModelConnectionService;
 import io.agentscope.core.formatter.ResponseFormat;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -12,8 +13,30 @@ import org.springframework.stereotype.Component;
 /** 整理草稿时只向模型发送用户文字，工具列表为空。 */
 @Component
 public class TaskIdeaModel {
+  private final ModelConnectionService connections;
+
+  /** 测试替身可继承并只覆盖两参数方法；生产装配使用带连接服务的构造器。 */
+  public TaskIdeaModel() {
+    this.connections = null;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public TaskIdeaModel(ModelConnectionService connections) {
+    this.connections = connections;
+  }
+
   public String draft(String instructions, String idea) {
-    var model = DeepSeekModelFactory.deepSeekModel();
+    return draft(instructions, idea, null);
+  }
+
+  /** 指定用户连接时使用其自带的 Key；未指定时沿用本地 DeepSeek 密钥文件兜底。 */
+  public String draft(String instructions, String idea, String connectionId) {
+    var model =
+        connectionId == null || connectionId.isBlank()
+            ? DeepSeekModelFactory.deepSeekModel()
+            : UserModelConnectionFactory.model(
+                java.util.Objects.requireNonNull(connections, "未配置用户模型连接服务。")
+                    .resolveForExecution(connectionId));
     try {
       var reply =
           model.stream(
@@ -31,7 +54,7 @@ public class TaskIdeaModel {
               .map(TextBlock::getText)
               .collect(Collectors.joining());
     } catch (RuntimeException e) {
-      throw new IllegalStateException("DeepSeek 草稿整理失败。可以重试或切换为本地规则整理。");
+      throw new IllegalStateException("模型草稿整理失败。可以重试或切换为本地规则整理。");
     }
   }
 }

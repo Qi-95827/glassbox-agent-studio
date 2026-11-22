@@ -8,6 +8,7 @@ import dev.workbench.framework.context.AgentInput;
 import dev.workbench.framework.model.AgentModelProvider;
 import dev.workbench.framework.model.ModelClient;
 import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
+import dev.workbench.modelconnection.ModelConnectionService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -50,6 +51,28 @@ class BuiltInModelProviders {
 
       public ModelClient create(AgentExecutionRequest request) {
         return new AgentScopeModelClient(DeepSeekModelFactory.deepSeekModel());
+      }
+
+      @Override
+      public boolean isRateLimitRejection(Throwable error) {
+        return DeepSeekModelFactory.isRateLimitRejection(error);
+      }
+    };
+  }
+
+  @Bean
+  AgentModelProvider userConnectionAgentModelProvider(ModelConnectionService connections) {
+    return new AgentModelProvider() {
+      public ModelMode mode() {
+        return ModelMode.USER;
+      }
+
+      public ModelClient create(AgentExecutionRequest request) {
+        if (request.modelConnectionId() == null || request.modelConnectionId().isBlank())
+          throw new IllegalStateException("所选任务没有绑定用户模型连接，请重新选择模型。");
+        return new AgentScopeModelClient(
+            UserModelConnectionFactory.model(
+                connections.resolveForExecution(request.modelConnectionId())));
       }
 
       @Override
