@@ -71,7 +71,9 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
       WorkspaceAuthorizationService workspaceAuthorization,
       dev.workbench.modelconnection.ModelConnectionService modelConnections,
       @org.springframework.beans.factory.annotation.Qualifier("workflowRunExecutor")
-          ExecutorService executor) {
+          ExecutorService executor,
+      dev.workbench.tool.ToolApprovalService approvals,
+      org.springframework.context.ApplicationEventPublisher publisher) {
     this.runs = runs;
     this.tasks = tasks;
     this.creation = creation;
@@ -127,7 +129,9 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
             commands,
             review,
             workspaceAuthorization,
-            costs);
+            costs,
+            approvals,
+            publisher);
     RunExecutionEngine engine =
         new RunExecutionEngine(runs, tasks, controls, workflows, commands, direct, stateLock);
     dispatch.setEngine(engine);
@@ -190,7 +194,9 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
         null,
         null,
         null,
-        executor);
+        executor,
+        null,
+        null);
   }
 
   /** 重启后不能假设此前未结束的调用已经成功。 */

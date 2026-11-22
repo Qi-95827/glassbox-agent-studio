@@ -23,12 +23,22 @@ public final class ToolGateway {
   private final ObjectMapper json;
   private final AgentRuntime runtime;
   private final AtomicReference<RuntimeException> failure;
+  private final ToolRiskPolicy riskPolicy;
 
   public ToolGateway(
       ObjectMapper json, AgentRuntime runtime, AtomicReference<RuntimeException> failure) {
+    this(json, runtime, failure, new ConservativeToolRiskPolicy());
+  }
+
+  public ToolGateway(
+      ObjectMapper json,
+      AgentRuntime runtime,
+      AtomicReference<RuntimeException> failure,
+      ToolRiskPolicy riskPolicy) {
     this.json = json;
     this.runtime = runtime;
     this.failure = failure;
+    this.riskPolicy = riskPolicy == null ? new ConservativeToolRiskPolicy() : riskPolicy;
   }
 
   /** 显式传入工具实现的服务端契约版本。 */
@@ -70,6 +80,40 @@ public final class ToolGateway {
       Function<T, String> summary,
       Runnable validate,
       Function<T, String> resourceVersion,
+      Callable<T> action) {
+    return execute(
+        kind,
+        toolVersion,
+        fingerprint,
+        fingerprint,
+        effect,
+        start,
+        summary,
+        validate,
+        resourceVersion,
+        null,
+        null,
+        action);
+  }
+
+  /**
+   * 带 Gate 5.5 的完整执行入口。
+   *
+   * <p>{@code argsJson} 只用于风险分级与审批单展示；{@code editedValidate} 和 {@code editedAction}
+   * 让“改参放行”重新经过 Gate 5 授权交集校验后再执行。
+   */
+  public <T> String execute(
+      ToolKind kind,
+      int toolVersion,
+      String fingerprint,
+      String argsJson,
+      ToolEffect effect,
+      String start,
+      Function<T, String> summary,
+      Runnable validate,
+      Function<T, String> resourceVersion,
+      java.util.function.Consumer<String> editedValidate,
+      java.util.function.Function<String, T> editedAction,
       Callable<T> action) {
     if (toolVersion < 1) throw new IllegalArgumentException("工具版本无效。");
     synchronized (runtime) {
@@ -135,11 +179,91 @@ public final class ToolGateway {
               fingerprint,
               checks);
         }
+        ToolRiskAssessment risk =
+            riskPolicy.assess(new ToolRiskContext(kind.name(), effect, argsJson));
+        checks.add(
+            new GatewayCheck(
+                "RISK_ASSESSMENT",
+                "风险分级",
+                risk.level().name(),
+                risk.reason()));
+        ToolApprovalDecision approval =
+            risk.requiresApproval()
+                ? runtime.approvalDecision(kind.name(), toolVersion, argsJson, risk)
+                : ToolApprovalDecision.approve();
+        checks.add(
+            new GatewayCheck(
+                "DYNAMIC_APPROVAL",
+                "Gate 5.5 动态审批",
+                approval.rejected() ? "DENY" : "PASS",
+                approval.rejected()
+                    ? (approval.reason() == null ? "用户拒绝执行该工具" : approval.reason())
+                    : risk.requiresApproval() ? "用户已批准高危工具调用" : "风险低于审批阈值"));
+        if (approval.rejected()) {
+          actionStarted = false;
+          return rejected(
+              callId,
+              kind,
+              toolVersion,
+              effect,
+              started,
+              nanos,
+              ToolResult.ErrorCode.APPROVAL_REJECTED,
+              approval.reason() == null
+                  ? "用户拒绝执行该工具，请调整方案后继续。"
+                  : "用户拒绝执行该工具：" + approval.reason(),
+              fingerprint,
+              checks);
+        }
         runtime.check();
         checks.add(new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "PASS", "运行未取消且未挂起"));
         try {
           actionStarted = true;
-          data = action.call();
+          if (approval.edited()) {
+            if (editedValidate == null || editedAction == null)
+              return rejected(
+                  callId,
+                  kind,
+                  toolVersion,
+                  effect,
+                  started,
+                  nanos,
+                  ToolResult.ErrorCode.INVALID_ARGUMENT,
+                  "当前工具不支持改参放行，请按原参数重新审批。",
+                  fingerprint,
+                  checks);
+            try {
+              // 改参放行必须重新经过 Gate 5 的文件/作用域授权交集复验，防止绕过。
+              editedValidate.accept(approval.editedArgsJson());
+              checks.add(
+                  new GatewayCheck(
+                      "EDITED_ARGS_REVALIDATION",
+                      "改参后二次 Gate 5 复验",
+                      "PASS",
+                      "修改后的参数仍属于节点授权范围"));
+            } catch (IllegalArgumentException invalid) {
+              checks.add(
+                  new GatewayCheck(
+                      "EDITED_ARGS_REVALIDATION",
+                      "改参后二次 Gate 5 复验",
+                      "DENY",
+                      invalid.getMessage() == null ? "修改后的参数超出授权范围" : invalid.getMessage()));
+              return rejected(
+                  callId,
+                  kind,
+                  toolVersion,
+                  effect,
+                  started,
+                  nanos,
+                  ToolResult.ErrorCode.INVALID_ARGUMENT,
+                  "修改后的参数未通过授权复验，工具未执行。",
+                  fingerprint,
+                  checks);
+            }
+            data = editedAction.apply(approval.editedArgsJson());
+          } else {
+            data = action.call();
+          }
         } catch (WorkspaceVersionConflict e) {
           // 此异常的契约要求在文件替换之前报告版本冲突。
           actionStarted = false;

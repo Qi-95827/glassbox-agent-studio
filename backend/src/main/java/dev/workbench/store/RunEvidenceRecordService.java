@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.*;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
 import dev.workbench.framework.workflow.plan.PlanOperations;
+import dev.workbench.framework.event.RunEvent;
+import dev.workbench.framework.event.RunEventPersisted;
 import dev.workbench.persistence.entity.EventEntity;
 import dev.workbench.persistence.repository.EventRepository;
 import dev.workbench.persistence.repository.HandoffRepository;
@@ -13,6 +15,7 @@ import dev.workbench.persistence.repository.RunCheckpointRepository;
 import dev.workbench.persistence.repository.RunRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -36,6 +39,7 @@ public class RunEvidenceRecordService {
   private final PlanOperations plans;
   private final TaskRecordService tasks;
   private final RunCountStore counts;
+  private final org.springframework.context.ApplicationEventPublisher publisher;
 
   public RunEvidenceRecordService(
       HandoffRepository handoffRows,
@@ -48,7 +52,8 @@ public class RunEvidenceRecordService {
       InvocationRepository invocationRows,
       PlanOperations plans,
       TaskRecordService tasks,
-      RunCountStore counts) {
+      RunCountStore counts,
+      org.springframework.context.ApplicationEventPublisher publisher) {
     this.handoffRows = handoffRows;
     this.checkpointRows = checkpointRows;
     this.tx = tx;
@@ -60,6 +65,7 @@ public class RunEvidenceRecordService {
     this.plans = plans;
     this.tasks = tasks;
     this.counts = counts;
+    this.publisher = publisher;
   }
 
   /** 先验证摘要和事件引用，再转换检查点；拒绝不兼容或损坏的数据。 */
@@ -197,22 +203,57 @@ public class RunEvidenceRecordService {
         status -> {
           if (!runRows.lockForUpdate(runId)) throw new IllegalArgumentException("运行不存在。");
           long next = eventRows.maxRunSeq(runId) + 1;
-          eventRows.saveAndFlush(
-              new EventEntity(
-                  next,
-                  runId,
-                  type.name(),
-                  message,
-                  RecordSupport.now(),
-                  reasonCode,
-                  text(checked.planVersionId()),
-                  text(checked.nodeId()),
-                  text(checked.attemptId()),
-                  text(checked.agentId()),
-                  text(checked.checkId()),
-                  text(checked.modelCallId()),
-                  text(checked.toolCallId())));
+          var saved =
+              eventRows.saveAndFlush(
+                  new EventEntity(
+                      next,
+                      runId,
+                      type.name(),
+                      message,
+                      RecordSupport.now(),
+                      reasonCode,
+                      text(checked.planVersionId()),
+                      text(checked.nodeId()),
+                      text(checked.attemptId()),
+                      text(checked.agentId()),
+                      text(checked.checkId()),
+                      text(checked.modelCallId()),
+                      text(checked.toolCallId())));
+          publishAfterCommit(saved);
         });
+  }
+
+  /** 持久化事件提交后才转发 SSE；回滚的事务不会泄露未发生的事件。 */
+  private void publishAfterCommit(EventEntity saved) {
+    if (saved == null || saved.getId() == null || publisher == null) return;
+    var event =
+        new RunEvent(
+            saved.getId(),
+            saved.getRunSeq(),
+            UUID.fromString(saved.getRunId()),
+            EventType.valueOf(saved.getEventType()),
+            saved.getMessage(),
+            Instant.parse(saved.getCreatedAt()),
+            nullableUuid(saved.getPlanVersionId()),
+            nullableUuid(saved.getNodeId()),
+            nullableUuid(saved.getAttemptId()),
+            nullableUuid(saved.getAgentId()),
+            nullableUuid(saved.getCheckId()),
+            nullableUuid(saved.getModelCallId()),
+            nullableUuid(saved.getToolCallId()),
+            saved.getReasonCode());
+    if (org.springframework.transaction.support.TransactionSynchronizationManager
+        .isSynchronizationActive()) {
+      org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+          new org.springframework.transaction.support.TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              publisher.publishEvent(new RunEventPersisted(event));
+            }
+          });
+    } else {
+      publisher.publishEvent(new RunEventPersisted(event));
+    }
   }
 
   /**

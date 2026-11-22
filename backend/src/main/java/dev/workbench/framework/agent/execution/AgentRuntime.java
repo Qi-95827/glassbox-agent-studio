@@ -6,6 +6,8 @@ import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.context.ContextBreakdown;
 import dev.workbench.framework.trace.GlassboxModels;
+import dev.workbench.framework.tool.ToolApprovalDecision;
+import dev.workbench.framework.tool.ToolRiskAssessment;
 import java.util.UUID;
 
 /** 框架适配层向项目运行控制器报告调用，不能绕过限制。 */
@@ -19,6 +21,19 @@ public interface AgentRuntime {
 
   /** 四级上下文压缩已执行；记录分桶、等级与节省比例，不写消息正文。 */
   default void contextCompacted(ContextBreakdown breakdown) {}
+
+  /** 模型流式片段；仅用于瞬态 SSE 推送，不写入高膨胀事件表。 */
+  default void modelDelta(String text) {}
+
+  /**
+   * Gate 5.5：高危工具调用在 Gate 5 通过后请求用户决策。
+   *
+   * <p>默认拒绝自动执行高危调用；正式实现由运行控制接入持久化审批单。
+   */
+  default ToolApprovalDecision approvalDecision(
+      String toolName, int version, String argsJson, ToolRiskAssessment risk) {
+    return ToolApprovalDecision.reject("当前运行未配置动态审批通道，高危工具不会自动执行。");
+  }
 
   /** 价格版本允许的单次输出上限；没有硬费用预算时为空。 */
   default Integer maxOutputTokens() {

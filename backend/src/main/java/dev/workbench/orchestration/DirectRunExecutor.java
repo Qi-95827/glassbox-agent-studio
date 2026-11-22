@@ -39,6 +39,8 @@ final class DirectRunExecutor {
   private final RunReviewCoordinator review;
   private final WorkspaceAuthorizationService workspaceAuthorization;
   private final CostService costs;
+  private final dev.workbench.tool.ToolApprovalService approvals;
+  private final org.springframework.context.ApplicationEventPublisher publisher;
 
   DirectRunExecutor(
       RunCreationStore creation,
@@ -56,7 +58,9 @@ final class DirectRunExecutor {
       RunCommandService commands,
       RunReviewCoordinator review,
       WorkspaceAuthorizationService workspaceAuthorization,
-      CostService costs) {
+      CostService costs,
+      dev.workbench.tool.ToolApprovalService approvals,
+      org.springframework.context.ApplicationEventPublisher publisher) {
     this.creation = creation;
     this.runs = runs;
     this.evidence = evidence;
@@ -73,6 +77,8 @@ final class DirectRunExecutor {
     this.review = review;
     this.workspaceAuthorization = workspaceAuthorization;
     this.costs = costs;
+    this.approvals = approvals;
+    this.publisher = publisher;
   }
 
   void execute(ExecutionState state) {
@@ -368,7 +374,11 @@ final class DirectRunExecutor {
         evidence,
         null,
         costs,
-        workspaceAuthorization);
+        workspaceAuthorization,
+        null,
+        null,
+        approvals,
+        publisher);
   }
 
   private static dev.workbench.framework.context.InitialCheck initialCheck(BugService.Check check) {

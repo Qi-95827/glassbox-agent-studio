@@ -1,14 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { runsApi } from '../api/runs';
 import { isLiveStatus } from '../constants/labels';
 
 const MAX_CACHED_RUN_STREAMS = 10;
-
-const liveInterval = query => {
-  const status = query.state.data?.run?.STATUS ?? query.state.data?.runStatus;
-  return isLiveStatus(status) ? 1800 : false;
-};
 
 function pruneOldRunEntries(cursorMap, eventsMap, currentRunId) {
   while (eventsMap.size > MAX_CACHED_RUN_STREAMS) {
@@ -19,23 +14,93 @@ function pruneOldRunEntries(cursorMap, eventsMap, currentRunId) {
   }
 }
 
+/**
+ * 运行级 SSE：优先实时事件；连续三次连接失败后静默关闭，由 1.8s 轮询兜底。
+ *
+ * <p>浏览器 EventSource 会自动携带 Last-Event-ID 重连；服务端按 run_seq 补发遗漏事件。
+ * MODEL_DELTA 只保存在内存中，不写 React Query 缓存。
+ */
+export function useRunStream(runId, live) {
+  const queryClient = useQueryClient();
+  const [connected, setConnected] = useState(false);
+  const [streamText, setStreamText] = useState('');
+
+  useEffect(() => {
+    if (!runId || !live || typeof EventSource === 'undefined') {
+      setConnected(false);
+      return undefined;
+    }
+    let source = null;
+    let closed = false;
+    let failures = 0;
+    let retryTimer = null;
+    const invalidate = () => {
+      queryClient.invalidateQueries({ queryKey: ['run-events', runId] });
+      queryClient.invalidateQueries({ queryKey: ['execution-view', runId] });
+      queryClient.invalidateQueries({ queryKey: ['run', runId] });
+    };
+    const connect = () => {
+      if (closed) return;
+      try {
+        source = new EventSource(`/api/runs/${runId}/stream`, { withCredentials: true });
+      } catch {
+        failures += 1;
+        if (!closed && failures < 3) retryTimer = setTimeout(connect, 800 * failures);
+        return;
+      }
+      source.onopen = () => {
+        failures = 0;
+        setConnected(true);
+      };
+      source.addEventListener('RUN_EVENT', invalidate);
+      source.addEventListener('MODEL_DELTA', message => {
+        try {
+          const payload = JSON.parse(message.data);
+          if (payload?.text) setStreamText(previous => (previous + payload.text).slice(-4000));
+        } catch {
+          // 非本项目格式的瞬态片段忽略，不影响持久化事件。
+        }
+      });
+      source.onerror = () => {
+        source?.close();
+        setConnected(false);
+        failures += 1;
+        if (!closed && failures < 3) retryTimer = setTimeout(connect, 800 * failures);
+      };
+    };
+    connect();
+    return () => {
+      closed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      source?.close();
+      setConnected(false);
+    };
+  }, [runId, live, queryClient]);
+
+  return { connected, streamText };
+}
+
 /** 运行详情 + 服务端执行视图，运行中自动轮询，进入终态自动停止。 */
 export function useRunExecution(runId) {
+  const stream = useRunStream(runId, Boolean(runId));
   const runQuery = useQuery({
     queryKey: ['run', runId],
     queryFn: ({ signal }) => runsApi.get(runId, false, { signal }),
     enabled: Boolean(runId),
-    refetchInterval: liveInterval
+    refetchInterval: query =>
+      isLiveStatus(query.state.data?.run?.STATUS) && !stream.connected ? 1800 : false
   });
 
   const viewQuery = useQuery({
     queryKey: ['execution-view', runId],
     queryFn: ({ signal }) => runsApi.executionView(runId, { signal }),
     enabled: Boolean(runId),
-    refetchInterval: liveInterval
+    refetchInterval: query =>
+      isLiveStatus(query.state.data?.runStatus) && !stream.connected ? 1800 : false
   });
 
   const status = viewQuery.data?.runStatus ?? runQuery.data?.run?.STATUS ?? 'PENDING';
+  const live = isLiveStatus(status);
 
   return {
     runQuery,
@@ -43,7 +108,9 @@ export function useRunExecution(runId) {
     detail: runQuery.data,
     view: viewQuery.data,
     status,
-    live: isLiveStatus(status),
+    live,
+    streamConnected: stream.connected,
+    streamText: stream.streamText,
     loading: runQuery.isLoading || viewQuery.isLoading,
     error: runQuery.error || viewQuery.error,
     refetch: () => {

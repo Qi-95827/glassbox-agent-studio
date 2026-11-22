@@ -193,7 +193,43 @@ private static final String NO_BLOCKING_EDGE =
   @Transactional
   public void settle(String runId, String time) {
     settleStatus(runId, PlanNodeStatus.RUNNING, PlanNodeStatus.INTERRUPTED, time);
+    settleStatus(runId, PlanNodeStatus.WAITING_TOOL_APPROVAL, PlanNodeStatus.INTERRUPTED, time);
     settleStatus(runId, PlanNodeStatus.PENDING, PlanNodeStatus.SKIPPED, time);
+  }
+
+  /** 高危工具审批挂起：节点保留本次实例，审批通过后恢复 RUNNING。 */
+  @Transactional
+  public boolean waitForToolApproval(String runId, String nodeId, String agentId) {
+    return sessions
+            .createQuery(
+                """
+                update PlanNodeEntity n set n.status = :waiting
+                where n.runId = :runId and n.id = :id and n.agentId = :agentId
+                  and n.status = :running
+                """)
+            .setParameter("runId", runId)
+            .setParameter("id", nodeId)
+            .setParameter("agentId", agentId)
+            .setParameter("waiting", PlanNodeStatus.WAITING_TOOL_APPROVAL)
+            .setParameter("running", PlanNodeStatus.RUNNING)
+            .executeUpdate()
+        == 1;
+  }
+
+  @Transactional
+  public boolean resumeFromToolApproval(String runId, String nodeId) {
+    return sessions
+            .createQuery(
+                """
+                update PlanNodeEntity n set n.status = :running
+                where n.runId = :runId and n.id = :id and n.status = :waiting
+                """)
+            .setParameter("runId", runId)
+            .setParameter("id", nodeId)
+            .setParameter("running", PlanNodeStatus.RUNNING)
+            .setParameter("waiting", PlanNodeStatus.WAITING_TOOL_APPROVAL)
+            .executeUpdate()
+        == 1;
   }
 
   /**

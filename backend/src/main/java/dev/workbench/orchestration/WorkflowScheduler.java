@@ -68,6 +68,8 @@ class WorkflowScheduler {
   private final int maxParallelNodes;
   private final boolean parallelAllPlans;
   private final ReflectionCoordinator reflection;
+  private final dev.workbench.tool.ToolApprovalService approvals;
+  private final org.springframework.context.ApplicationEventPublisher publisher;
 
   WorkflowScheduler(
       RunEvidenceRecordService evidence,
@@ -89,7 +91,9 @@ class WorkflowScheduler {
       @Qualifier("workflowNodeExecutor") ExecutorService nodeExecutor,
       @Value("${workbench.orchestration.max-parallel-nodes:3}") int maxParallelNodes,
       @Value("${workbench.orchestration.parallel-all-plans:false}") boolean parallelAllPlans,
-      ReflectionCoordinator reflection) {
+      ReflectionCoordinator reflection,
+      dev.workbench.tool.ToolApprovalService approvals,
+      org.springframework.context.ApplicationEventPublisher publisher) {
     this.evidence = evidence;
     this.agents = agents;
     this.runs = runs;
@@ -112,6 +116,8 @@ class WorkflowScheduler {
     this.maxParallelNodes = Math.max(1, maxParallelNodes);
     this.parallelAllPlans = parallelAllPlans;
     this.reflection = java.util.Objects.requireNonNull(reflection, "反思协调器不能为空");
+    this.approvals = approvals;
+    this.publisher = publisher;
   }
 
   WorkflowTemplate template(String id) {
@@ -566,7 +572,9 @@ class WorkflowScheduler {
                 costs,
                 workspaceAuthorization,
                 traces,
-                task.locale()),
+                task.locale(),
+                approvals,
+                publisher),
             node.definitionRef(),
             node.definitionSha256(),
             writeFiles)

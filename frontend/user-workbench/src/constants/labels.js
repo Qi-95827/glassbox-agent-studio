@@ -53,6 +53,7 @@ export function comparisonLabel(value, locale) {
 export const RUN_STATES = {
   PENDING: '排队中',
   RUNNING: '运行中',
+  WAITING_TOOL_APPROVAL: '待工具审批',
   IN_PROGRESS: '进行中',
   AWAITING_REVIEW: '待验收',
   DELIVERED: '已交付',
@@ -180,7 +181,9 @@ export const EVENT_NAMES = {
   BLOCKED: '等待处理',
   REVISION_TRIGGERED: '触发有界反思',
   WAITING_HUMAN_REVIEW: '等待人工审核',
-  CONTEXT_COMPACTED: '上下文压缩'
+  CONTEXT_COMPACTED: '上下文压缩',
+  TOOL_APPROVAL_REQUESTED: '高危工具待审批',
+  TOOL_APPROVAL_DECIDED: '工具审批已决策'
 };
 
 export const EVALUATION_SUITES = {
@@ -214,6 +217,7 @@ const TONE_BY_STATUS = {
   CONFIRMED: 'success',
   APPROVED: 'success',
   RUNNING: 'active',
+  WAITING_TOOL_APPROVAL: 'warning',
   STARTED: 'active',
   CANCELLING: 'warning',
   PAUSED: 'warning',

@@ -81,7 +81,11 @@ public enum EventType {
   /** 反思次数达到上限，自动循环停止并转人工审核。 */
   WAITING_HUMAN_REVIEW,
   /** 四级上下文压缩已执行，载荷包含压缩等级与节省比例。 */
-  CONTEXT_COMPACTED;
+  CONTEXT_COMPACTED,
+  /** 高危工具已创建审批单并挂起节点。 */
+  TOOL_APPROVAL_REQUESTED,
+  /** 用户已完成工具审批决策。 */
+  TOOL_APPROVAL_DECIDED;
 
   /** 受控停止状态对应的事件；其他状态应使用各自的事件。 */
   public static EventType fromStopStatus(RunStatus status) {

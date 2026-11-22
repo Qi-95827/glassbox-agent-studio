@@ -112,6 +112,10 @@ public record ControlledModel(
                     response -> {
                       latest.set(response);
                       if (response.getUsage() != null) latestUsage.set(response.getUsage());
+                      if (response.getContent() != null)
+                        for (var block : response.getContent())
+                          if (block instanceof TextBlock text && text.getText() != null)
+                            runtime.modelDelta(text.getText());
                     })
                 .doOnComplete(
                     () -> {

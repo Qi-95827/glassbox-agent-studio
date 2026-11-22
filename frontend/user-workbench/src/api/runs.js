@@ -35,5 +35,8 @@ export const runsApi = {
   sourceArtifacts: (runId, payload) => post(`/runs/${runId}/source-artifacts`, payload),
   revokeScope: (runId, directory) => post(`/runs/${runId}/workspace-scope/revoke`, { directory }),
   reconcileExternalAction: actionId => post(`/external-actions/${actionId}/reconcile`),
-  updateDebugControl: (runId, payload) => put(`/runs/${runId}/debug-control`, payload)
+  updateDebugControl: (runId, payload) => put(`/runs/${runId}/debug-control`, payload),
+  toolApprovals: (runId, options) => get(`/runs/${runId}/tool-approvals`, options),
+  decideToolApproval: (runId, approvalId, payload) =>
+    post(`/runs/${runId}/tool-approvals/${approvalId}/decision`, payload)
 };

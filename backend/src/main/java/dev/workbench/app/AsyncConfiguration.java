@@ -59,11 +59,22 @@ public class AsyncConfiguration {
   public ThreadPoolTaskExecutor evaluationTaskExecutor() {
     return buildExecutor(2, 100, "evaluation-");
   }
-
   @Bean(name = "evaluationExecutor", destroyMethod = "")
   public ExecutorService evaluationExecutor(
       @Qualifier("evaluationTaskExecutor") ThreadPoolTaskExecutor executor) {
     return executor.getThreadPoolExecutor();
+  }
+
+  /** SSE 心跳与连接清理使用托管调度器，禁止裸线程。 */
+  @Bean(name = "streamTaskScheduler")
+  public org.springframework.scheduling.TaskScheduler streamTaskScheduler() {
+    var scheduler = new org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler();
+    scheduler.setPoolSize(1);
+    scheduler.setThreadNamePrefix("run-stream-");
+    scheduler.setDaemon(true);
+    scheduler.setWaitForTasksToCompleteOnShutdown(false);
+    scheduler.initialize();
+    return scheduler;
   }
 
   /** 拒绝策略保持 AbortPolicy：调用方必须显式处理队列满，而不是静默降级。 */

@@ -6,6 +6,8 @@ public enum PlanNodeStatus {
   PENDING,
   /** Agent 已启动，调用尚未结束。 */
   RUNNING,
+  /** 高危工具调用等待用户审批；不占用业务线程死等。 */
+  WAITING_TOOL_APPROVAL,
   /** Agent 正常返回，具体结论仍需结合证据判断。 */
   COMPLETED,
   /** 从已校验的历史运行复用结果，没有在本运行新建该角色调用。 */

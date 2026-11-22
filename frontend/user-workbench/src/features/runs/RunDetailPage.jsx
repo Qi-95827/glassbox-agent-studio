@@ -13,6 +13,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { useQueryClient } from '@tanstack/react-query';
 import RunHeader from './RunHeader';
 import RunFlowGraph from '../workflows/RunFlowGraph';
+import ToolApprovalDrawer from './ToolApprovalDrawer';
 import RunReplayPanel from './RunReplayPanel';
 import RunOutputsPanel from './RunOutputsPanel';
 import RunListView from './RunListView';
@@ -57,8 +58,8 @@ export default function RunDetailPage() {
   const requestedNodeId = searchParams.get('nodeId');
   const requestedGlassbox = searchParams.get('glassbox');
 
-  const { detail, view, live, loading, error, refetch } = useRunExecution(runId);
-  const eventsQuery = useRunEvents(runId, tab === 'replay', live);
+  const { detail, view, live, streamConnected, loading, error, refetch } = useRunExecution(runId);
+  const eventsQuery = useRunEvents(runId, tab === 'replay', live && !streamConnected);
   const selectedInView = useMemo(
     () =>
       Boolean(
@@ -569,6 +570,8 @@ export default function RunDetailPage() {
         runId={runId}
         onClose={() => setDiagnosticsOpen(false)}
       />
+
+      <ToolApprovalDrawer runId={runId} live={live} />
     </Box>
   );
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { absorbEventPage, useRunEvents } from './useRunExecution';
+import { absorbEventPage, useRunEvents, useRunStream } from './useRunExecution';
 import { runsApi } from '../api/runs';
 
 const event = (id, seq = id, runId = 'run-a') => ({
@@ -119,5 +119,42 @@ describe('useRunEvents', () => {
     await new Promise(resolve => setTimeout(resolve, 40));
 
     expect(client.getQueryData(['run-events', 'run-a'])).toBeUndefined();
+  });
+});
+
+describe('useRunStream', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('连接成功后接收 MODEL_DELTA 瞬态片段', async () => {
+    class FakeEventSource {
+      static instances = [];
+      constructor(url) {
+        this.url = url;
+        this.listeners = {};
+        this.closed = false;
+        FakeEventSource.instances.push(this);
+      }
+      addEventListener(name, callback) {
+        this.listeners[name] = callback;
+      }
+      close() {
+        this.closed = true;
+      }
+    }
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useRunStream('run-1', true), { wrapper });
+    const source = FakeEventSource.instances[0];
+    expect(source.url).toBe('/api/runs/run-1/stream');
+    act(() => source.onopen());
+    await waitFor(() => expect(result.current.connected).toBe(true));
+    act(() => source.listeners.MODEL_DELTA({ data: '{"text":"实时片段"}' }));
+    await waitFor(() => expect(result.current.streamText).toBe('实时片段'));
   });
 });

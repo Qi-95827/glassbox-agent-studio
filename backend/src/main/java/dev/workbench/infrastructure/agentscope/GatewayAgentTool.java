@@ -47,7 +47,7 @@ final class GatewayAgentTool<T> extends ToolBase {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  private String invoke(Map<String, Object> input) {
+  private String invoke(Map<String, Object> input) throws Exception {
     var arguments = new LinkedHashMap<String, String>();
     var fingerprintParts = new ArrayList<>(spec.fingerprintPrefix());
     for (var parameter : spec.parameters()) {
@@ -57,19 +57,66 @@ final class GatewayAgentTool<T> extends ToolBase {
       fingerprintParts.add(argument);
     }
     var bound = java.util.Collections.unmodifiableMap(arguments);
+    var boundRef = new java.util.concurrent.atomic.AtomicReference<>(bound);
+    java.util.function.Function<Map<String, Object>, Map<String, String>> toBound =
+        edited -> {
+          var editedArguments = new LinkedHashMap<String, String>();
+          for (var parameter : spec.parameters()) {
+            Object value = edited.get(parameter.name());
+            if (!(value instanceof String text))
+              throw new IllegalArgumentException("工具参数与声明不符：" + parameter.name());
+            editedArguments.put(parameter.name(), text);
+          }
+          if (!edited.keySet().equals(editedArguments.keySet()))
+            throw new IllegalArgumentException("工具参数与声明不符。");
+          return java.util.Collections.unmodifiableMap(editedArguments);
+        };
+    java.util.function.Function<T, String> summaryFn =
+        value -> spec.summarize().apply(boundRef.get(), value);
+    java.util.function.Function<T, String> resourceVersionFn =
+        spec.resourceVersion() == null
+            ? null
+            : value -> spec.resourceVersion().apply(boundRef.get(), value);
+    java.util.function.Consumer<String> editedValidate =
+        editedJson -> {
+          try {
+            var edited = toBound.apply(context.json().readValue(editedJson, Map.class));
+            spec.validate().accept(edited);
+            boundRef.set(edited);
+          } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException("修改后的参数不是有效 JSON。", e);
+          }
+        };
+    java.util.function.Function<String, T> editedAction =
+        editedJson -> {
+          try {
+            var edited = toBound.apply(context.json().readValue(editedJson, Map.class));
+            boundRef.set(edited);
+            return (T) spec.action().execute(edited, context.runtime()::check);
+          } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException("修改后的参数不是有效 JSON。", e);
+          } catch (RuntimeException e) {
+            throw e;
+          } catch (Exception e) {
+            throw new IllegalStateException("改参工具执行失败。", e);
+          }
+        };
     return gateway.execute(
         kind,
         version,
         ToolFingerprint.of(kind, fingerprintParts.toArray(String[]::new)),
+        context.json().writeValueAsString(input),
         effect,
         spec.startMessage(),
-        value -> spec.summarize().apply(bound, value),
+        summaryFn,
         () -> {
           if (!input.keySet().equals(arguments.keySet()) || arguments.containsValue(null))
             throw new IllegalArgumentException("工具参数与声明不符。");
           spec.validate().accept(bound);
         },
-        spec.resourceVersion() == null ? null : value -> spec.resourceVersion().apply(bound, value),
+        resourceVersionFn,
+        editedValidate,
+        editedAction,
         () -> spec.action().execute(bound, context.runtime()::check));
   }
 

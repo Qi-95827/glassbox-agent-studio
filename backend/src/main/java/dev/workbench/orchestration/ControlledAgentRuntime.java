@@ -8,14 +8,18 @@ import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.trace.GlassboxModels;
+import dev.workbench.framework.tool.ToolApprovalDecision;
+import dev.workbench.framework.tool.ToolRiskAssessment;
 import dev.workbench.task.CostService;
 import dev.workbench.store.AgentAssemblyRecordService;
 import dev.workbench.store.GlassboxTraceStore;
 import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.store.RunStateStore;
+import dev.workbench.tool.ToolApprovalService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.Objects;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 
 /** 将单个 Agent 的调用接入项目的运行控制与持久化记录。 */
 final class ControlledAgentRuntime implements AgentRuntime {
@@ -30,6 +34,8 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final WorkspaceAuthorizationService authorization;
   private final GlassboxTraceStore traces;
   private final String locale;
+  private final ToolApprovalService approvals;
+  private final ApplicationEventPublisher publisher;
   private AgentAssemblySnapshot.Components assembly;
   private CostService.Reservation costReservation = CostService.Reservation.NONE;
 
@@ -126,6 +132,36 @@ final class ControlledAgentRuntime implements AgentRuntime {
       WorkspaceAuthorizationService authorization,
       GlassboxTraceStore traces,
       String locale) {
+    this(
+        runId,
+        agentId,
+        control,
+        assemblyRecords,
+        runs,
+        evidence,
+        nodePolicy,
+        costs,
+        authorization,
+        traces,
+        locale,
+        null,
+        null);
+  }
+
+  ControlledAgentRuntime(
+      String runId,
+      String agentId,
+      RunControl control,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
+      RunControl.NodePolicy nodePolicy,
+      CostService costs,
+      WorkspaceAuthorizationService authorization,
+      GlassboxTraceStore traces,
+      String locale,
+      ToolApprovalService approvals,
+      ApplicationEventPublisher publisher) {
     this.runId = Objects.requireNonNull(runId);
     this.agentId = Objects.requireNonNull(agentId);
     this.control = Objects.requireNonNull(control);
@@ -137,6 +173,8 @@ final class ControlledAgentRuntime implements AgentRuntime {
     this.authorization = authorization;
     this.traces = traces;
     this.locale = locale;
+    this.approvals = approvals;
+    this.publisher = publisher;
   }
 
   @Override
@@ -262,8 +300,31 @@ final class ControlledAgentRuntime implements AgentRuntime {
   }
 
   @Override
-  public void contextCompacted(dev.workbench.framework.context.ContextBreakdown breakdown) {
-    if (breakdown == null || !breakdown.compacted()) return;
+  public void modelDelta(String text) {
+    if (publisher == null || text == null || text.isEmpty()) return;
+    publisher.publishEvent(
+        new dev.workbench.framework.event.RunStreamTransient(
+            UUID.fromString(runId), "MODEL_DELTA", text, java.time.Instant.now()));
+  }
+
+  @Override
+  public ToolApprovalDecision approvalDecision(
+      String toolName, int version, String argsJson, ToolRiskAssessment risk) {
+    if (approvals == null || nodePolicy == null)
+      return ToolApprovalDecision.reject("当前运行没有可用的动态审批通道，高危工具不会自动执行。");
+    return approvals.await(
+        runId,
+        nodePolicy.nodeId(),
+        agentId,
+        toolName,
+        version,
+        argsJson,
+        risk,
+        control::check);
+  }
+
+  @Override
+  public void contextCompacted(dev.workbench.framework.context.ContextBreakdown breakdown) {    if (breakdown == null || !breakdown.compacted()) return;
     boolean english =
         dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
     String message =

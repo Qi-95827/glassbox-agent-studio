@@ -25,7 +25,8 @@ public record ToolResult<T>(
 
   public enum ErrorCode {
     INVALID_ARGUMENT,
-    STALE_VERSION
+    STALE_VERSION,
+    APPROVAL_REJECTED
   }
 
   /** 可在修正输入后重试，不允许绕过全局预算及权限。 */
