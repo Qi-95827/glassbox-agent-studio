@@ -6,10 +6,11 @@ import RemoveCircleOutlineRounded from '@mui/icons-material/RemoveCircleOutlineR
 import HelpOutlineRounded from '@mui/icons-material/HelpOutlineRounded';
 import { TraceSection, Readout } from '../../../components/WorkbenchDialog';
 import EmptyState from '../../../components/EmptyState';
-import { TOOL_NAMES } from '../../../constants/labels';
+import { toolNameLabel } from '../../../constants/labels';
 import { duration } from '../../../utils/format';
 import { googleTokens } from '../../../theme/googleTheme';
-import { GATEWAY_CHECK_RULES } from './checkExplanations';
+import { useI18n } from '../../../i18n/I18nProvider';
+import { checkTitle, gatewayCheckRules } from './checkExplanations';
 
 function gateTone(status) {
   if (status === 'PASS') {
@@ -37,10 +38,12 @@ function gateTone(status) {
 }
 
 function ToolCallCard({ call, index }) {
+  const { t, locale } = useI18n();
   const [showRules, setShowRules] = useState(false);
   const trace = call.trace;
   const checks = trace?.gatewayChecks ?? [];
   const failed = call.status === 'FAILED';
+  const rules = gatewayCheckRules(locale);
 
   return (
     <Box
@@ -62,7 +65,7 @@ function ToolCallCard({ call, index }) {
         }}
       >
         <Typography variant="subtitle2" sx={{ fontSize: 14.5 }}>
-          #{index + 1} · {TOOL_NAMES[call.name] || call.name}
+          #{index + 1} · {toolNameLabel(call.name, locale)}
           {call.version != null ? ` v${call.version}` : ''}
         </Typography>
         <Stack direction="row" spacing={0.5}>
@@ -80,11 +83,11 @@ function ToolCallCard({ call, index }) {
       </Stack>
 
       <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-        ① 请求入参 / 指纹
+        {t('gateway.inputTitle')}
       </Typography>
       <Box sx={{ mt: 0.45, mb: 1.25 }}>
         <Readout mono maxHeight={120}>
-          {trace?.inputArgs || '(历史运行未采集入参)'}
+          {trace?.inputArgs || t('gateway.noInput')}
         </Readout>
       </Box>
 
@@ -93,7 +96,7 @@ function ToolCallCard({ call, index }) {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.6 }}
       >
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-          ② ToolGateway 安检门（本次放行 / 拦截依据）
+          {t('gateway.checksTitle')}
         </Typography>
         {checks.length > 0 && (
           <Button
@@ -102,7 +105,7 @@ function ToolCallCard({ call, index }) {
             onClick={() => setShowRules(prev => !prev)}
             sx={{ py: 0.15, px: 0.75, fontSize: 12, minHeight: 26 }}
           >
-            {showRules ? '收起判定标准' : '查看怎么算 PASS'}
+            {showRules ? t('glassbox.collapseRules') : t('glassbox.expandRules')}
           </Button>
         )}
       </Stack>
@@ -111,7 +114,10 @@ function ToolCallCard({ call, index }) {
         <Stack spacing={0.7} sx={{ mb: 1.25 }}>
           {checks.map((chk, idx) => {
             const tone = gateTone(chk.status);
-            const rule = GATEWAY_CHECK_RULES[chk.gate];
+            const rule = rules[chk.gate];
+            // 中文沿用后端历史落库 label（含测试与历史记录），英文按 gate 重新渲染标题。
+            const title =
+              (locale === 'en-US' ? checkTitle(chk.gate, 'gateway', locale) : null) || chk.label;
             return (
               <Box
                 key={`${chk.gate}:${idx}`}
@@ -130,7 +136,7 @@ function ToolCallCard({ call, index }) {
                   <Chip
                     size="small"
                     icon={tone.icon}
-                    label={`${chk.label} · ${chk.status}`}
+                    label={`${title} · ${chk.status}`}
                     sx={{ bgcolor: tone.bg, color: tone.fg, fontWeight: 600 }}
                   />
                   <Typography
@@ -142,7 +148,7 @@ function ToolCallCard({ call, index }) {
                       minWidth: 180
                     }}
                   >
-                    {chk.detail || '已完成该道安检门校验。'}
+                    {chk.detail || t('gateway.checkDone')}
                   </Typography>
                 </Stack>
 
@@ -157,15 +163,15 @@ function ToolCallCard({ call, index }) {
                       }}
                     >
                       <Typography variant="caption" sx={{ display: 'block', lineHeight: 1.55 }}>
-                        <strong>为什么检查：</strong>
+                        <strong>{t('gateway.why')}</strong>
                         {rule.purpose}
                       </Typography>
                       <Typography variant="caption" sx={{ display: 'block', lineHeight: 1.55 }}>
-                        <strong>怎么算 PASS：</strong>
+                        <strong>{t('glassbox.passRule')}</strong>
                         {rule.passRule}
                       </Typography>
                       <Typography variant="caption" sx={{ display: 'block', lineHeight: 1.55 }}>
-                        <strong>何时拦截 / 跳过：</strong>
+                        <strong>{t('glassbox.failRule')}</strong>
                         {rule.failRule}
                       </Typography>
                     </Box>
@@ -177,12 +183,12 @@ function ToolCallCard({ call, index }) {
         </Stack>
       ) : (
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.25 }}>
-          历史运行未采集网关逐项检查明细。
+          {t('gateway.noChecks')}
         </Typography>
       )}
 
       <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-        ③ 执行返回值与资源回执
+        {t('gateway.resultTitle')}
       </Typography>
       {call.errorMessage && (
         <Alert severity="error" sx={{ mt: 0.5, mb: 0.5 }}>
@@ -191,12 +197,12 @@ function ToolCallCard({ call, index }) {
       )}
       <Box sx={{ mt: 0.45 }}>
         <Readout mono maxHeight={180}>
-          {trace?.fullResult || call.result || '(无返回内容)'}
+          {trace?.fullResult || call.result || t('gateway.noResult')}
         </Readout>
       </Box>
       {call.resourceVersion && (
         <Box sx={{ mt: 0.75 }}>
-          <TraceSection title="文件资源版本 / SHA256 回执" dense>
+          <TraceSection title={t('gateway.receipt')} dense>
             <Readout mono maxHeight={120}>
               {call.resourceVersion}
             </Readout>
@@ -209,12 +215,13 @@ function ToolCallCard({ call, index }) {
 
 /** 玻璃盒面板三：ToolGateway 三段式透明卡片（入参 JSON → 安检门与判定依据 → 完整返回值与回执）。 */
 export default function ToolGatewayPanel({ tools }) {
+  const { t } = useI18n();
   if (!tools || tools.length === 0) {
     return (
       <EmptyState
         compact
-        title="暂无工具调用记录"
-        description="该节点未调用外部工具，或工具尚未触发。"
+        title={t('gateway.emptyTitle')}
+        description={t('gateway.emptyDescription')}
       />
     );
   }

@@ -52,10 +52,16 @@ public class TaskIdeaService {
   }
 
   public Draft draft(String idea, DraftMode mode, String modelConnectionId) {
+    return draft(idea, mode, modelConnectionId, null);
+  }
+
+  public Draft draft(String idea, DraftMode mode, String modelConnectionId, String locale) {
     if (idea == null || idea.isBlank() || idea.length() > 2500)
-      throw new IllegalArgumentException("请输入 1 至 2500 字的任务想法。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("taskIdea.invalid"));
     String input = idea.strip();
-    if (mode == null || mode == DraftMode.LOCAL) return local(input);
+    boolean english = dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
+    if (mode == null || mode == DraftMode.LOCAL) return local(input, english);
     String connectionId = null;
     if (connections != null) {
       if (modelConnectionId != null && !modelConnectionId.isBlank())
@@ -64,10 +70,18 @@ public class TaskIdeaService {
       else connectionId = connections.defaultConnectionId().orElse(null);
     }
     try {
+      String instructions =
+          locale == null
+              ? INSTRUCTIONS
+              : dev.workbench.framework.prompt.PromptResourceLoader.load(
+                      locale, "planning/task-idea.md")
+                  + "\n\n"
+                  + dev.workbench.framework.prompt.PromptResourceLoader.outputLanguageDirective(
+                      locale);
       Draft draft =
           json.readerFor(Draft.class)
               .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-              .readValue(model.draft(INSTRUCTIONS, input, connectionId));
+              .readValue(model.draft(instructions, input, connectionId));
       if (draft == null || draft.entryKind() == null || draft.entryKind() == TaskEntryKind.BUG)
         throw new IllegalArgumentException("任务入口无效。");
       List<String> constraints = items(draft.constraints());
@@ -89,16 +103,19 @@ public class TaskIdeaService {
               ? WorkspaceService.ideaFiles(draft.suggestedFiles())
               : List.of());
     } catch (JsonProcessingException | IllegalArgumentException e) {
-      throw new IllegalStateException("模型返回的草稿不符合任务格式。可重新整理或使用本地规则。");
+      throw new IllegalStateException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("taskIdea.format"));
     }
   }
 
-  private Draft local(String input) {
+  private Draft local(String input, boolean english) {
     boolean existing = EXISTING.matcher(input).find();
     boolean web = WEB.matcher(input).find();
-    boolean design = input.matches("(?s).*(设计方案|概要设计|只做设计).*");
-    boolean requirements = input.matches("(?s).*(梳理需求|需求文档|只做需求).*");
-    boolean test = input.matches("(?s).*(编写测试方案|设计测试|测试用例).*");
+    boolean design = input.matches("(?s).*(设计方案|概要设计|只做设计|design doc|design only).*");
+    boolean requirements =
+        input.matches("(?s).*(梳理需求|需求文档|只做需求|requirements doc|requirements only).*");
+    boolean test =
+        input.matches("(?s).*(编写测试方案|设计测试|测试用例|test plan|test cases).*");
     TaskEntryKind kind =
         design
             ? TaskEntryKind.DESIGN
@@ -112,27 +129,59 @@ public class TaskIdeaService {
     String goal = input.length() <= 500 ? input : input.substring(0, 500).strip();
     List<String> assumptions =
         input.length() > 500
-            ? List.of("本地规则使用了原文的前 500 字作为目标。请补齐目标之外的重要细节。")
-            : files.isEmpty() ? List.of() : List.of("独立网页采用自包含 HTML，可用浏览器直接打开。");
-    List<String> acceptance =
-        !files.isEmpty() && input.contains("冒泡")
             ? List.of(
-                "输入 5,1,4,2,8，页面显示五根对应数值的柱状条，并提供非法输入提示。",
-                "点击下一步逐对比较；发生交换时更新柱状条并标记两个位置。",
-                "自动运行可暂停和继续，最终显示升序结果 1,2,4,5,8；支持重置。")
+                english
+                    ? "The local rule used the first 500 characters as the goal. Add any important details beyond that."
+                    : "本地规则使用了原文的前 500 字作为目标。请补齐目标之外的重要细节。")
             : files.isEmpty()
-                ? List.of("逐项对照任务目标，在交付说明中给出结果、对应证据和待确认事项。")
-                : List.of("打开 index.html，使用示例完成核心操作。", "输入无效数据时显示可理解的提示。");
+                ? List.of()
+                : List.of(
+                    english
+                        ? "The standalone page uses self-contained HTML and opens directly in a browser."
+                        : "独立网页采用自包含 HTML，可用浏览器直接打开。");
+    List<String> acceptance =
+        !files.isEmpty() && (input.contains("冒泡") || input.toLowerCase().contains("bubble"))
+            ? List.of(
+                english
+                    ? "Given 5,1,4,2,8, the page renders five bars with the matching values and shows a message for invalid input."
+                    : "输入 5,1,4,2,8，页面显示五根对应数值的柱状条，并提供非法输入提示。",
+                english
+                    ? "Clicking Next compares pairs; swaps update the bars and mark both positions."
+                    : "点击下一步逐对比较；发生交换时更新柱状条并标记两个位置。",
+                english
+                    ? "Auto-run can pause and resume, ends at the ascending result 1,2,4,5,8, and supports reset."
+                    : "自动运行可暂停和继续，最终显示升序结果 1,2,4,5,8；支持重置。")
+            : files.isEmpty()
+                ? List.of(
+                    english
+                        ? "Check each task goal item and record the result, supporting evidence and open questions in the delivery notes."
+                        : "逐项对照任务目标，在交付说明中给出结果、对应证据和待确认事项。")
+                : List.of(
+                    english
+                        ? "Open index.html and complete the core flow with the sample data."
+                        : "打开 index.html，使用示例完成核心操作。",
+                    english
+                        ? "Show an understandable message when invalid data is entered."
+                        : "输入无效数据时显示可理解的提示。");
     return new Draft(
         kind,
         goal,
         files.isEmpty()
-            ? kind == TaskEntryKind.CODE ? "修改后的授权文件与交付说明" : "任务结果及验收说明"
-            : "可用浏览器打开的 index.html",
-        files.isEmpty() ? List.of() : List.of("把产出写入授权的 index.html，交付说明中提供打开方式。"),
+            ? kind == TaskEntryKind.CODE
+                ? english ? "Modified authorized files and delivery notes" : "修改后的授权文件与交付说明"
+                : english ? "Task result and acceptance notes" : "任务结果及验收说明"
+            : english ? "index.html that opens in a browser" : "可用浏览器打开的 index.html",
+        files.isEmpty()
+            ? List.of()
+            : List.of(
+                english
+                    ? "Write the output to the authorized index.html and explain how to open it in the delivery notes."
+                    : "把产出写入授权的 index.html，交付说明中提供打开方式。"),
         acceptance,
         assumptions,
-        kind == TaskEntryKind.CODE && files.isEmpty() ? List.of("本次应使用哪个已有工作区？") : List.of(),
+        kind == TaskEntryKind.CODE && files.isEmpty()
+            ? List.of(english ? "Which existing workspace should be used?" : "本次应使用哪个已有工作区？")
+            : List.of(),
         files);
   }
 

@@ -17,7 +17,13 @@ public class TaskIdeaController {
       String idea, TaskIdeaService.DraftMode mode, String modelConnectionId) {}
 
   @PostMapping("/api/task-ideas/draft")
-  TaskIdeaService.Draft draft(@RequestBody IdeaRequest request) {
-    return ideas.draft(request.idea(), request.mode(), request.modelConnectionId());
+  TaskIdeaService.Draft draft(
+      @RequestBody IdeaRequest request,
+      @org.springframework.web.bind.annotation.RequestHeader(
+              value = "Accept-Language",
+              required = false)
+          String acceptLanguage) {
+    return ideas.draft(
+        request.idea(), request.mode(), request.modelConnectionId(), acceptLanguage);
   }
 }

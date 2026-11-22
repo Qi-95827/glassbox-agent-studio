@@ -47,9 +47,9 @@ Most AI coding agent frameworks run as a **black box**: you type a prompt, text 
 
 ### 1. Workbench Home & Key-Free Teaching Playbooks
 
-Launch tasks across General, Requirements, Design, Code, Test, and Simulated Bug entries — or click one of the **3 key-free teaching playbooks** to explore multi-agent collaboration, breakpoint debugging, and `ToolGateway` security boundaries immediately.
+Launch tasks across General, Requirements, Design, Code, Test, and Simulated Bug entries — switch seamlessly between **English / 中文** in the top bar, or click one of the **3 key-free teaching playbooks** to explore multi-agent collaboration, breakpoint debugging, and `ToolGateway` security boundaries immediately.
 
-![Workbench Home](docs/images/readme/01-workbench-home.png)
+![Workbench Home (English)](docs/images/readme/en-01-workbench-home.png)
 
 **What you can learn here:**
 - **Dual-Layer Status Modeling (`TaskStatus` vs. `RunStatus`)**: Why an immutable agent execution status (`RunStatus`, e.g., `BLOCKED` awaiting review) should be separated from the user-facing delivery lifecycle (`TaskStatus`, e.g., `DELIVERED` once committed in Git).
@@ -61,7 +61,7 @@ Launch tasks across General, Requirements, Design, Code, Test, and Simulated Bug
 
 Every task executes as a live React Flow DAG. Clicking any node opens a clean right-side overview drawer with 4 direct entry cards into the wide-screen Glass-Box inspector modal, plus one-click **node breakpoints** to pause execution before a node starts.
 
-![DAG Execution Flow](docs/images/readme/02-dag-flow.png)
+![DAG Execution Flow (English)](docs/images/readme/en-02-dag-flow.png)
 
 **What you can learn here:**
 - **Event-Driven Projection**: How backend execution events (`ExecutionGraphProjector`) are projected into a deterministic frontend DAG without coupling UI state to raw engine internals.
@@ -73,11 +73,11 @@ Every task executes as a live React Flow DAG. Clicking any node opens a clean ri
 
 Instead of opaque free-text relays between agents, every handoff is inspected as a structured envelope showing the upstream conclusion, involved files, key decisions, open risks, and platform verification checks — with an expandable **"How PASS is determined"** rule guide explaining **why** each check passed or skipped.
 
-![Glass-Box Handoff Envelope](docs/images/readme/03-glassbox-handoff.png)
+![Glass-Box Handoff Envelope (English)](docs/images/readme/en-03-glassbox-handoff.png)
 
 **What you can learn here:**
 - **Anti-Hallucination Handoffs**: How the platform enforces `DEPENDENCY_MATCH`, `ATTEMPT_IDENTITY`, `TOOL_EVIDENCE`, and `ACCEPTED_RECEIPT` so downstream agents only receive verified outputs from direct upstream DAG dependencies.
-- **Deterministic Extraction**: Inspect `StructuredHandoffExtractor.java` to see how structured summaries and evidence pointers are extracted from agent outputs.
+- **Deterministic Extraction**: Inspect `StructuredHandoffExtractor.java` to see how bilingual structured summaries and evidence pointers are extracted from agent outputs.
 
 ---
 
@@ -85,10 +85,10 @@ Instead of opaque free-text relays between agents, every handoff is inspected as
 
 See the exact masked payload sent to the LLM (`SYSTEM`, `USER`, `ASSISTANT`, `TOOL`), every injected tool JSON schema, token counts, latency, and the model's raw response or `tool_calls` decisions.
 
-![Glass-Box LLM I/O](docs/images/readme/04-glassbox-llm.png)
+![Glass-Box LLM I/O (English)](docs/images/readme/en-04-glassbox-llm.png)
 
 **What you can learn here:**
-- **Externalized Prompt Engineering**: All agent personas, skills, planning prompts, and tool descriptions live as clean external resources under `backend/src/main/resources/prompts/`.
+- **Externalized Bilingual Prompt Engineering**: All agent personas, skills, planning prompts, and tool descriptions live as clean external resources under `backend/src/main/resources/prompts/` (Chinese) and `prompts/en/` (English).
 - **Data Masking at Capture Time**: Inspect `ControlledModel.java` and `SensitiveDataMasker.java` to see how 64 KB truncation and secret redaction happen before payloads hit the database.
 
 ---
@@ -97,7 +97,7 @@ See the exact masked payload sent to the LLM (`SYSTEM`, `USER`, `ASSISTANT`, `TO
 
 Understand **how an agent is born** for each node: its role definition, bound skills, model, context sources, and the **Tool Permission Funnel** showing both granted tools and tools explicitly stripped by platform security boundaries (e.g., removing `WORKSPACE_WRITE` from read-only review nodes).
 
-![Glass-Box Assembly Blueprint](docs/images/readme/05-glassbox-assembly.png)
+![Glass-Box Assembly Blueprint (English)](docs/images/readme/en-05-glassbox-assembly.png)
 
 **What you can learn here:**
 - **Least-Privilege Agent Sandboxing**: Even if a prompt tries to trick a reviewer agent into editing files, the write tool is never even injected into its runtime — and `ToolGateway` enforces 6 runtime security gates (`OWNERSHIP_AND_SCOPE`, `TOOL_REGISTRY_GRANT`, `BUDGET_AND_LOOP`, `PATH_WHITELIST`, `ARGUMENT_SCHEMA`, `CANCEL_STATE`).
@@ -108,7 +108,7 @@ Understand **how an agent is born** for each node: its role definition, bound sk
 
 Monitor every run, node, model, and tool across `24h / 7d / 30d / All` time windows with zero heavy charting dependencies (pure React SVG): KPI cards with success-rate gauge, stacked/line/area time-series charts, status/model/tool donut charts, slow-node rankings, and `ToolGateway` interception analytics.
 
-![Monitoring Dashboard](docs/images/readme/06-monitoring-dashboard.png)
+![Monitoring Dashboard (English)](docs/images/readme/en-06-monitoring-dashboard.png)
 
 **What you can learn here:**
 - **Practical Agent Observability**: How to aggregate run latency (Avg / P95), token consumption, failure rates, and security gate denials from relational audit tables (`MonitoringDashboardService.java`).
@@ -119,10 +119,10 @@ Monitor every run, node, model, and tool across `24h / 7d / 30d / All` time wind
 
 When a run fails, blocks, triggers security gates, or hits slow LLM calls, click **"One-Click Triage"** to open a guided 5-step diagnostics drawer (`Terminal Status → ToolGateway → LLM I/O → Handoff & Assembly → Workspace Git`). Every finding includes a direct action link that jumps straight to the target node and auto-opens the exact Glass-Box modal tab.
 
-![Run Diagnostics Drawer](docs/images/readme/07-diagnostics.png)
+![Run Diagnostics Drawer (English)](docs/images/readme/en-07-diagnostics.png)
 
 **What you can learn here:**
-- **Root-Cause Triage Automation**: Inspect `RunDiagnosticsService.java` to learn how to synthesize multi-table execution evidence into actionable engineering diagnostics.
+- **Root-Cause Triage Automation**: Inspect `RunDiagnosticsService.java` to learn how to synthesize multi-table execution evidence into actionable, locale-aware engineering diagnostics.
 
 ---
 
@@ -130,10 +130,21 @@ When a run fails, blocks, triggers security gates, or hits slow LLM calls, click
 
 Configure your own API keys directly in **Settings → Models & API Keys (BYOK)** with built-in presets for **DeepSeek, OpenAI, Qwen (DashScope), Zhipu GLM, SiliconFlow, and any OpenAI-compatible endpoint**. Test connectivity in one click and optionally set reference pricing for local budget estimation.
 
-![BYOK Settings](docs/images/readme/08-byok-settings.png)
+![BYOK Settings (English)](docs/images/readme/en-08-byok-settings.png)
 
 **What you can learn here:**
 - **Production-Grade Secret Hygiene**: `SecretCipher.java` encrypts API keys with **AES-256-GCM** (random 12-byte IV), never returns plaintext keys to the frontend (masked as `sk-****xxxx`), validates Base URLs against SSRF, and enforces per-user ownership isolation.
+
+---
+
+## Full-Stack Bilingual Design: Why Two Externalized Prompt Suites?
+
+Unlike typical web apps, an AI Agent platform has **three distinct language layers**: UI copy, backend validation/diagnostics, and **LLM prompts**.
+
+Because **Glass-Box Agent Studio** is built for **visual transparency and hands-on learning**, we intentionally maintain **two mirrored externalized prompt suites** (`backend/src/main/resources/prompts/` for Chinese and `prompts/en/` for English) instead of forcing everyone to read a single language in the LLM inspector:
+1. **Native Clarity in Glass-Box Learning**: When an English learner opens **Model I/O**, they see idiomatic English system prompts, skill guidelines, and tool JSON schemas; when a Chinese learner switches to `中文`, they see native Chinese prompts — making multi-agent prompt engineering effortless to read and compare.
+2. **Task-Frozen Locale (`tasks.locale`)**: Every task persists its creation locale (`zh-CN` / `en-US`) via Flyway `V6`, driving `PromptResourceLoader.load(locale, path)` with automatic fallback so historical runs remain reproducible.
+3. **Code-First Backend & Frontend i18n**: Security gates (`ToolGateway`), handoff checks, and diagnostics are modeled with semantic codes + Spring `MessageSource` (`Accept-Language`) and zero-dependency React JSON locales — so even historical runs adapt cleanly when you switch UI languages.
 
 ---
 
@@ -191,7 +202,7 @@ backend/src/main/java/
   dev.workbench.framework       Pure contracts, ToolGateway, SecretCipher & trace extractors
   dev.workbench.infrastructure  AgentScope Java 2.0.4 & OpenAI-compatible model adapters
   dev.workbench.modelconnection BYOK encrypted model connections, probing & usage estimation
-  dev.workbench.persistence     JPA entities, repositories & Flyway V1~V5 migrations (H2)
+  dev.workbench.persistence     JPA entities, repositories & Flyway V1~V6 migrations (H2)
   dev.workbench.planning        Idea drafting, entry routing, candidate DAG generation & validation
   dev.workbench.orchestration   Run lifecycle, DAG scheduler, breakpoints & handoff coordination
   dev.workbench.delivery        Execution graph projector, node detail & delivery aggregation
@@ -201,8 +212,10 @@ backend/src/main/java/
   dev.workbench.evaluation      Versioned evaluation suites, datasets & batch comparison
   dev.workbench.observability   Cursor event stream, Grafana-style dashboard & 5-step diagnostics
 backend/src/main/resources/
-  prompts/                      Externalized agent, skill, planning prompts & tool contracts
-  db/migration/                 Flyway versioned migrations (V1 ~ V5)
+  prompts/                      Externalized Chinese prompts & tool contracts (default)
+  prompts/en/                   Mirrored English prompts & tool contracts (for EN tasks)
+  i18n/                         Spring MessageSource bundles (messages_zh_CN / messages_en_US)
+  db/migration/                 Flyway versioned migrations (V1 ~ V6)
 ```
 
 ---

@@ -66,6 +66,10 @@ public class TaskEntity implements Persistable<String> {
   @Column(name = "model_connection_id", length = 36)
   private String modelConnectionId;
 
+  /** 任务创建时的语言偏好，驱动 Prompt、输出语言与诊断文案。 */
+  @Column(name = "locale", nullable = false, length = 16)
+  private String locale;
+
   public TaskEntity() {}
 
   @Override
@@ -197,5 +201,13 @@ public class TaskEntity implements Persistable<String> {
 
   public void setModelConnectionId(String modelConnectionId) {
     this.modelConnectionId = modelConnectionId;
+  }
+
+  public String getLocale() {
+    return locale;
+  }
+
+  public void setLocale(String locale) {
+    this.locale = locale;
   }
 }

@@ -23,13 +23,19 @@ public class PlanCandidateController {
       String requestId, PlanCandidateInput input, String previousCandidateId, String draftKey) {}
 
   @PostMapping("/api/plan-candidates")
-  PlanCandidateService.CandidateView generate(@RequestBody GenerateRequest request) {
+  PlanCandidateService.CandidateView generate(
+      @RequestBody GenerateRequest request,
+      @org.springframework.web.bind.annotation.RequestHeader(
+              value = "Accept-Language",
+              required = false)
+          String acceptLanguage) {
+    var input =
+        request.input() == null || request.input().locale() != null
+            ? request.input()
+            : request.input().withLocale(acceptLanguage);
     return candidates.generate(
         new PlanCandidateService.GenerateRequest(
-            request.requestId(),
-            request.input(),
-            request.previousCandidateId(),
-            request.draftKey()));
+            request.requestId(), input, request.previousCandidateId(), request.draftKey()));
   }
 
   @GetMapping("/api/plan-candidates/{id}")

@@ -17,6 +17,7 @@ import {
 import CloseRounded from '@mui/icons-material/CloseRounded';
 import ExpandMoreRounded from '@mui/icons-material/ExpandMoreRounded';
 import { googleTokens } from '../theme/googleTheme';
+import { useI18n } from '../i18n/I18nProvider';
 
 /** 统一弹窗：24px 圆角、无重阴影、顶部标题与关闭按钮。 */
 export function WorkbenchDialog({
@@ -27,11 +28,14 @@ export function WorkbenchDialog({
   onOk,
   footer,
   width = 640,
-  okText = '确认',
-  cancelText = '取消',
+  okText,
+  cancelText,
   confirmLoading,
   children
 }) {
+  const { t } = useI18n();
+  const resolvedOkText = okText ?? t('common.confirm');
+  const resolvedCancelText = cancelText ?? t('common.cancel');
   const fullScreen = useMediaQuery('(max-width:599px)');
   return (
     <Dialog
@@ -57,7 +61,7 @@ export function WorkbenchDialog({
             </Typography>
           )}
         </Stack>
-        <IconButton onClick={onCancel} aria-label="关闭" size="small">
+        <IconButton onClick={onCancel} aria-label={t('common.close')} size="small">
           <CloseRounded fontSize="small" />
         </IconButton>
       </DialogTitle>
@@ -66,10 +70,10 @@ export function WorkbenchDialog({
       {footer === undefined && onOk && (
         <DialogActions sx={{ px: 2.5, py: 1.8 }}>
           <Button onClick={onCancel} color="inherit">
-            {cancelText}
+            {resolvedCancelText}
           </Button>
           <Button variant="contained" onClick={onOk} loading={confirmLoading}>
-            {okText}
+            {resolvedOkText}
           </Button>
         </DialogActions>
       )}

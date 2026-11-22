@@ -4,6 +4,7 @@ import EmptyState from '../../../components/EmptyState';
 import MarkdownView from '../../../components/MarkdownView';
 import { duration } from '../../../utils/format';
 import { googleTokens } from '../../../theme/googleTheme';
+import { useI18n } from '../../../i18n/I18nProvider';
 
 const roleStyle = role => {
   const upper = String(role || '').toUpperCase();
@@ -15,13 +16,10 @@ const roleStyle = role => {
 
 /** 玻璃盒面板二：模型调用透视（发给模型的 Messages/Schema + 模型原始回复与 tool_calls）。 */
 export default function LlmTracePanel({ models }) {
+  const { t } = useI18n();
   if (!models || models.length === 0) {
     return (
-      <EmptyState
-        compact
-        title="暂无模型调用记录"
-        description="该节点尚未发起模型调用，或为系统检查节点。"
-      />
+      <EmptyState compact title={t('llm.emptyTitle')} description={t('llm.emptyDescription')} />
     );
   }
 
@@ -50,7 +48,7 @@ export default function LlmTracePanel({ models }) {
               }}
             >
               <Typography variant="subtitle2">
-                第 {index + 1} 次调用 · {call.name || 'model'}
+                {t('llm.callIndex', { index: index + 1 })} · {call.name || 'model'}
               </Typography>
               <Stack direction="row" spacing={0.5}>
                 <Chip size="small" label={duration(call.durationMs)} />
@@ -69,19 +67,19 @@ export default function LlmTracePanel({ models }) {
 
             {!payload ? (
               <Typography variant="caption" color="text.secondary">
-                历史运行未采集模型 I/O 快照；新创建的运行会自动保存脱敏后的请求与响应原文。
+                {t('llm.noPayload')}
               </Typography>
             ) : (
               <Stack spacing={1}>
                 {payload.truncated && (
                   <Alert severity="info" sx={{ py: 0 }}>
-                    内容较长已按 64 KB 上限自动脱敏截断。
+                    {t('llm.truncated')}
                   </Alert>
                 )}
 
                 <TraceSection
-                  title={`发给模型的 Messages（${payload.requestMessages?.length ?? 0} 条）`}
-                  subtitle="按角色分色"
+                  title={t('llm.messages', { count: payload.requestMessages?.length ?? 0 })}
+                  subtitle={t('llm.byRole')}
                   dense
                 >
                   <Stack spacing={0.9}>
@@ -112,11 +110,13 @@ export default function LlmTracePanel({ models }) {
                               {tone.label}
                               {msg.name ? ` · ${msg.name}` : ''}
                             </Typography>
-                            <Typography variant="caption">{msg.charCount ?? 0} 字符</Typography>
+                            <Typography variant="caption">
+                              {t('common.chars', { count: msg.charCount ?? 0 })}
+                            </Typography>
                           </Stack>
                           <Box sx={{ p: 1, bgcolor: '#FAFAFA' }}>
                             <Readout mono maxHeight={180}>
-                              {msg.content || '(空)'}
+                              {msg.content || t('llm.emptyContent')}
                             </Readout>
                           </Box>
                         </Box>
@@ -127,7 +127,7 @@ export default function LlmTracePanel({ models }) {
 
                 {(payload.requestTools ?? []).length > 0 && (
                   <TraceSection
-                    title={`注入的工具 Schema（${payload.requestTools.length} 个）`}
+                    title={t('llm.tools', { count: payload.requestTools.length })}
                     dense
                   >
                     <Stack spacing={0.75}>
@@ -156,7 +156,7 @@ export default function LlmTracePanel({ models }) {
 
                 <Box>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                    模型原始返回
+                    {t('llm.rawResponse')}
                   </Typography>
                   {payload.responseContent && (
                     <Box
@@ -177,7 +177,7 @@ export default function LlmTracePanel({ models }) {
                         variant="caption"
                         sx={{ color: googleTokens.primary, fontWeight: 600 }}
                       >
-                        模型决定发起 {payload.responseToolCalls.length} 次工具调用：
+                        {t('llm.toolCalls', { count: payload.responseToolCalls.length })}
                       </Typography>
                       {payload.responseToolCalls.map((tc, idx) => (
                         <Box

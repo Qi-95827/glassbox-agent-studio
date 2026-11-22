@@ -11,16 +11,18 @@ import WorkspacesPage from './features/workspaces/WorkspacesPage';
 import EvaluationsPage from './features/evaluation/EvaluationsPage';
 import SettingsPage from './features/settings/SettingsPage';
 import DocsPage from './features/docs/DocsPage';
+import { useI18n } from './i18n/I18nProvider';
 
 function NotFound() {
+  const { t } = useI18n();
   return (
     <Box sx={{ p: 6, textAlign: 'center' }}>
-      <Typography sx={{ fontSize: 22, fontWeight: 500 }}>页面不存在</Typography>
+      <Typography sx={{ fontSize: 22, fontWeight: 500 }}>{t('app.notFoundTitle')}</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-        链接可能已失效，或当前版本尚未提供该视图。
+        {t('app.notFoundDescription')}
       </Typography>
       <Button href="#/" variant="contained" sx={{ mt: 2 }}>
-        返回工作台
+        {t('app.backToWorkbench')}
       </Button>
     </Box>
   );

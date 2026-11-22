@@ -126,6 +126,7 @@ public class TaskRecordService {
     row.put("FILE_SCOPES_JSON", task.fileScopesJson());
     row.put("VERSION", task.version());
     row.put("MODEL_CONNECTION_ID", task.modelConnectionId());
+    row.put("LOCALE", task.locale() == null ? dev.workbench.framework.prompt.PromptResourceLoader.ZH_CN : task.locale());
     return row;
   }
 
@@ -163,7 +164,8 @@ public class TaskRecordService {
         fileScopes,
         roleBudgets(id),
         toolBudgets(id),
-        task.modelConnectionId());
+        task.modelConnectionId(),
+        dev.workbench.framework.prompt.PromptResourceLoader.normalizeLocale(task.locale()));
   }
 
   /** 读取任务角色策略；未知版本或角色不能当作未设置。 */
@@ -242,7 +244,8 @@ public class TaskRecordService {
       List<String> acceptanceCriteria,
       TaskEntryKind entryKind,
       List<String> fileScopes,
-      String modelConnectionId) {
+      String modelConnectionId,
+      String locale) {
     TaskEntity task = new TaskEntity();
     task.setId(id);
     task.setGoal(goal);
@@ -259,6 +262,7 @@ public class TaskRecordService {
     task.setEntryKind(entryKind.name());
     task.setFileScopesJson(writeTextList(fileScopes));
     task.setModelConnectionId(modelConnectionId);
+    task.setLocale(locale);
     taskRows.save(task);
     if (ownership != null) ownership.stamp(dev.workbench.ownership.OwnershipService.TASK, id);
   }
@@ -279,7 +283,8 @@ public class TaskRecordService {
         task.acceptanceCriteria(),
         task.entryKind(),
         task.fileScopes(),
-        task.modelConnectionId());
+        task.modelConnectionId(),
+        task.locale());
     for (var entry : task.roleBudgets().entrySet()) {
       roleBudgetRows.save(
           new TaskRoleBudgetEntity(

@@ -22,7 +22,7 @@ public interface TaskRepository extends JpaRepository<TaskEntity, String> {
           t.id, t.goal, t.scenario, t.createdAt, t.archivedAt, t.modelMode,
           t.workspaceId, t.fileScope, t.writeEnabled, t.bugId, t.memoryEnabled,
           t.constraintsJson, t.acceptanceJson, t.entryKind, t.fileScopesJson, t.version,
-          t.modelConnectionId),
+          t.modelConnectionId, t.locale),
         r.id, r.status,
         case when r.status = :pending and p.reviewRequired = true and p.approvedAt is null
           then true else false end)
@@ -42,7 +42,7 @@ public interface TaskRepository extends JpaRepository<TaskEntity, String> {
         t.id, t.goal, t.scenario, t.createdAt, t.archivedAt, t.modelMode,
         t.workspaceId, t.fileScope, t.writeEnabled, t.bugId, t.memoryEnabled,
         t.constraintsJson, t.acceptanceJson, t.entryKind, t.fileScopesJson, t.version,
-        t.modelConnectionId)
+        t.modelConnectionId, t.locale)
       from TaskEntity t where t.id = :id
       """)
   Optional<TaskData> findTaskById(@Param("id") String id);

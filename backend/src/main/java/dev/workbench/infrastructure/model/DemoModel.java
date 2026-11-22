@@ -26,10 +26,21 @@ public final class DemoModel implements Model {
   private final List<String> fileScopes;
   private final boolean textOnly;
   private final boolean workflowInput;
+  private final String locale;
 
   public DemoModel(
       AgentRole role, boolean workspaceAvailable, Scenario scenario, List<String> fileScopes) {
-    this(role, workspaceAvailable, scenario, fileScopes, false, false);
+    this(role, workspaceAvailable, scenario, fileScopes, false, false, null);
+  }
+
+  /** 按任务语言返回对应语言的演示分析与交接文本。 */
+  public DemoModel(
+      AgentRole role,
+      boolean workspaceAvailable,
+      Scenario scenario,
+      List<String> fileScopes,
+      String locale) {
+    this(role, workspaceAvailable, scenario, fileScopes, false, false, locale);
   }
 
   DemoModel(
@@ -39,12 +50,28 @@ public final class DemoModel implements Model {
       List<String> fileScopes,
       boolean textOnly,
       boolean workflowInput) {
+    this(role, workspaceAvailable, scenario, fileScopes, textOnly, workflowInput, null);
+  }
+
+  DemoModel(
+      AgentRole role,
+      boolean workspaceAvailable,
+      Scenario scenario,
+      List<String> fileScopes,
+      boolean textOnly,
+      boolean workflowInput,
+      String locale) {
     this.role = role;
     this.workspaceAvailable = workspaceAvailable;
     this.scenario = scenario;
     this.fileScopes = List.copyOf(fileScopes);
     this.textOnly = textOnly;
     this.workflowInput = workflowInput;
+    this.locale = dev.workbench.framework.prompt.PromptResourceLoader.normalizeLocale(locale);
+  }
+
+  private boolean english() {
+    return dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
   }
 
   public String getModelName() {
@@ -58,7 +85,13 @@ public final class DemoModel implements Model {
       return Flux.just(
           ChatResponse.builder()
               .content(
-                  List.of(TextBlock.builder().text("模拟文本分析已返回。示例：核对任务目标、适用约束和可验证的验收条件。").build()))
+                  List.of(
+                      TextBlock.builder()
+                          .text(
+                              english()
+                                  ? "Demo text analysis returned. Example: verify the task goal, applicable constraints and checkable acceptance criteria."
+                                  : "模拟文本分析已返回。示例：核对任务目标、适用约束和可验证的验收条件。")
+                          .build()))
               .build());
     }
     if (role == AgentRole.REVIEWER) {
@@ -77,7 +110,10 @@ public final class DemoModel implements Model {
               .content(
                   List.of(
                       TextBlock.builder()
-                          .text("审查完成：上游工具结果为模拟数据，不证明真实代码已修改或测试通过；应进一步获取真实证据并验证。")
+                          .text(
+                              english()
+                                  ? "Review complete: upstream tool output is simulated data and does not prove real code changes or passing tests. Obtain real evidence and verify further."
+                                  : "审查完成：上游工具结果为模拟数据，不证明真实代码已修改或测试通过；应进一步获取真实证据并验证。")
                           .build()))
               .build());
     }
@@ -146,9 +182,13 @@ public final class DemoModel implements Model {
                 List.of(
                     TextBlock.builder()
                         .text(
-                            role == AgentRole.CODER
-                                ? "模拟开发 Agent 已读取授权文件，本次未执行代码修改；仍需真实实现与验证。"
-                                : "模拟分析完成：建议核对输入、预期行为并准备回归验证。尚无真实测试结果。")
+                            english()
+                                ? role == AgentRole.CODER
+                                    ? "Summary: the demo coding agent read authorized files and made no real code change. Decision: keep the implementation and verification steps separate. Risk: no real test result yet."
+                                    : "Summary: demo analysis complete. Decision: verify inputs, expected behavior and regression coverage. Risk: no real test evidence has been produced."
+                                : role == AgentRole.CODER
+                                    ? "模拟开发 Agent 已读取授权文件，本次未执行代码修改；仍需真实实现与验证。"
+                                    : "模拟分析完成：建议核对输入、预期行为并准备回归验证。尚无真实测试结果。")
                         .build()))
             .build());
   }

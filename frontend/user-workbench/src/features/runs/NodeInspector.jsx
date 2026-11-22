@@ -27,9 +27,10 @@ import StatusChip from '../../components/StatusChip';
 import EmptyState from '../../components/EmptyState';
 import NodeGlassboxDialog from './NodeGlassboxDialog';
 import { readableHandoffSummary, stripMarkdownNoise } from './glassbox/textClean';
-import { PLAN_ROLES, modelKey, modelLabel, nodeTitle } from '../../constants/labels';
+import { modelKey, modelLabel, nodeTitle, planRoleLabel } from '../../constants/labels';
 import { clock, duration, nodeDuration, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 function MetaCell({ label, value, mono }) {
   return (
@@ -141,6 +142,7 @@ export default function NodeInspector({
   onCancelRun,
   onOpenLogs
 }) {
+  const { t, locale } = useI18n();
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogSection, setDialogSection] = useState('result');
@@ -183,12 +185,14 @@ export default function NodeInspector({
   );
   const actualModel =
     actualModelModes.size > 1
-      ? '混合模型'
+      ? t('common.mixedModel')
       : actualModelModes.size === 1
-        ? modelLabel([...actualModelModes][0])
+        ? modelLabel([...actualModelModes][0], undefined, locale)
         : null;
-  const runModelText = runModelMode ? modelLabel(runModelMode) : '未知模型';
-  const modelText = actualModel || `${runModelText}（未调用）`;
+  const runModelText = runModelMode
+    ? modelLabel(runModelMode, undefined, locale)
+    : t('common.unknownModel');
+  const modelText = actualModel || t('inspector.notCalled', { model: runModelText });
 
   const edgeFromNodeId = selectedEdge?.fromNodeId;
   const edgeToNodeId = selectedEdge?.toNodeId ?? node?.id;
@@ -200,8 +204,11 @@ export default function NodeInspector({
       )
     : inbound;
   const edgeFromLabel =
-    dependency?.label || selectedEdge?.fromNodeLabel || shortId(edgeFromNodeId) || '上游节点';
-  const edgeToLabel = nodeTitle(node, '当前节点');
+    dependency?.label ||
+    selectedEdge?.fromNodeLabel ||
+    shortId(edgeFromNodeId) ||
+    t('glassbox.upstreamNode');
+  const edgeToLabel = nodeTitle(node, t('glassbox.currentNode'), locale);
 
   const latestAssembly = attempts.find(item => item.assembly)?.assembly;
   const grantedToolCount = Object.keys(latestAssembly?.components?.tools ?? {}).length;
@@ -232,7 +239,7 @@ export default function NodeInspector({
             component="h2"
             sx={{ fontSize: 16.5, fontWeight: 600, lineHeight: 1.4, overflowWrap: 'anywhere' }}
           >
-            {nodeTitle(node, '节点详情')}
+            {nodeTitle(node, t('inspector.title'), locale)}
           </Typography>
           <Stack
             direction="row"
@@ -242,12 +249,12 @@ export default function NodeInspector({
             <StatusChip value={node?.status ?? 'PENDING'} />
             <Chip
               size="small"
-              title={runId ? `运行 ${runId}` : undefined}
+              title={runId ? t('common.runId', { id: runId }) : undefined}
               label={`#${shortId(taskId) || '—'}`}
               sx={{ bgcolor: '#F1F3F4', color: '#5F6368', fontFamily: googleTokens.mono }}
             />
             {node && onToggleBreakpoint && (
-              <Tooltip title="在执行该节点前自动暂停，便于检查上游交接与上下文">
+              <Tooltip title={t('glassboxDialog.breakpointHint')}>
                 <Chip
                   size="small"
                   clickable
@@ -257,7 +264,11 @@ export default function NodeInspector({
                       sx={{ fontSize: 12, color: hasBreakpoint ? '#C5221F' : '#9AA0A6' }}
                     />
                   }
-                  label={hasBreakpoint ? '已设断点' : '设断点'}
+                  label={
+                    hasBreakpoint
+                      ? t('glassboxDialog.breakpointSet')
+                      : t('glassboxDialog.setBreakpoint')
+                  }
                   sx={{
                     bgcolor: hasBreakpoint ? '#FCE8E6' : '#F1F3F4',
                     color: hasBreakpoint ? '#C5221F' : '#5F6368',
@@ -270,18 +281,18 @@ export default function NodeInspector({
         </Stack>
         <Stack direction="row" spacing={0.25}>
           {node && (
-            <Tooltip title="在宽屏弹窗中深度透视该节点">
+            <Tooltip title={t('inspector.openHint')}>
               <IconButton
                 onClick={() => openGlassbox(selectedEdge ? 'handoff' : 'result')}
                 size="small"
-                aria-label="展开深度透视弹窗"
+                aria-label={t('inspector.openHint')}
               >
                 <OpenInFullRounded fontSize="small" />
               </IconButton>
             </Tooltip>
           )}
-          <Tooltip title="关闭详情">
-            <IconButton onClick={onClose} size="small" aria-label="关闭节点详情">
+          <Tooltip title={t('common.close')}>
+            <IconButton onClick={onClose} size="small" aria-label={t('common.close')}>
               <CloseRounded fontSize="small" />
             </IconButton>
           </Tooltip>
@@ -298,13 +309,21 @@ export default function NodeInspector({
           gap: 1.1
         }}
       >
-        <MetaCell label="模型" value={modelText} />
-        <MetaCell label="耗时" value={elapsed != null ? duration(elapsed) : '—'} mono />
+        <MetaCell label={t('common.model')} value={modelText} />
         <MetaCell
-          label="角色"
-          value={node?.role ? PLAN_ROLES[node.role] || node.role : '通用节点'}
+          label={t('inspector.elapsed')}
+          value={elapsed != null ? duration(elapsed) : '—'}
+          mono
         />
-        <MetaCell label="启动时间" value={node?.startedAt ? clock(node.startedAt) : '—'} mono />
+        <MetaCell
+          label={t('inspector.role')}
+          value={node?.role ? planRoleLabel(node.role, locale) : t('inspector.genericNode')}
+        />
+        <MetaCell
+          label={t('inspector.startedAt')}
+          value={node?.startedAt ? clock(node.startedAt, locale) : '—'}
+          mono
+        />
       </Box>
 
       <Divider />
@@ -320,7 +339,7 @@ export default function NodeInspector({
           <Stack direction="row" spacing={1} sx={{ py: 2, alignItems: 'center' }}>
             <CircularProgress size={16} />
             <Typography variant="body2" color="text.secondary">
-              正在读取节点记录…
+              {t('inspector.loading')}
             </Typography>
           </Stack>
         )}
@@ -328,8 +347,8 @@ export default function NodeInspector({
         {!node ? (
           <EmptyState
             compact
-            title="选择一个节点"
-            description="点击流程图上的节点或连线，快速预览关键信息并一键打开宽屏玻璃盒透视弹窗。"
+            title={t('inspector.selectTitle')}
+            description={t('inspector.selectDescription')}
           />
         ) : (
           <Stack spacing={2}>
@@ -350,11 +369,15 @@ export default function NodeInspector({
                   sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}
                 >
                   <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                    依赖连线 · {edgeFromLabel} → {edgeToLabel}
+                    {t('inspector.edge', { from: edgeFromLabel, to: edgeToLabel })}
                   </Typography>
                   <Chip
                     size="small"
-                    label={edgeHandoffs.length > 0 ? '已接收交接' : '暂无记录'}
+                    label={
+                      edgeHandoffs.length > 0
+                        ? t('inspector.handoffReceived')
+                        : t('inspector.noRecord')
+                    }
                     sx={{
                       height: 20,
                       fontSize: 11,
@@ -369,7 +392,7 @@ export default function NodeInspector({
                   onClick={() => openGlassbox('handoff')}
                   sx={{ px: 0, minHeight: 24, fontSize: 12.5 }}
                 >
-                  在宽屏弹窗中查看交接信封与校验原理 →
+                  {t('inspector.openHandoff')} →
                 </Button>
               </Box>
             )}
@@ -381,7 +404,7 @@ export default function NodeInspector({
                 color="text.secondary"
                 sx={{ fontWeight: 600, display: 'block', mb: 0.9 }}
               >
-                玻璃盒深度透视（点击展开宽屏阅读）
+                {t('inspector.glassboxCards')}
               </Typography>
               <Box
                 sx={{
@@ -392,19 +415,27 @@ export default function NodeInspector({
               >
                 <GlassboxEntryCard
                   icon={<SwapHorizRounded sx={{ fontSize: 16 }} />}
-                  title="交接信封"
-                  subtitle={`收到 ${inbound.length} · 发出 ${outbound.length}`}
+                  title={t('glassbox.handoff')}
+                  subtitle={t('inspector.handoffCounts', {
+                    inbound: inbound.length,
+                    outbound: outbound.length
+                  })}
                   accentBg="#E6F4EA"
                   accentFg="#137333"
                   onClick={() => openGlassbox('handoff')}
                 />
                 <GlassboxEntryCard
                   icon={<VerifiedUserOutlined sx={{ fontSize: 16 }} />}
-                  title="工具安检"
+                  title={t('inspector.gatewayTitle')}
                   subtitle={
                     tools.length > 0
-                      ? `调用 ${tools.length} 次${deniedToolCount ? ` · 拦截 ${deniedToolCount}` : ' · 全通过'}`
-                      : '无工具调用'
+                      ? deniedToolCount
+                        ? t('inspector.gatewayCallsDenied', {
+                            count: tools.length,
+                            denied: deniedToolCount
+                          })
+                        : t('inspector.gatewayCallsPassed', { count: tools.length })
+                      : t('inspector.noToolCalls')
                   }
                   accentBg="#FEF7E0"
                   accentFg="#B06000"
@@ -412,11 +443,14 @@ export default function NodeInspector({
                 />
                 <GlassboxEntryCard
                   icon={<PsychologyOutlined sx={{ fontSize: 16 }} />}
-                  title="模型 I/O"
+                  title={t('glassbox.llm')}
                   subtitle={
                     models.length > 0
-                      ? `${models.length} 次调用${totalOutTokens ? ` · Out ${totalOutTokens}` : ''}`
-                      : '暂无模型调用'
+                      ? t('inspector.modelCalls', {
+                          count: models.length,
+                          tokens: totalOutTokens
+                        })
+                      : t('inspector.noModelCalls')
                   }
                   accentBg="#E8F0FE"
                   accentFg="#1967D2"
@@ -424,8 +458,8 @@ export default function NodeInspector({
                 />
                 <GlassboxEntryCard
                   icon={<WidgetsOutlined sx={{ fontSize: 16 }} />}
-                  title="装配配方"
-                  subtitle={`放行工具 ${grantedToolCount} 项`}
+                  title={t('glassbox.assembly')}
+                  subtitle={t('inspector.grantedTools', { count: grantedToolCount })}
                   accentBg="#F3E8FD"
                   accentFg="#7627BB"
                   onClick={() => openGlassbox('assembly')}
@@ -441,14 +475,14 @@ export default function NodeInspector({
                   sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.75 }}
                 >
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                    节点结论摘要
+                    {t('inspector.summary')}
                   </Typography>
                   <Button
                     size="small"
                     onClick={() => openGlassbox('result')}
                     sx={{ py: 0, px: 0.5, fontSize: 12, minHeight: 24 }}
                   >
-                    阅读全文 →
+                    {t('inspector.readFull')} →
                   </Button>
                 </Stack>
                 <Box
@@ -487,14 +521,14 @@ export default function NodeInspector({
                   sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.75 }}
                 >
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                    上游交接速览（{edgeHandoffs.length}）
+                    {t('inspector.handoffPreview', { count: edgeHandoffs.length })}
                   </Typography>
                   <Button
                     size="small"
                     onClick={() => openGlassbox('handoff')}
                     sx={{ py: 0, px: 0.5, fontSize: 12, minHeight: 24 }}
                   >
-                    校验与正文 →
+                    {t('inspector.checksAndBody')} →
                   </Button>
                 </Stack>
                 <Stack spacing={0.9}>
@@ -536,14 +570,18 @@ export default function NodeInspector({
                               whiteSpace: 'nowrap'
                             }}
                           >
-                            {handoff.senderNodeLabel || handoff.dependencyNodeLabel || '上游节点'}
+                            {handoff.senderNodeLabel ||
+                              handoff.dependencyNodeLabel ||
+                              t('glassbox.upstreamNode')}
                           </Typography>
                           <Typography
                             variant="caption"
                             color="text.secondary"
                             sx={{ flexShrink: 0 }}
                           >
-                            {passCount > 0 ? `${passCount} 项 PASS` : clock(handoff.acceptedAt)}
+                            {passCount > 0
+                              ? t('inspector.passCount', { count: passCount })
+                              : clock(handoff.acceptedAt, locale)}
                           </Typography>
                         </Stack>
                         <Typography
@@ -564,7 +602,7 @@ export default function NodeInspector({
                             variant="caption"
                             sx={{ display: 'block', mt: 0.45, color: googleTokens.primary }}
                           >
-                            涉及 {artifactCount} 个文件/产物 · 点击查看完整交接与校验原理
+                            {t('inspector.artifactHint', { count: artifactCount })}
                           </Typography>
                         )}
                       </Box>
@@ -588,17 +626,17 @@ export default function NodeInspector({
             onClick={() => openGlassbox(selectedEdge ? 'handoff' : 'result')}
             sx={{ flex: 1 }}
           >
-            深度透视
+            {t('inspector.deepInspect')}
           </Button>
         )}
         <Button size="small" variant="outlined" onClick={onOpenLogs}>
-          完整日志
+          {t('inspector.fullLogs')}
         </Button>
         <Tooltip
           title={
             cancelAction?.enabled
-              ? '取消会终止整个运行'
-              : cancelAction?.disabledReason || '服务端当前未提供取消操作'
+              ? t('inspector.cancelHint')
+              : cancelAction?.disabledReason || t('inspector.cancelUnavailable')
           }
         >
           <span>
@@ -608,7 +646,7 @@ export default function NodeInspector({
               disabled={!cancelAction?.enabled}
               onClick={() => setConfirmCancel(true)}
             >
-              取消
+              {t('common.cancel')}
             </Button>
           </span>
         </Tooltip>
@@ -637,15 +675,15 @@ export default function NodeInspector({
 
       {/* 取消运行确认框 */}
       <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontSize: 18 }}>取消本次运行？</DialogTitle>
+        <DialogTitle sx={{ fontSize: 18 }}>{t('inspector.cancelTitle')}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            取消会终止整个运行，而不只是当前节点。已产生的执行证据与工具回执会保留；在途模型或工具调用可能继续结束。
+            {t('inspector.cancelDescription')}
           </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmCancel(false)} color="inherit">
-            继续运行
+            {t('inspector.continueRun')}
           </Button>
           <Button
             variant="contained"
@@ -655,7 +693,7 @@ export default function NodeInspector({
               onCancelRun?.();
             }}
           >
-            取消运行
+            {t('run.action.CANCEL')}
           </Button>
         </DialogActions>
       </Dialog>

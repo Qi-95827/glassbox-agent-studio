@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 import { googleTokens } from '../../../theme/googleTheme';
+import { getCurrentLocale, translate } from '../../../i18n';
+
+const L = (key, params) => translate(getCurrentLocale(), key, params);
 
 export const CHART_COLORS = {
   primary: '#1A73E8',
@@ -45,7 +48,7 @@ function percentText(value, total) {
 }
 
 /** 半圆仪表盘：用于成功率等单一百分比指标。 */
-export function GaugeArc({ value = 0, label = '成功率', color }) {
+export function GaugeArc({ value = 0, label = L('monitoring.successRate'), color }) {
   const clamped = Math.min(100, Math.max(0, Number(value) || 0));
   const radius = 70;
   const length = Math.PI * radius;
@@ -128,7 +131,11 @@ function LineGrid({ width, height, left, top, maxValue }) {
  * 时序趋势图：运行量堆叠柱、平均耗时折线、Token 面积图共用同一套坐标与 hover Tooltip。
  * 使用纯 SVG 渲染，不引入重型图表依赖；空数据时保持坐标轴但不会出现 NaN/Infinity。
  */
-export function TrendChart({ points = [], metric = 'runs', title = '运行趋势' }) {
+export function TrendChart({
+  points = [],
+  metric = 'runs',
+  title = L('monitoring.chart.trendTitle')
+}) {
   const [hovered, setHovered] = useState(null);
   const width = 760;
   const height = 250;
@@ -183,13 +190,17 @@ export function TrendChart({ points = [], metric = 'runs', title = '运行趋势
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mb: 0.5, px: 0.5 }}>
         {metric === 'runs' && (
           <>
-            <LegendDot color={CHART_COLORS.success} label="成功" />
-            <LegendDot color={CHART_COLORS.error} label="失败" />
-            <LegendDot color={CHART_COLORS.neutralSoft} label="其他/进行中" />
+            <LegendDot color={CHART_COLORS.success} label={L('monitoring.chart.success')} />
+            <LegendDot color={CHART_COLORS.error} label={L('monitoring.chart.failed')} />
+            <LegendDot color={CHART_COLORS.neutralSoft} label={L('monitoring.chart.other')} />
           </>
         )}
-        {metric === 'duration' && <LegendDot color={CHART_COLORS.primary} label="平均耗时" />}
-        {metric === 'tokens' && <LegendDot color={CHART_COLORS.primary} label="Token 消耗" />}
+        {metric === 'duration' && (
+          <LegendDot color={CHART_COLORS.primary} label={L('monitoring.chart.avgDuration')} />
+        )}
+        {metric === 'tokens' && (
+          <LegendDot color={CHART_COLORS.primary} label={L('monitoring.chart.tokens')} />
+        )}
       </Box>
       <svg
         viewBox={`0 0 ${width} ${height}`}
@@ -341,13 +352,14 @@ export function TrendChart({ points = [], metric = 'runs', title = '运行趋势
           <Typography sx={{ fontSize: 11, fontWeight: 600 }}>{hoveredPoint.bucketLabel}</Typography>
           {metric === 'runs' && (
             <Typography sx={{ fontSize: 11 }}>
-              运行 {hoveredPoint.runCount ?? 0} · 成功 {hoveredPoint.successCount ?? 0} · 失败{' '}
-              {hoveredPoint.failedCount ?? 0}
+              {L('monitoring.chart.runs', { count: hoveredPoint.runCount ?? 0 })} ·{' '}
+              {L('monitoring.chart.successCount', { count: hoveredPoint.successCount ?? 0 })} ·{' '}
+              {L('monitoring.chart.failedCount', { count: hoveredPoint.failedCount ?? 0 })}
             </Typography>
           )}
           {metric === 'duration' && (
             <Typography sx={{ fontSize: 11 }}>
-              平均耗时{' '}
+              {L('monitoring.chart.avgDuration')}{' '}
               {hoveredPoint.avgDurationMs == null ? '—' : `${hoveredPoint.avgDurationMs}ms`}
             </Typography>
           )}
@@ -377,7 +389,7 @@ function LegendDot({ color, label }) {
  * Donut 圆环图：支持 hover 高亮、中心汇总与右侧图例。
  * slices: [{ key, label, value, detail }]
  */
-export function DonutChart({ slices = [], totalLabel = '总计', valueSuffix = '' }) {
+export function DonutChart({ slices = [], totalLabel = L('common.total'), valueSuffix = '' }) {
   const [hovered, setHovered] = useState(null);
   const total = slices.reduce((sum, slice) => sum + (Number(slice.value) || 0), 0);
   const radius = 62;
@@ -388,7 +400,7 @@ export function DonutChart({ slices = [], totalLabel = '总计', valueSuffix = '
   if (!slices.length || total <= 0) {
     return (
       <Typography variant="body2" color="text.secondary" sx={{ py: 5, textAlign: 'center' }}>
-        暂无分布数据。
+        {L('monitoring.chart.noDistribution')}
       </Typography>
     );
   }
@@ -404,7 +416,7 @@ export function DonutChart({ slices = [], totalLabel = '总计', valueSuffix = '
           viewBox="0 0 180 180"
           style={{ width: '100%', display: 'block' }}
           role="img"
-          aria-label="分布圆环图"
+          aria-label={L('monitoring.chart.distribution')}
         >
           <circle cx="90" cy="90" r={radius} fill="none" stroke="#F1F3F4" strokeWidth="26" />
           {slices.map((slice, index) => {

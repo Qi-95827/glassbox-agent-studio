@@ -23,11 +23,12 @@ import { useNavigate } from 'react-router-dom';
 import { useRunDiagnostics } from '../../hooks/useEvaluations';
 import { statusLabel } from '../../constants/labels';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const HEALTH_TONES = {
-  HEALTHY: { bg: '#E6F4EA', fg: '#137333', label: '运行健康' },
-  WARNING: { bg: '#FEF7E0', fg: '#B06000', label: '需要关注' },
-  CRITICAL: { bg: '#FCE8E6', fg: '#C5221F', label: '严重异常' }
+  HEALTHY: { bg: '#E6F4EA', fg: '#137333', key: 'diagnostics.healthy' },
+  WARNING: { bg: '#FEF7E0', fg: '#B06000', key: 'diagnostics.warning' },
+  CRITICAL: { bg: '#FCE8E6', fg: '#C5221F', key: 'diagnostics.critical' }
 };
 
 const STEP_TONES = {
@@ -35,21 +36,21 @@ const STEP_TONES = {
     bg: '#FCE8E6',
     border: '#F6C7C4',
     fg: '#C5221F',
-    label: '发现问题',
+    key: 'diagnostics.issueFound',
     icon: <ErrorOutlineRounded sx={{ fontSize: 19 }} />
   },
   CHECK_RECOMMENDED: {
     bg: '#FEF7E0',
     border: '#FEEFC3',
     fg: '#B06000',
-    label: '建议核查',
+    key: 'diagnostics.checkRecommended',
     icon: <WarningAmberRounded sx={{ fontSize: 19 }} />
   },
   LOOKS_OK: {
     bg: '#E6F4EA',
     border: '#CEEAD6',
     fg: '#137333',
-    label: '正常',
+    key: 'diagnostics.looksOk',
     icon: <CheckCircleRounded sx={{ fontSize: 19 }} />
   }
 };
@@ -59,6 +60,7 @@ const STEP_TONES = {
  * 命中问题的步骤自动展开并高亮，正常步骤默认折叠；每步可一键跳转到对应节点透视 Tab。
  */
 export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const query = useRunDiagnostics(runId, open);
   const data = query.data;
@@ -96,10 +98,11 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
     navigate(route);
   };
 
-  const health = HEALTH_TONES[data?.healthLevel] || {
-    bg: '#F1F3F4',
-    fg: '#5F6368',
-    label: '诊断中'
+  const healthTone = HEALTH_TONES[data?.healthLevel];
+  const health = {
+    bg: healthTone?.bg || '#F1F3F4',
+    fg: healthTone?.fg || '#5F6368',
+    label: healthTone ? t(healthTone.key) : t('diagnostics.diagnosing')
   };
 
   return (
@@ -134,12 +137,12 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
           <HealthAndSafetyOutlined sx={{ fontSize: 20 }} />
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{ fontSize: 16, fontWeight: 600 }}>快捷故障排查向导</Typography>
+          <Typography sx={{ fontSize: 16, fontWeight: 600 }}>{t('diagnostics.title')}</Typography>
           <Typography variant="caption" color="text.secondary">
-            按标准五步法自动定位失败、拦截与高耗时线索
+            {t('diagnostics.subtitle')}
           </Typography>
         </Box>
-        <IconButton onClick={onClose} size="small" aria-label="关闭排查向导">
+        <IconButton onClick={onClose} size="small" aria-label={t('diagnostics.close')}>
           <CloseRounded fontSize="small" />
         </IconButton>
       </Stack>
@@ -153,12 +156,14 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
           >
             <CircularProgress size={20} />
             <Typography variant="body2" color="text.secondary">
-              正在基于运行证据生成诊断…
+              {t('diagnostics.loading')}
             </Typography>
           </Stack>
         )}
         {query.isError && (
-          <Alert severity="error">诊断读取失败：{query.error?.message || '未知错误'}</Alert>
+          <Alert severity="error">
+            {t('diagnostics.loadFailed', { message: query.error?.message || t('common.unknown') })}
+          </Alert>
         )}
 
         {data && (
@@ -183,17 +188,21 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
                 />
                 <Chip
                   size="small"
-                  label={`运行 ${statusLabel(data.runStatus)}`}
+                  label={t('diagnostics.runStatus', {
+                    status: statusLabel(data.runStatus, locale)
+                  })}
                   sx={{ bgcolor: '#F1F3F4', color: '#5F6368' }}
                 />
                 <Chip
                   size="small"
-                  label={`任务 ${statusLabel(data.taskStatus)}`}
+                  label={t('diagnostics.taskStatus', {
+                    status: statusLabel(data.taskStatus, locale)
+                  })}
                   sx={{ bgcolor: '#F1F3F4', color: '#5F6368' }}
                 />
               </Stack>
               <Typography sx={{ fontSize: 13, color: googleTokens.textSecondary, mb: 0.4 }}>
-                {data.taskTitle || '未命名任务'}
+                {data.taskTitle || t('common.unnamedTask')}
               </Typography>
               <Typography sx={{ fontSize: 15, fontWeight: 600, lineHeight: 1.6 }}>
                 {data.primaryIssue}
@@ -202,7 +211,7 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
 
             <Box>
               <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                五步排查清单
+                {t('diagnostics.checklist')}
               </Typography>
               <Stack spacing={1} sx={{ mt: 1 }}>
                 {(data.troubleshootingSteps ?? []).map(step => {
@@ -257,7 +266,7 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
                         </Typography>
                         <Chip
                           size="small"
-                          label={tone.label}
+                          label={t(tone.key)}
                           sx={{ bgcolor: tone.bg, color: tone.fg, height: 21, fontSize: 11 }}
                         />
                         <ExpandMoreRounded
@@ -287,7 +296,7 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
                             }}
                             sx={{ minHeight: 30, fontSize: 12.5 }}
                           >
-                            {step.actionLabel || '查看详情'}
+                            {step.actionLabel || t('common.detail')}
                           </Button>
                         </Box>
                       </Collapse>
@@ -299,8 +308,7 @@ export default function RunDiagnosticsDrawer({ open, runId, onClose }) {
 
             <Divider />
             <Typography variant="caption" color="text.secondary">
-              提示：诊断只读取本运行的持久化证据，不会修改运行或工作区。点击上方按钮可直接定位到对应节点并打开玻璃盒透视
-              Tab。
+              {t('diagnostics.tip')}
             </Typography>
           </Stack>
         )}

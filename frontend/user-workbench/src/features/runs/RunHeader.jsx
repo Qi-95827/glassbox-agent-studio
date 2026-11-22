@@ -8,6 +8,7 @@ import HealthAndSafetyOutlined from '@mui/icons-material/HealthAndSafetyOutlined
 import { useState } from 'react';
 import { IconButton, Menu, MenuItem } from '@mui/material';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const actionIcons = {
   PAUSE: <PauseRounded fontSize="small" />,
@@ -30,7 +31,14 @@ export default function RunHeader({
   diagnoseVisible = false,
   onDiagnose
 }) {
+  const { t, locale } = useI18n();
   const [moreAnchor, setMoreAnchor] = useState(null);
+  const actionLabel = action => {
+    if (locale !== 'en-US') return action.label;
+    const key = `run.action.${action.actionCode}`;
+    const translated = t(key);
+    return translated === key ? action.label : translated;
+  };
   const actions = (view?.availableActions ?? []).filter(
     action => action.actionCode !== 'SUBMIT_SUPPLEMENT'
   );
@@ -54,13 +62,13 @@ export default function RunHeader({
         onChange={(_, value) => onTab(value)}
         variant="scrollable"
         scrollButtons={false}
-        aria-label="运行视图切换"
+        aria-label={t('run.viewSwitch')}
         sx={{ flex: 1, minWidth: 0, '& .MuiTabs-indicator': { bgcolor: googleTokens.primary } }}
       >
-        <Tab value="flow" label="观察流程" />
-        <Tab value="replay" label="逐步回放" />
-        <Tab value="output" label="交付说明" />
-        <Tab value="list" label="列表视图" />
+        <Tab value="flow" label={t('run.tab.flow')} />
+        <Tab value="replay" label={t('run.tab.replay')} />
+        <Tab value="output" label={t('run.tab.output')} />
+        <Tab value="list" label={t('run.tab.list')} />
       </Tabs>
 
       <Stack direction="row" spacing={0.9} sx={{ flexShrink: 0, alignItems: 'center' }}>
@@ -73,7 +81,7 @@ export default function RunHeader({
             onClick={onDiagnose}
             sx={{ whiteSpace: 'nowrap' }}
           >
-            快速排查
+            {t('run.quickTriage')}
           </Button>
         )}
         {inline.map(action => (
@@ -87,7 +95,7 @@ export default function RunHeader({
             onClick={() => onAction(action)}
             sx={{ display: { xs: 'none', md: 'inline-flex' } }}
           >
-            {action.label}
+            {actionLabel(action)}
             {action.targetLabel && action.actionCode !== 'APPROVE_PLAN'
               ? ` · ${action.targetLabel}`
               : ''}
@@ -97,7 +105,7 @@ export default function RunHeader({
           <>
             <IconButton
               size="small"
-              aria-label="更多运行操作"
+              aria-label={t('run.moreActions')}
               onClick={event => setMoreAnchor(event.currentTarget)}
             >
               <MoreVertRounded fontSize="small" />
@@ -117,7 +125,7 @@ export default function RunHeader({
                     onAction(action);
                   }}
                 >
-                  {action.label}
+                  {actionLabel(action)}
                   {action.targetLabel ? ` · ${action.targetLabel}` : ''}
                 </MenuItem>
               ))}
@@ -139,7 +147,7 @@ export default function RunHeader({
           }}
           sx={{ whiteSpace: 'nowrap' }}
         >
-          {tab === 'output' && workspaceId ? '去工作区提交' : '验收交付'}
+          {tab === 'output' && workspaceId ? t('run.submitWorkspace') : t('run.acceptDelivery')}
         </Button>
       </Stack>
     </Box>

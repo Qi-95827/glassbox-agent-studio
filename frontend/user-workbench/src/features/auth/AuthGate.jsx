@@ -16,6 +16,7 @@ import { authApi } from '../../api/auth';
 import { setUnauthorizedHandler, get } from '../../api/client';
 import AppLogo from '../../components/AppLogo';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const AuthContext = createContext(null);
 
@@ -49,6 +50,7 @@ function Splash({ message }) {
  * <p>初始化完成前保留旧单机模式；初始化后 401 会清空本地登录态并回到登录页。
  */
 export default function AuthGate({ children }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const session = useSession();
   const [error, setError] = useState('');
@@ -111,22 +113,25 @@ export default function AuthGate({ children }) {
       try {
         const latest = await authApi.status();
         if (latest.currentUser) {
-          setError(`退出失败：${failure.message}。服务端会话可能仍有效，请重试。`);
+          setError(t('auth.logoutFailedSession', { message: failure.message }));
           return;
         }
       } catch {
-        setError(`退出失败：${failure.message}。无法确认会话状态，请检查网络后重试。`);
+        setError(t('auth.logoutFailedUnknown', { message: failure.message }));
         return;
       }
       queryClient.clear();
     }
   });
 
-  if (session.isLoading) return <Splash message="正在读取本地账号状态" />;
+  if (session.isLoading) return <Splash message={t('auth.loading')} />;
   if (session.isError) {
     return (
       <Box sx={{ p: 4, maxWidth: 640, mx: 'auto' }}>
-        <Alert severity="error" action={<Button onClick={() => session.refetch()}>重试</Button>}>
+        <Alert
+          severity="error"
+          action={<Button onClick={() => session.refetch()}>{t('auth.retry')}</Button>}
+        >
           {session.error.message}
         </Alert>
       </Box>
@@ -139,7 +144,7 @@ export default function AuthGate({ children }) {
     const submit = event => {
       event.preventDefault();
       if (!username.trim() || password.length < 8) {
-        setError('请输入账号，并至少填写 8 位密码。');
+        setError(t('auth.invalidCredentials'));
         return;
       }
       signIn.mutate(
@@ -186,12 +191,10 @@ export default function AuthGate({ children }) {
             </Typography>
           </Stack>
           <Typography sx={{ fontSize: 24, fontWeight: 500, lineHeight: 1.35 }}>
-            {setup ? '初始化本地管理员' : '登录工作台'}
+            {setup ? t('auth.initTitle') : t('auth.loginTitle')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 3 }}>
-            {setup
-              ? '首次初始化会创建本机管理员。账号与密码只保存在本地数据库。'
-              : '使用本机账号继续查看任务、运行过程与交付结果。'}
+            {setup ? t('auth.initDescription') : t('auth.loginDescription')}
           </Typography>
           {error && (
             <Alert severity="error" sx={{ mb: 2 }}>
@@ -200,10 +203,10 @@ export default function AuthGate({ children }) {
           )}
           <Stack spacing={2}>
             <TextField
-              label="账号"
+              label={t('auth.username')}
               value={username}
               onChange={event => setUsername(event.target.value)}
-              placeholder="3-32 位小写字母或数字"
+              placeholder={t('auth.usernamePlaceholder')}
               autoComplete="username"
               autoFocus
               fullWidth
@@ -212,20 +215,20 @@ export default function AuthGate({ children }) {
 
             {setup && (
               <TextField
-                label="显示名称"
+                label={t('auth.displayName')}
                 value={displayName}
                 onChange={event => setDisplayName(event.target.value)}
-                placeholder="例如：本地管理员"
+                placeholder={t('auth.displayNamePlaceholder')}
                 fullWidth
                 size="small"
               />
             )}
             <TextField
-              label="密码"
+              label={t('auth.password')}
               type="password"
               value={password}
               onChange={event => setPassword(event.target.value)}
-              placeholder="至少 8 位"
+              placeholder={t('auth.passwordPlaceholder')}
               autoComplete={setup ? 'new-password' : 'current-password'}
               fullWidth
               size="small"
@@ -240,17 +243,15 @@ export default function AuthGate({ children }) {
                     onChange={event => setClaim(event.target.checked)}
                   />
                 }
-                label={
-                  <Typography variant="body2">把现有任务、工作区和运行归入该管理员</Typography>
-                }
+                label={<Typography variant="body2">{t('auth.claimLegacy')}</Typography>}
               />
             )}
             <Button type="submit" variant="contained" fullWidth loading={busy} sx={{ height: 42 }}>
-              {setup ? '初始化并登录' : '登录'}
+              {setup ? t('auth.initSubmit') : t('auth.loginSubmit')}
             </Button>
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2.5 }}>
-            身份只来自服务端会话；本页面不会把请求体里的用户标识当作归属依据。
+            {t('auth.securityNote')}
           </Typography>
         </Box>
       </Box>
@@ -271,7 +272,7 @@ export default function AuthGate({ children }) {
               loading={signOut.isPending}
               onClick={() => signOut.mutate()}
             >
-              重试退出
+              {t('auth.retryLogout')}
             </Button>
           }
           sx={{ position: 'fixed', top: 68, right: 16, zIndex: 3000, maxWidth: 520 }}

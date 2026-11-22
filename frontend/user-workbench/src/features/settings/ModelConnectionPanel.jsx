@@ -16,17 +16,19 @@ import { modelConnectionsApi } from '../../api/modelConnections';
 import { useModelConnections } from '../../hooks/useModelConnections';
 import { googleTokens } from '../../theme/googleTheme';
 import ModelConnectionDialog from './ModelConnectionDialog';
+import { useI18n } from '../../i18n/I18nProvider';
 
-function statusChip(connection) {
+function statusChip(connection, t) {
   if (connection.lastTestStatus === 'OK')
-    return <Chip size="small" color="success" label="已连通" />;
+    return <Chip size="small" color="success" label={t('byok.connected')} />;
   if (connection.lastTestStatus === 'FAILED')
-    return <Chip size="small" color="error" label="连接失败" />;
-  return <Chip size="small" label="尚未测试" />;
+    return <Chip size="small" color="error" label={t('byok.connectionFailed')} />;
+  return <Chip size="small" label={t('byok.untested')} />;
 }
 
 /** 模型与 API Key（BYOK）主卡片：列表、默认项、连通性测试与编辑入口。 */
 export default function ModelConnectionPanel() {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const query = useModelConnections();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -67,9 +69,9 @@ export default function ModelConnectionPanel() {
         sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between', mb: 0.5 }}
       >
         <Box>
-          <Typography sx={{ fontSize: 16, fontWeight: 500 }}>模型与 API Key（BYOK）</Typography>
+          <Typography sx={{ fontSize: 16, fontWeight: 500 }}>{t('byok.title')}</Typography>
           <Typography variant="caption" color="text.secondary">
-            使用你自己的服务商额度。密钥服务端加密存储，页面与网络响应只显示掩码。
+            {t('byok.description')}
           </Typography>
         </Box>
         <Button
@@ -80,7 +82,7 @@ export default function ModelConnectionPanel() {
             setDialogOpen(true);
           }}
         >
-          添加模型连接
+          {t('byok.add')}
         </Button>
       </Stack>
 
@@ -94,13 +96,12 @@ export default function ModelConnectionPanel() {
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 2 }}>
           <CircularProgress size={16} />
           <Typography variant="body2" color="text.secondary">
-            正在读取模型连接…
+            {t('byok.loading')}
           </Typography>
         </Stack>
       ) : connections.length === 0 ? (
         <Alert severity="info" sx={{ mt: 1.5 }}>
-          还没有自带 Key 的模型。添加后即可在首页任务里选择「我的模型」，真实调用会走你自己的额度；
-          也可以继续使用内置模拟模型体验完整流程。
+          {t('byok.empty')}
         </Alert>
       ) : (
         <Stack spacing={1.2} sx={{ mt: 1.5 }}>
@@ -130,10 +131,15 @@ export default function ModelConnectionPanel() {
                   </Typography>
                   <Chip size="small" label={connection.providerLabel} />
                   {connection.isDefault && (
-                    <Chip size="small" color="primary" icon={<StarRounded />} label="默认" />
+                    <Chip
+                      size="small"
+                      color="primary"
+                      icon={<StarRounded />}
+                      label={t('common.default')}
+                    />
                   )}
-                  {!connection.enabled && <Chip size="small" label="已停用" />}
-                  {statusChip(connection)}
+                  {!connection.enabled && <Chip size="small" label={t('common.disabled')} />}
+                  {statusChip(connection, t)}
                   <Typography variant="caption" color="text.secondary">
                     {connection.modelName} · {connection.keyMasked}
                   </Typography>
@@ -146,7 +152,7 @@ export default function ModelConnectionPanel() {
                       act(connection.id, () => modelConnectionsApi.test(connection.id))
                     }
                   >
-                    测试连通性
+                    {t('byok.test')}
                   </Button>
                   {!connection.isDefault && (
                     <Button
@@ -156,7 +162,7 @@ export default function ModelConnectionPanel() {
                         act(connection.id, () => modelConnectionsApi.setDefault(connection.id))
                       }
                     >
-                      设为默认
+                      {t('byok.setDefault')}
                     </Button>
                   )}
                   <Button
@@ -166,7 +172,7 @@ export default function ModelConnectionPanel() {
                       setDialogOpen(true);
                     }}
                   >
-                    编辑
+                    {t('common.edit')}
                   </Button>
                   <Button
                     size="small"
@@ -181,13 +187,13 @@ export default function ModelConnectionPanel() {
                       }
                     }}
                   >
-                    {confirmDelete === connection.id ? '确认删除' : '删除'}
+                    {confirmDelete === connection.id ? t('byok.confirmDelete') : t('common.delete')}
                   </Button>
                 </Stack>
               </Stack>
               {connection.lastTestStatus === 'FAILED' && connection.lastTestMessage && (
                 <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.75 }}>
-                  最近失败原因：{connection.lastTestMessage}
+                  {t('byok.lastFailure', { message: connection.lastTestMessage })}
                 </Typography>
               )}
               {(connection.inputPricePer1m != null || connection.outputPricePer1m != null) && (
@@ -196,9 +202,11 @@ export default function ModelConnectionPanel() {
                   color="text.secondary"
                   sx={{ display: 'block', mt: 0.5 }}
                 >
-                  参考单价：输入 {connection.inputPricePer1m ?? '未设'} / 输出{' '}
-                  {connection.outputPricePer1m ?? '未设'} 每百万 Token（{connection.currency}
-                  ），仅用于本机估算。
+                  {t('byok.priceNote', {
+                    input: connection.inputPricePer1m ?? t('byok.notSet'),
+                    output: connection.outputPricePer1m ?? t('byok.notSet'),
+                    currency: connection.currency
+                  })}
                 </Typography>
               )}
             </Box>
@@ -207,7 +215,9 @@ export default function ModelConnectionPanel() {
       )}
 
       <Divider sx={{ my: 2 }} />
-      <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.5 }}>内置免 Key 项</Typography>
+      <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.5 }}>
+        {t('byok.builtInTitle')}
+      </Typography>
       <Stack spacing={0.75}>
         {builtIns.map(item => (
           <Stack
@@ -221,12 +231,12 @@ export default function ModelConnectionPanel() {
             <Typography variant="caption" color="text.secondary">
               {item.modelName}
             </Typography>
-            <Chip size="small" label="只读" />
+            <Chip size="small" label={t('byok.readOnly')} />
           </Stack>
         ))}
       </Stack>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-        模拟模型用于教学与快速体验；本地密钥文件只作为兼容兜底，建议改为页面配置。
+        {t('byok.builtInNote')}
       </Typography>
 
       <ModelConnectionDialog

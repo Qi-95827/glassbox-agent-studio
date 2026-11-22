@@ -21,7 +21,46 @@ public record TaskDefinition(
     List<String> fileScopes,
     Map<AgentRole, RoleBudget> roleBudgets,
     Map<ToolKind, Integer> toolBudgets,
-    String modelConnectionId) {
+    String modelConnectionId,
+    String locale) {
+  /** 兼容未记录任务语言的历史任务：默认中文。 */
+  public TaskDefinition(
+      UUID id,
+      String goal,
+      Scenario scenario,
+      ModelMode modelMode,
+      String workspaceId,
+      String fileScope,
+      boolean writeEnabled,
+      String bugId,
+      boolean memoryEnabled,
+      List<String> constraints,
+      List<String> acceptanceCriteria,
+      TaskEntryKind entryKind,
+      List<String> fileScopes,
+      Map<AgentRole, RoleBudget> roleBudgets,
+      Map<ToolKind, Integer> toolBudgets,
+      String modelConnectionId) {
+    this(
+        id,
+        goal,
+        scenario,
+        modelMode,
+        workspaceId,
+        fileScope,
+        writeEnabled,
+        bugId,
+        memoryEnabled,
+        constraints,
+        acceptanceCriteria,
+        entryKind,
+        fileScopes,
+        roleBudgets,
+        toolBudgets,
+        modelConnectionId,
+        "zh-CN");
+  }
+
   /** 兼容未绑定用户模型连接的任务。 */
   public TaskDefinition(
       UUID id,
@@ -161,6 +200,12 @@ public record TaskDefinition(
     fileScopes = List.copyOf(fileScopes);
     roleBudgets = Map.copyOf(roleBudgets);
     toolBudgets = Map.copyOf(toolBudgets);
+    locale =
+        locale == null || locale.isBlank()
+            ? "zh-CN"
+            : locale.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
+                ? "en-US"
+                : "zh-CN";
     if (toolBudgets.values().stream().anyMatch(limit -> limit < 0 || limit > 20))
       throw new IllegalArgumentException("工具调用上限须在 0 至 20 之间。");
     if ((fileScopes.isEmpty() && fileScope != null)

@@ -12,11 +12,12 @@ import {
 } from '@mui/material';
 import { evaluationApi } from '../../api/evaluations';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
-const blank = () => ({
+const blank = t => ({
   code: `CASE_${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
-  title: '新样本',
-  goal: '描述该样本要验证的行为',
+  title: t('dataset.newSample'),
+  goal: t('dataset.newSampleGoal'),
   scenario: 'normal',
   expectedStatus: 'COMPLETED',
   maxRounds: 4,
@@ -27,6 +28,7 @@ const blank = () => ({
 
 /** 可管理评测数据集：编辑草稿、发布不可变版本、从失败运行录入并回看批次。 */
 export default function DatasetManager({ onOpenRun }) {
+  const { t } = useI18n();
   const [key, setKey] = useState('MANAGED_UI');
   const [rows, setRows] = useState([]);
   const [versions, setVersions] = useState([]);
@@ -131,9 +133,7 @@ export default function DatasetManager({ onOpenRun }) {
 
   return (
     <Stack spacing={2}>
-      <Alert severity="info">
-        草稿可编辑；发布后版本不可变。批次绑定实际版本、配置和预算，失败样本保留运行入口。
-      </Alert>
+      <Alert severity="info">{t('dataset.intro')}</Alert>
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={1.25}
@@ -142,31 +142,34 @@ export default function DatasetManager({ onOpenRun }) {
       >
         <TextField
           size="small"
-          label="数据集编码"
+          label={t('dataset.code')}
           value={key}
           onChange={event => setKey(event.target.value.toUpperCase())}
           sx={{ width: 190 }}
         />
 
         <Button variant="outlined" loading={busy} onClick={publish}>
-          发布当前草稿
+          {t('dataset.publishDraft')}
         </Button>
         <TextField
           select
           size="small"
-          label="评测版本"
+          label={t('dataset.version')}
           value={version ?? ''}
           onChange={event => setVersion(event.target.value)}
           sx={{ width: 170 }}
         >
           {versions.map(item => (
             <MenuItem key={item.version} value={item.version}>
-              v{item.version} · {item.sampleCount} 样本
+              {t('dataset.versionOption', {
+                version: item.version,
+                count: item.sampleCount
+              })}
             </MenuItem>
           ))}
         </TextField>
         <Button variant="contained" loading={busy} disabled={!versions.length} onClick={startBatch}>
-          运行数据集批次
+          {t('dataset.runBatch')}
         </Button>
       </Stack>
       {error && <Alert severity="error">{error}</Alert>}
@@ -180,7 +183,7 @@ export default function DatasetManager({ onOpenRun }) {
             <Stack spacing={1}>
               <TextField
                 size="small"
-                label={`${row.code} 标题`}
+                label={t('dataset.rowTitle', { code: row.code })}
                 value={row.title}
                 onChange={event => update(row.code, 'title', event.target.value)}
               />
@@ -188,7 +191,7 @@ export default function DatasetManager({ onOpenRun }) {
               <TextField
                 multiline
                 minRows={2}
-                label="样本目标"
+                label={t('dataset.goal')}
                 value={row.goal}
                 onChange={event => update(row.code, 'goal', event.target.value)}
               />
@@ -197,19 +200,19 @@ export default function DatasetManager({ onOpenRun }) {
                 <TextField
                   select
                   size="small"
-                  label="场景"
+                  label={t('advanced.scenario')}
                   value={row.scenario}
                   onChange={event => update(row.code, 'scenario', event.target.value)}
                   sx={{ width: 120 }}
                 >
-                  <MenuItem value="normal">正常</MenuItem>
-                  <MenuItem value="fail">失败</MenuItem>
-                  <MenuItem value="repeat">重复调用</MenuItem>
+                  <MenuItem value="normal">{t('advanced.scenario.normal')}</MenuItem>
+                  <MenuItem value="fail">{t('advanced.scenario.fail')}</MenuItem>
+                  <MenuItem value="repeat">{t('advanced.scenario.repeat')}</MenuItem>
                 </TextField>
                 <TextField
                   select
                   size="small"
-                  label="预期状态"
+                  label={t('dataset.expectedStatus')}
                   value={row.expectedStatus}
                   onChange={event => update(row.code, 'expectedStatus', event.target.value)}
                   sx={{ width: 140 }}
@@ -223,7 +226,7 @@ export default function DatasetManager({ onOpenRun }) {
                 <TextField
                   size="small"
                   type="number"
-                  label="轮次"
+                  label={t('dataset.rounds')}
                   value={row.maxRounds}
                   onChange={event => update(row.code, 'maxRounds', event.target.value)}
                   sx={{ width: 90 }}
@@ -232,7 +235,7 @@ export default function DatasetManager({ onOpenRun }) {
                 <TextField
                   size="small"
                   type="number"
-                  label="工具"
+                  label={t('dataset.tools')}
                   value={row.maxTools}
                   onChange={event => update(row.code, 'maxTools', event.target.value)}
                   sx={{ width: 90 }}
@@ -245,12 +248,16 @@ export default function DatasetManager({ onOpenRun }) {
                   onClick={() => save(row)}
                   sx={{ alignSelf: 'center' }}
                 >
-                  保存草稿
+                  {t('dataset.saveDraft')}
                 </Button>
               </Stack>
               <Typography variant="caption" color="text.secondary">
-                草稿 v{row.version} · {row.sourceKind}
-                {row.sourceRef ? ` · ${row.sourceRef}` : ''} · 已脱敏 {row.redacted ? '是' : '否'}
+                {t('dataset.draftMeta', {
+                  version: row.version,
+                  source: row.sourceKind,
+                  ref: row.sourceRef ? ` · ${row.sourceRef}` : '',
+                  redacted: row.redacted ? t('common.yes') : t('common.no')
+                })}
               </Typography>
             </Stack>
           </Box>
@@ -259,22 +266,22 @@ export default function DatasetManager({ onOpenRun }) {
       <Button
         variant="outlined"
         onClick={() =>
-          setRows(current => [...current, { ...blank(), version: 0, redacted: false }])
+          setRows(current => [...current, { ...blank(t), version: 0, redacted: false }])
         }
         sx={{ alignSelf: 'flex-start' }}
       >
-        新增样本
+        {t('dataset.addSample')}
       </Button>
 
       <Box>
-        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>失败案例录入</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{t('dataset.captureTitle')}</Typography>
         <Typography variant="caption" color="text.secondary">
-          需确认已按页面规则脱敏；录入的是可编辑草稿，不会自动发布。
+          {t('dataset.captureNote')}
         </Typography>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
           <TextField
             size="small"
-            label="失败运行的 runId"
+            label={t('dataset.failedRunId')}
             value={failureRun}
             onChange={event => setFailureRun(event.target.value)}
             sx={{ flex: 1 }}
@@ -286,7 +293,7 @@ export default function DatasetManager({ onOpenRun }) {
             disabled={!failureRun.trim() || !confirmed}
             onClick={addFromRun}
           >
-            从失败运行录入
+            {t('dataset.capture')}
           </Button>
         </Stack>
         <FormControlLabel
@@ -297,15 +304,17 @@ export default function DatasetManager({ onOpenRun }) {
               onChange={event => setConfirmed(event.target.checked)}
             />
           }
-          label={<Typography variant="body2">确认已脱敏并同意录入草稿</Typography>}
+          label={<Typography variant="body2">{t('dataset.captureConfirm')}</Typography>}
         />
       </Box>
 
       <Box>
-        <Typography sx={{ fontSize: 14, fontWeight: 600, mb: 0.75 }}>可管理批次</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 600, mb: 0.75 }}>
+          {t('dataset.batchesTitle')}
+        </Typography>
         {batches.length === 0 && (
           <Typography variant="body2" color="text.secondary">
-            尚无批次。
+            {t('dataset.noBatches')}
           </Typography>
         )}
         <Stack spacing={1}>
@@ -327,8 +336,10 @@ export default function DatasetManager({ onOpenRun }) {
                   {batch.datasetKey} · {batch.status}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  版本 {batch.datasetVersionId?.slice(0, 8)} · 定义摘要{' '}
-                  {batch.definitionSha256?.slice(0, 16)}…
+                  {t('dataset.batchMeta', {
+                    version: batch.datasetVersionId?.slice(0, 8),
+                    sha: batch.definitionSha256?.slice(0, 16)
+                  })}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                   {batch.configJson}
@@ -348,7 +359,7 @@ export default function DatasetManager({ onOpenRun }) {
                   }
                 }}
               >
-                查看失败运行
+                {t('dataset.viewFailedRun')}
               </Button>
             </Stack>
           ))}

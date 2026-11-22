@@ -18,4 +18,45 @@ public record TaskData(
     String entryKind,
     String fileScopesJson,
     Integer version,
-    String modelConnectionId) {}
+    String modelConnectionId,
+    String locale) {
+  /** 兼容仍按 17 个字段构造任务投影的旧测试与调用方。 */
+  public TaskData(
+      String id,
+      String goal,
+      String scenario,
+      String createdAt,
+      String archivedAt,
+      String modelMode,
+      String workspaceId,
+      String fileScope,
+      Boolean writeEnabled,
+      String bugId,
+      Boolean memoryEnabled,
+      String constraintsJson,
+      String acceptanceJson,
+      String entryKind,
+      String fileScopesJson,
+      Integer version,
+      String modelConnectionId) {
+    this(
+        id,
+        goal,
+        scenario,
+        createdAt,
+        archivedAt,
+        modelMode,
+        workspaceId,
+        fileScope,
+        writeEnabled,
+        bugId,
+        memoryEnabled,
+        constraintsJson,
+        acceptanceJson,
+        entryKind,
+        fileScopesJson,
+        version,
+        modelConnectionId,
+        null);
+  }
+}

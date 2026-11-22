@@ -8,6 +8,8 @@
  * 因此 401 不立即登出，而是先确认服务端会话，仍有登录态时用新 Cookie 重试原请求一次。
  */
 
+import { getCurrentLocale } from '../i18n';
+
 const API_PREFIX = '/api';
 const SESSION_PATHS = new Set([
   '/auth/status',
@@ -78,7 +80,8 @@ async function ensureCsrf(force = false) {
 function send(path, { method, headers, body, signal }) {
   return fetch(`${API_PREFIX}${path}`, {
     method,
-    headers,
+    // 所有请求统一附带当前界面语言；服务端据此返回本地化报错与诊断。
+    headers: { 'Accept-Language': getCurrentLocale(), ...(headers || {}) },
     body,
     signal,
     credentials: 'same-origin'

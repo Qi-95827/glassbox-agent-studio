@@ -23,23 +23,22 @@ import { useToast } from '../../components/ToastProvider';
 import { useNodeDetail, useRunEvents, useRunExecution } from '../../hooks/useRunExecution';
 import { runsApi } from '../../api/runs';
 import { tasksApi } from '../../api/tasks';
-import { EVENT_NAMES, modelKey, modelLabel, nodeTitle, statusLabel } from '../../constants/labels';
+import {
+  eventNameLabel,
+  modelKey,
+  modelLabel,
+  nodeTitle,
+  statusLabel
+} from '../../constants/labels';
 import { oneLine, shortId } from '../../utils/format';
 import { usePageChrome } from '../../layout/pageChrome';
 import { googleTokens } from '../../theme/googleTheme';
-
-const blockingNames = {
-  PLAN_APPROVAL_REQUIRED: '等待确认计划',
-  RUN_PAUSED: '运行已暂停',
-  RUN_INTERRUPTED: '运行已中断',
-  RUN_BLOCKED: '等待处理',
-  CHECK_FAILED: '检查未通过',
-  NODE_FAILED: '节点未完成',
-  DEPENDENCY_NOT_STARTED: '前置步骤未结算'
-};
+import { useI18n } from '../../i18n/I18nProvider';
+import { translate } from '../../i18n';
 
 /** 运行详情：流程 / 回放 / 交付 / 列表四视图 + 右侧节点抽屉。 */
 export default function RunDetailPage() {
+  const { t, locale } = useI18n();
   const { runId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -115,7 +114,7 @@ export default function RunDetailPage() {
     });
   }, [view, requestedNodeId, requestedGlassbox, location.key]);
 
-  const goal = detail?.task?.GOAL || '运行详情';
+  const goal = detail?.task?.GOAL || t('run.title');
   const goalTitle = oneLine(String(goal).split(/[。:：]/)[0], 18);
   const taskModel = detail?.task?.MODEL_MODE;
   const assemblyModels = (detail?.agentAssemblies ?? [])
@@ -128,13 +127,18 @@ export default function RunDetailPage() {
   const runModel = modelModes.size > 1 ? 'mixed' : ([...modelModes][0] ?? null);
   usePageChrome({
     trail: [
-      { label: '工作空间' },
+      { label: t('nav.workspace') },
       { label: goalTitle },
-      { label: `运行 #${shortId(runId)}`, mono: true }
+      { label: t('common.runId', { id: shortId(runId) }), mono: true }
     ],
     status: detail?.task?.TASK_STATUS ?? view?.runStatus ?? detail?.run?.STATUS ?? null,
     model: {
-      label: runModel === 'mixed' ? '混合模型' : runModel ? modelLabel(runModel) : '未知模型',
+      label:
+        runModel === 'mixed'
+          ? t('common.mixedModel')
+          : runModel
+            ? modelLabel(runModel, undefined, locale)
+            : t('common.unknownModel'),
       value: runModel,
       readOnly: true
     }
@@ -156,36 +160,34 @@ export default function RunDetailPage() {
       switch (action.actionCode) {
         case 'APPROVE_PLAN':
           await runsApi.approvePlan(runId, action.planVersionId);
-          toast.success('已确认计划');
+          toast.success(t('run.confirmedPlan'));
           break;
         case 'PAUSE':
           await runsApi.pause(runId);
-          toast.info('已请求暂停；在途调用可能继续');
+          toast.info(t('run.pauseRequested'));
           break;
         case 'RESUME':
           await runsApi.resume(runId);
-          toast.info('已请求继续');
+          toast.info(t('run.resumeRequested'));
           break;
         case 'CANCEL':
           await runsApi.cancel(runId);
-          toast.info('已请求取消；在途调用可能继续');
+          toast.info(t('run.cancelRequested'));
           break;
         case 'TAKE_OVER':
           await runsApi.takeHandover(runId, '用户在暂停后人工接手');
-          toast.success('已进入人工接手；修改完成后请交还');
+          toast.success(t('run.takeOver'));
           break;
         case 'RETURN_HANDOVER': {
           const handover = await runsApi.returnHandover(runId, '用户交还工作区');
           toast.success(
-            handover.evidenceInvalidated
-              ? '已交还；代码变化，旧测试与审批失效'
-              : '已交还，代码版本未变化'
+            handover.evidenceInvalidated ? t('run.returnedInvalidated') : t('run.returnedUnchanged')
           );
           break;
         }
         case 'RECOVER': {
           const recovered = await runsApi.recover(runId, action.checkpointId);
-          toast.success('已创建恢复运行');
+          toast.success(t('run.recovered'));
           invalidate();
           navigate(`/runs/${recovered.runId}`);
           return;
@@ -208,7 +210,7 @@ export default function RunDetailPage() {
         path,
         content
       });
-      toast.success('补充已接受；运行将从安全边界继续');
+      toast.success(t('run.supplementAccepted'));
       invalidate();
     } catch (failure) {
       toast.error(failure.message);
@@ -219,7 +221,7 @@ export default function RunDetailPage() {
     if (!detail?.task?.ID) return;
     try {
       await tasksApi.archive(detail.task.ID, !detail.task.ARCHIVED_AT);
-      toast.success(detail.task.ARCHIVED_AT ? '已取消归档' : '任务已归档，运行和证据保留');
+      toast.success(detail.task.ARCHIVED_AT ? t('run.unarchived') : t('run.archived'));
       invalidate();
     } catch (failure) {
       toast.error(failure.message);
@@ -231,7 +233,7 @@ export default function RunDetailPage() {
       <Stack spacing={1.5} sx={{ height: '100%', alignItems: 'center', justifyContent: 'center' }}>
         <CircularProgress size={22} />
         <Typography variant="body2" color="text.secondary">
-          正在读取运行快照…
+          {t('run.loading')}
         </Typography>
       </Stack>
     );
@@ -244,14 +246,14 @@ export default function RunDetailPage() {
           severity="error"
           action={
             <Button color="inherit" size="small" onClick={() => refetch()}>
-              重试
+              {t('common.retry')}
             </Button>
           }
         >
-          运行读取失败：{error.message}
+          {t('run.loadFailed', { message: error.message })}
         </Alert>
         <Button sx={{ mt: 2 }} onClick={() => navigate('/runs')}>
-          返回运行列表
+          {t('run.backToList')}
         </Button>
       </Box>
     );
@@ -260,9 +262,9 @@ export default function RunDetailPage() {
   if (!view) {
     return (
       <EmptyState
-        title="此运行没有执行视图"
-        description="历史运行可能只保留了基础记录，无法重建流程图。"
-        action={{ label: '返回运行列表', onClick: () => navigate('/runs') }}
+        title={t('run.noViewTitle')}
+        description={t('run.noViewDescription')}
+        action={{ label: t('run.backToList'), onClick: () => navigate('/runs') }}
       />
     );
   }
@@ -285,10 +287,10 @@ export default function RunDetailPage() {
         executionMode: view?.executionMode || 'STEP_TEACHING',
         breakpoints: [...next]
       });
-      toast.success(next.has(nodeId) ? '已在该节点设置断点' : '已取消节点断点');
+      toast.success(next.has(nodeId) ? t('run.breakpointSet') : t('run.breakpointCleared'));
       invalidate();
     } catch (err) {
-      toast.error(err.message || '无法更新断点设置');
+      toast.error(err.message || t('run.breakpointFailed'));
     }
   };
 
@@ -308,7 +310,7 @@ export default function RunDetailPage() {
       hasBreakpoint={Boolean(node && breakpoints.has(node.id))}
       onToggleBreakpoint={() => node && toggleBreakpoint(node.id)}
       cancelAction={(view.availableActions ?? []).find(action => action.actionCode === 'CANCEL')}
-      executor={node?.agentName || 'AutoDev-Agent v2'}
+      executor={node?.agentName || t('run.executor')}
       onClose={() => setInspectorOpen(false)}
       onCancelRun={() => {
         const cancel = (view.availableActions ?? []).find(action => action.actionCode === 'CANCEL');
@@ -396,14 +398,17 @@ export default function RunDetailPage() {
                         fontSize: 12
                       }}
                     >
-                      当前动作 · {item.nodeLabel || '节点'} · {item.activityKind}
+                      {t('run.currentAction')} · {item.nodeLabel || t('run.node')} ·{' '}
+                      {item.activityKind}
                       {item.activityLabel ? ` · ${item.activityLabel}` : ''}
                     </Box>
                   ))}
                   {view.reason &&
                     (workspaceDelivered ? (
                       <Alert severity="success" sx={{ py: 0.25 }}>
-                        工作区已完成 Git 交付（Agent 执行终态：{statusLabel(view.runStatus)}）
+                        {t('run.deliveredNotice', {
+                          status: statusLabel(view.runStatus, locale)
+                        })}
                       </Alert>
                     ) : (
                       <Alert severity="warning" sx={{ py: 0.25 }}>
@@ -432,11 +437,15 @@ export default function RunDetailPage() {
                       sx={{ boxShadow: '0 2px 10px rgba(60,64,67,.12)' }}
                     >
                       <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                        {blockingNames[item.code] || item.code}
+                        {translate(locale, `run.blocking.${item.code}`) ===
+                        `run.blocking.${item.code}`
+                          ? item.code
+                          : t(`run.blocking.${item.code}`)}
                         {item.nodeId
                           ? ` · ${nodeTitle(
                               view.nodes?.find(n => n.id === item.nodeId),
-                              ''
+                              '',
+                              locale
                             )}`
                           : ''}
                       </Typography>
@@ -454,7 +463,45 @@ export default function RunDetailPage() {
               detail={detail}
               events={eventsQuery.data ?? []}
               eventsLoading={eventsQuery.isLoading}
-              eventNames={EVENT_NAMES}
+              eventNames={Object.fromEntries(
+                [
+                  'TASK_CREATED',
+                  'PLAN_APPROVED',
+                  'RUN_STARTED',
+                  'DELEGATED',
+                  'AGENT_STARTED',
+                  'NODE_RETRY_SCHEDULED',
+                  'MODEL_STARTED',
+                  'MODEL_FINISHED',
+                  'TOOL_STARTED',
+                  'TOOL_FINISHED',
+                  'TOOL_REJECTED',
+                  'HANDOFF',
+                  'HANDOFF_ACCEPTED',
+                  'CHECK_STARTED',
+                  'CHECK_FINISHED',
+                  'CHECKPOINT_SAVED',
+                  'CHECKPOINT_SKIPPED',
+                  'RUN_COMPLETED',
+                  'CANCEL_REQUESTED',
+                  'PAUSE_REQUESTED',
+                  'PAUSED',
+                  'RESUMED',
+                  'CANCELLED',
+                  'FAILED',
+                  'LIMITED',
+                  'INTERRUPTED',
+                  'SUPPLEMENT_REQUESTED',
+                  'SUPPLEMENT_APPLIED',
+                  'SUPPLEMENT_REJECTED',
+                  'CONTINUED_AFTER_SUPPLEMENT',
+                  'RECOVERY_STARTED',
+                  'MEMORY_LOADED',
+                  'TEST_STARTED',
+                  'TEST_FINISHED',
+                  'BLOCKED'
+                ].map(code => [code, eventNameLabel(code, locale)])
+              )}
               onLocate={nodeId => {
                 setSelectedId(nodeId);
                 setInspectorOpen(true);

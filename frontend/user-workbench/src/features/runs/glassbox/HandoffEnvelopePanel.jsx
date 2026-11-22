@@ -8,10 +8,11 @@ import HelpOutlineRounded from '@mui/icons-material/HelpOutlineRounded';
 import { TraceSection, Readout } from '../../../components/WorkbenchDialog';
 import EmptyState from '../../../components/EmptyState';
 import MarkdownView from '../../../components/MarkdownView';
-import { TOOL_NAMES } from '../../../constants/labels';
+import { toolNameLabel } from '../../../constants/labels';
 import { clock, shortId } from '../../../utils/format';
 import { googleTokens } from '../../../theme/googleTheme';
-import { HANDOFF_CHECK_RULES, describeHandoffCheckEvidence } from './checkExplanations';
+import { useI18n } from '../../../i18n/I18nProvider';
+import { checkTitle, describeHandoffCheckEvidence, handoffCheckRules } from './checkExplanations';
 import { cleanBulletMarkdown, readableHandoffSummary } from './textClean';
 
 function checkTone(status) {
@@ -40,9 +41,11 @@ function checkTone(status) {
 }
 
 function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
+  const { t, locale } = useI18n();
   const [showRules, setShowRules] = useState(false);
-  const sender = record.senderNodeLabel || record.dependencyNodeLabel || '来源节点';
-  const receiver = record.receiverNodeLabel || '接收节点';
+  const sender = record.senderNodeLabel || record.dependencyNodeLabel || t('glassbox.sender');
+  const receiver = record.receiverNodeLabel || t('glassbox.receiver');
+  const rules = handoffCheckRules(locale);
   const structured = record.structured;
   const summaryText = structured
     ? readableHandoffSummary(structured.summary, record.sourceResult, 220)
@@ -63,18 +66,21 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
         sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', mb: 0.75 }}
       >
         <Typography variant="subtitle2" sx={{ fontSize: 14.5 }}>
-          {direction === 'outbound' ? '发往' : '收到'} · {sender} → {receiver}
+          {direction === 'outbound' ? t('glassbox.outbound') : t('glassbox.inbound')} · {sender} →{' '}
+          {receiver}
         </Typography>
         <Chip
           size="small"
-          label={clock(record.acceptedAt) || '已记录'}
+          label={clock(record.acceptedAt, locale) || t('glassbox.recorded')}
           sx={{ bgcolor: googleTokens.successBg, color: googleTokens.successFg }}
         />
       </Stack>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.25 }}>
-        发送实例 #{shortId(record.senderAgentId)}（尝试 #{shortId(record.senderAttemptId)}）→
-        接收实例 #{shortId(record.receiverAgentId)}（尝试 #{shortId(record.receiverAttemptId)}）
+        {t('glassbox.sender')} #{shortId(record.senderAgentId)} ({t('glassbox.attempt')} #
+        {shortId(record.senderAttemptId)}) → {t('glassbox.receiver')} #
+        {shortId(record.receiverAgentId)} ({t('glassbox.attempt')} #
+        {shortId(record.receiverAttemptId)})
       </Typography>
 
       {structured && (
@@ -92,7 +98,7 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
               color="text.secondary"
               sx={{ fontWeight: 600, display: 'block', mb: 0.35 }}
             >
-              上游核心结论
+              {t('glassbox.summary')}
             </Typography>
             <Typography variant="body2" sx={{ lineHeight: 1.65 }}>
               {summaryText}
@@ -102,7 +108,7 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
           {(structured.artifacts ?? []).length > 0 && (
             <Box>
               <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                涉及文件 / 产物
+                {t('glassbox.artifacts')}
               </Typography>
               <Stack direction="row" spacing={0.6} sx={{ flexWrap: 'wrap', rowGap: 0.6, mt: 0.5 }}>
                 {structured.artifacts.map(file => (
@@ -125,7 +131,7 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
                 color="text.secondary"
                 sx={{ fontWeight: 600, display: 'block', mb: 0.4 }}
               >
-                关键决策
+                {t('glassbox.decisions')}
               </Typography>
               <Stack spacing={0.45}>
                 {structured.decisions.map((item, idx) => (
@@ -156,7 +162,7 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
                 variant="caption"
                 sx={{ fontWeight: 600, color: googleTokens.warningFg, display: 'block', mb: 0.45 }}
               >
-                遗留风险 / 待确认
+                {t('glassbox.risks')}
               </Typography>
               <Stack spacing={0.5}>
                 {structured.openRisks.map((item, idx) => (
@@ -175,7 +181,7 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
                 sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.6 }}
               >
                 <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                  平台交接校验清单（为什么 PASS？）
+                  {t('glassbox.checks')}
                 </Typography>
                 <Button
                   size="small"
@@ -183,15 +189,18 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
                   onClick={() => setShowRules(prev => !prev)}
                   sx={{ py: 0.15, px: 0.75, fontSize: 12, minHeight: 26 }}
                 >
-                  {showRules ? '收起判定标准' : '查看怎么算 PASS'}
+                  {showRules ? t('glassbox.collapseRules') : t('glassbox.expandRules')}
                 </Button>
               </Stack>
 
               <Stack spacing={0.75}>
                 {structured.validationChecks.map((chk, idx) => {
                   const tone = checkTone(chk.status);
-                  const rule = HANDOFF_CHECK_RULES[chk.gate];
-                  const evidence = describeHandoffCheckEvidence(chk, record);
+                  const rule = rules[chk.gate];
+                  const evidence = describeHandoffCheckEvidence(chk, record, locale);
+                  const title =
+                    (locale === 'en-US' ? checkTitle(chk.gate, 'handoff', locale) : null) ||
+                    chk.label;
                   return (
                     <Box
                       key={`hc:${chk.gate || idx}`}
@@ -210,7 +219,7 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
                         <Chip
                           size="small"
                           icon={tone.icon}
-                          label={`${chk.label} · ${chk.status}`}
+                          label={`${title} · ${chk.status}`}
                           sx={{ bgcolor: tone.bg, color: tone.fg, fontWeight: 600 }}
                         />
                         <Typography
@@ -235,21 +244,21 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
                               variant="caption"
                               sx={{ display: 'block', lineHeight: 1.55 }}
                             >
-                              <strong>检查目的：</strong>
+                              <strong>{t('glassbox.purpose')}</strong>
                               {rule.purpose}
                             </Typography>
                             <Typography
                               variant="caption"
                               sx={{ display: 'block', lineHeight: 1.55 }}
                             >
-                              <strong>怎么算 PASS：</strong>
+                              <strong>{t('glassbox.passRule')}</strong>
                               {rule.passRule}
                             </Typography>
                             <Typography
                               variant="caption"
                               sx={{ display: 'block', lineHeight: 1.55 }}
                             >
-                              <strong>何时拦截 / 跳过：</strong>
+                              <strong>{t('glassbox.failRule')}</strong>
                               {rule.failRule}
                             </Typography>
                           </Box>
@@ -267,12 +276,12 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
       {(record.toolEvidence ?? []).length > 0 && (
         <Box sx={{ mb: 1.25 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-            随信封附带的工具证据（{record.toolEvidence.length}）
+            {t('glassbox.toolEvidence', { count: record.toolEvidence.length })}
           </Typography>
           <Stack spacing={0.5} sx={{ mt: 0.45 }}>
             {record.toolEvidence.map(ev => (
               <Readout key={ev.toolCallId} mono maxHeight={90}>
-                {TOOL_NAMES[ev.tool] || ev.tool} v{ev.version} · {shortId(ev.toolCallId)}
+                {toolNameLabel(ev.tool, locale)} v{ev.version} · {shortId(ev.toolCallId)}
                 {ev.resourceVersion ? `\n${ev.resourceVersion}` : ''}
               </Readout>
             ))}
@@ -281,8 +290,8 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
       )}
 
       <TraceSection
-        title="完整交接正文"
-        subtitle="Markdown 渲染"
+        title={t('glassbox.fullBody')}
+        subtitle={t('glassbox.markdown')}
         defaultExpanded={defaultExpandBody}
         dense
       >
@@ -294,11 +303,11 @@ function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
             border: `1px solid ${googleTokens.outline}`
           }}
         >
-          <MarkdownView text={record.sourceResult || '交接正文未记录。'} dense />
+          <MarkdownView text={record.sourceResult || t('glassbox.noBody')} dense />
         </Box>
       </TraceSection>
 
-      <TraceSection title="原始交接记录 JSON" dense>
+      <TraceSection title={t('glassbox.rawJson')} dense>
         <Readout mono maxHeight={200}>
           {JSON.stringify(record, null, 2)}
         </Readout>
@@ -313,12 +322,13 @@ export default function HandoffEnvelopePanel({
   outbound = [],
   defaultExpandBody = false
 }) {
+  const { t } = useI18n();
   if (inbound.length === 0 && outbound.length === 0) {
     return (
       <EmptyState
         compact
-        title="暂无交接记录"
-        description="节点运行并向下游交接后，这里会展示结构化交接信封与平台校验清单。"
+        title={t('glassbox.emptyHandoffTitle')}
+        description={t('glassbox.emptyHandoffDescription')}
       />
     );
   }

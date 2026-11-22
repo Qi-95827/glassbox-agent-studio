@@ -4,9 +4,10 @@ import { runsApi } from '../../api/runs';
 import { modelConnectionsApi } from '../../api/modelConnections';
 import { TraceSection } from '../../components/WorkbenchDialog';
 import StatusChip from '../../components/StatusChip';
-import { SKILL_NAMES, TOOL_NAMES } from '../../constants/labels';
+import { modelLabel, skillNameLabel, toolNameLabel } from '../../constants/labels';
 import { duration, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const categories = {
   PROJECT_CONVENTION: '项目约定',
@@ -16,6 +17,7 @@ const categories = {
 
 /** 运行证据：Agent 统计、装配技能、工具授权、会话与结构化交接。 */
 export default function RunEvidencePanel({ runId, detail }) {
+  const { t, locale } = useI18n();
   const evidence = useQuery({
     queryKey: ['run-evidence', runId],
     queryFn: async () => {
@@ -51,22 +53,25 @@ export default function RunEvidencePanel({ runId, detail }) {
         p: { xs: 2, sm: 2.5 }
       }}
     >
-      <Typography sx={{ fontSize: 15, fontWeight: 500 }}>运行证据与观测</Typography>
+      <Typography sx={{ fontSize: 15, fontWeight: 500 }}>{t('evidence.title')}</Typography>
       <Typography variant="caption" color="text.secondary">
-        这些记录来自服务端持久化证据；缺少记录不代表能力未执行。
+        {t('evidence.subtitle')}
       </Typography>
 
       {evidence.isError && (
         <Alert severity="warning" sx={{ mt: 1 }}>
-          部分运行证据暂时无法读取：{evidence.error.message}
+          {t('evidence.partialFailure', { message: evidence.error.message })}
         </Alert>
       )}
 
       <Stack spacing={0.5} sx={{ mt: 1.2 }}>
-        <TraceSection title="Agent 运行统计" subtitle={`${metrics.length} 个实例`}>
+        <TraceSection
+          title={t('evidence.agentMetrics')}
+          subtitle={t('evidence.agentInstances', { count: metrics.length })}
+        >
           {metrics.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
-              暂无 Agent 调用统计。
+              {t('evidence.noAgentMetrics')}
             </Typography>
           ) : (
             <Stack spacing={0.9}>
@@ -76,13 +81,19 @@ export default function RunEvidencePanel({ runId, detail }) {
                     {metric.roleName} · 实例 #{shortId(metric.agentId)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                    墙钟 {duration(metric.durationMs)} · 模型 {metric.modelCalls} 次 · 工具{' '}
-                    {metric.toolCalls} 次 · 已知输入 Token {metric.knownInputTokens ?? '无记录'} ·
-                    未知 {metric.unknownInputCount} 次
+                    {t('evidence.metricLine', {
+                      duration: duration(metric.durationMs),
+                      models: metric.modelCalls,
+                      tools: metric.toolCalls,
+                      known: metric.knownInputTokens ?? t('list.notRecorded'),
+                      unknown: metric.unknownInputCount
+                    })}
                   </Typography>
                   {metric.toolNames?.length > 0 && (
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                      工具：{metric.toolNames.join('、')}
+                      {t('evidence.tools', {
+                        tools: metric.toolNames.join(locale === 'en-US' ? ', ' : '、')
+                      })}
                     </Typography>
                   )}
                 </Box>
@@ -92,32 +103,40 @@ export default function RunEvidencePanel({ runId, detail }) {
         </TraceSection>
 
         <TraceSection
-          title="费用估算"
+          title={t('evidence.costEstimate')}
           subtitle={
             estimate?.byok
-              ? `${estimate.connectionName || '自带 Key 模型'} · ${estimate.label}`
-              : '未使用自带 Key 模型'
+              ? t('evidence.byokModel', {
+                  name: estimate.connectionName || t('labels.model.user'),
+                  label: estimate.label
+                })
+              : t('evidence.noByok')
           }
         >
           {estimate?.byok ? (
             <Stack spacing={0.35}>
               <Typography variant="caption" color="text.secondary">
-                模型 {estimate.modelName} · 输入 {estimate.inputTokens} Token · 输出{' '}
-                {estimate.outputTokens} Token
+                {t('evidence.modelTokens', {
+                  model: estimate.modelName,
+                  input: estimate.inputTokens,
+                  output: estimate.outputTokens
+                })}
                 {estimate.unknownTokenCalls
-                  ? ` · ${estimate.unknownTokenCalls} 次调用用量未知`
+                  ? t('evidence.unknownUsage', { count: estimate.unknownTokenCalls })
                   : ''}
               </Typography>
               {estimate.priced ? (
                 <Typography variant="body2">
-                  参考估算：{estimate.estimatedCost} {estimate.currency}
-                  {'（输入 '}
-                  {estimate.inputPricePer1m ?? 0} / 输出 {estimate.outputPricePer1m ?? 0} 每百万
-                  Token）
+                  {t('evidence.referenceCost', {
+                    cost: estimate.estimatedCost,
+                    currency: estimate.currency,
+                    inputPrice: estimate.inputPricePer1m ?? 0,
+                    outputPrice: estimate.outputPricePer1m ?? 0
+                  })}
                 </Typography>
               ) : (
                 <Typography variant="body2" color="text.secondary">
-                  未设参考单价（不扣平台费用）；Token 统计仍以服务端记录为准。
+                  {t('evidence.noPrice')}
                 </Typography>
               )}
               <Typography variant="caption" color="text.secondary">
@@ -131,34 +150,43 @@ export default function RunEvidencePanel({ runId, detail }) {
           )}
         </TraceSection>
 
-        <TraceSection title="装配技能与工具授权" subtitle="装配记录不等于实际调用">
+        <TraceSection title={t('evidence.skillsTitle')} subtitle={t('evidence.skillsSubtitle')}>
           {skills.length === 0 && grants.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
-              暂无装配记录。
+              {t('evidence.noSkills')}
             </Typography>
           ) : (
             <Stack spacing={0.8}>
               {skills.map(item => (
                 <Typography key={`${item.agentId}:${item.skillId}`} variant="body2">
-                  {SKILL_NAMES[item.skillId] || item.skillId} v{item.version} · 实例 #
-                  {shortId(item.agentId)}
+                  {skillNameLabel(item.skillId, locale)} v{item.version} ·{' '}
+                  {t('evidence.instanceId', { id: shortId(item.agentId) })}
                 </Typography>
               ))}
               {grants.map(grant => (
                 <Typography key={grant.agentId} variant="body2">
-                  实例 #{shortId(grant.agentId)} 注册工具：
-                  {grant.toolVersions
-                    ?.map(
-                      item => `${TOOL_NAMES[item.tool] || item.tool} ${item.version ?? '版本未知'}`
-                    )
-                    .join('、') || '无'}
+                  {t('evidence.registeredTools', {
+                    id: shortId(grant.agentId),
+                    tools:
+                      grant.toolVersions
+                        ?.map(
+                          item =>
+                            `${toolNameLabel(item.tool, locale)} ${
+                              item.version ?? t('evidence.unknownVersion')
+                            }`
+                        )
+                        .join(locale === 'en-US' ? ', ' : '、') || t('common.none')
+                  })}
                 </Typography>
               ))}
             </Stack>
           )}
         </TraceSection>
 
-        <TraceSection title="项目背景引用" subtitle={memory?.recorded ? '装配输入选择' : '未记录'}>
+        <TraceSection
+          title={t('evidence.memoryTitle')}
+          subtitle={memory?.recorded ? t('evidence.memorySubtitle') : t('list.notRecorded')}
+        >
           {memory?.recorded ? (
             <Stack spacing={0.4}>
               <Typography variant="caption" color="text.secondary">
@@ -174,15 +202,18 @@ export default function RunEvidencePanel({ runId, detail }) {
             </Stack>
           ) : (
             <Typography variant="body2" color="text.secondary">
-              当前无装配记录；历史数据缺失不代表没有使用。
+              {t('evidence.noMemory')}
             </Typography>
           )}
         </TraceSection>
 
-        <TraceSection title="Agent 会话" subtitle={`${sessions.length} 条`}>
+        <TraceSection
+          title={t('evidence.sessionsTitle')}
+          subtitle={t('evidence.rows', { count: sessions.length })}
+        >
           {sessions.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
-              暂无框架会话记录。
+              {t('evidence.noSessions')}
             </Typography>
           ) : (
             sessions.map(session => (
@@ -194,10 +225,13 @@ export default function RunEvidencePanel({ runId, detail }) {
           )}
         </TraceSection>
 
-        <TraceSection title="结构化交接" subtitle={`${handoffs.length} 条`}>
+        <TraceSection
+          title={t('glassbox.handoff')}
+          subtitle={t('evidence.rows', { count: handoffs.length })}
+        >
           {handoffs.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
-              此运行没有结构化交接记录。
+              {t('evidence.noHandoffs')}
             </Typography>
           ) : (
             handoffs.map(handoff => (
@@ -211,7 +245,10 @@ export default function RunEvidencePanel({ runId, detail }) {
                   · {handoff.PAYLOAD?.sender} → {handoff.PAYLOAD?.receiver}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  目标：{handoff.PAYLOAD?.goal}；状态：{handoff.PAYLOAD?.status}
+                  {t('evidence.handoffMeta', {
+                    goal: handoff.PAYLOAD?.goal,
+                    status: handoff.PAYLOAD?.status
+                  })}
                 </Typography>
               </Box>
             ))
@@ -219,26 +256,39 @@ export default function RunEvidencePanel({ runId, detail }) {
         </TraceSection>
 
         <TraceSection
-          title="模型与工具调用记录"
-          subtitle={`${detail?.models?.length ?? 0} / ${detail?.tools?.length ?? 0} 条`}
+          title={t('evidence.callsTitle')}
+          subtitle={t('evidence.callsSubtitle', {
+            models: detail?.models?.length ?? 0,
+            tools: detail?.tools?.length ?? 0
+          })}
         >
           <Stack spacing={0.4}>
             {(detail?.models ?? []).map(call => (
               <Typography key={call.ID} variant="caption" color="text.secondary">
-                模型 {call.MODEL_NAME === 'mock' ? '模拟模型' : call.MODEL_NAME} · {call.STATUS} ·{' '}
-                {duration(call.DURATION_MS)} · 输入 {call.INPUT_TOKENS ?? '未知'} / 输出{' '}
-                {call.OUTPUT_TOKENS ?? '未知'}
+                {t('evidence.modelLine', {
+                  model:
+                    call.MODEL_NAME === 'mock'
+                      ? modelLabel('mock', undefined, locale)
+                      : call.MODEL_NAME,
+                  status: call.STATUS,
+                  duration: duration(call.DURATION_MS),
+                  input: call.INPUT_TOKENS ?? t('common.unknown'),
+                  output: call.OUTPUT_TOKENS ?? t('common.unknown')
+                })}
               </Typography>
             ))}
             {(detail?.tools ?? []).map(call => (
               <Typography key={call.ID} variant="caption" color="text.secondary">
-                工具 {TOOL_NAMES[call.TOOL_NAME] || call.TOOL_NAME} · {call.STATUS} ·{' '}
-                {duration(call.DURATION_MS)}
+                {t('evidence.toolLine', {
+                  tool: toolNameLabel(call.TOOL_NAME, locale),
+                  status: call.STATUS
+                })}{' '}
+                · {duration(call.DURATION_MS)}
               </Typography>
             ))}
             {(detail?.models ?? []).length === 0 && (detail?.tools ?? []).length === 0 && (
               <Typography variant="body2" color="text.secondary">
-                暂无调用记录。
+                {t('evidence.noCalls')}
               </Typography>
             )}
           </Stack>

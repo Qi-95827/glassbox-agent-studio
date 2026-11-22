@@ -1,10 +1,10 @@
 /** 展示层格式化工具；只做排版，不补造后端没有的数据。 */
 
-export function dateTime(value) {
+export function dateTime(value, locale = 'zh-CN') {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -12,11 +12,11 @@ export function dateTime(value) {
   });
 }
 
-export function clock(value) {
+export function clock(value, locale = 'zh-CN') {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleTimeString('zh-CN', { hour12: false });
+  return date.toLocaleTimeString(locale, { hour12: false });
 }
 
 /** 毫秒 → 简洁耗时，例如 12.4s、1m 04s。 */
@@ -38,14 +38,21 @@ export function nodeDuration(node, generatedAt) {
   return new Date(end).getTime() - new Date(node.startedAt).getTime();
 }
 
-export function timeAgo(value) {
+export function timeAgo(value, locale = 'zh-CN') {
   if (!value) return '—';
   const diff = Date.now() - new Date(value).getTime();
   if (Number.isNaN(diff)) return '—';
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
-  return dateTime(value);
+  const english = String(locale).toLowerCase().startsWith('en');
+  if (diff < 60000) return english ? 'just now' : '刚刚';
+  if (diff < 3600000) {
+    const minutes = Math.floor(diff / 60000);
+    return english ? `${minutes} min ago` : `${minutes} 分钟前`;
+  }
+  if (diff < 86400000) {
+    const hours = Math.floor(diff / 3600000);
+    return english ? `${hours} hr ago` : `${hours} 小时前`;
+  }
+  return dateTime(value, locale);
 }
 
 export function shortId(value, length = 8) {

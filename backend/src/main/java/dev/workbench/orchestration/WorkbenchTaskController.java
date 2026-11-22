@@ -58,7 +58,8 @@ public class WorkbenchTaskController {
   @ExceptionHandler(EmptyResultDataAccessException.class)
   @ResponseStatus(HttpStatus.NOT_FOUND)
   Object notFound() {
-    return Map.of("message", "记录不存在。");
+    return Map.of(
+        "message", dev.workbench.framework.i18n.LocalizedMessages.get("record.notFound"));
   }
 
   @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})

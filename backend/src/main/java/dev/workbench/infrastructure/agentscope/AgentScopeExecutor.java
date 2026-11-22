@@ -34,18 +34,42 @@ public class AgentScopeExecutor implements AgentExecutor {
   private final AgentAssemblyPlanner assemblyPlanner;
   private final AgentModelRegistry models;
   private final AgentToolRegistry tools;
+  private final dev.workbench.framework.agent.definition.AgentRoleRegistry roles;
+  private final dev.workbench.framework.skill.SkillRegistry skills;
 
+  @org.springframework.beans.factory.annotation.Autowired
+  public AgentScopeExecutor(
+      ObjectMapper json,
+      AgentStateStore stateStore,
+      AgentAssemblyPlanner assemblyPlanner,
+      AgentModelRegistry models,
+      AgentToolRegistry tools,
+      dev.workbench.framework.agent.definition.AgentRoleRegistry roles,
+      dev.workbench.framework.skill.SkillRegistry skills) {
+    this.json = json;
+    this.stateStore = stateStore;
+    this.assemblyPlanner = assemblyPlanner;
+    this.models = models;
+    this.tools = tools;
+    this.roles = roles;
+    this.skills = skills;
+  }
+
+  /** 兼容只装配执行必需依赖的独立验证；语言资源使用内置中文默认。 */
   public AgentScopeExecutor(
       ObjectMapper json,
       AgentStateStore stateStore,
       AgentAssemblyPlanner assemblyPlanner,
       AgentModelRegistry models,
       AgentToolRegistry tools) {
-    this.json = json;
-    this.stateStore = stateStore;
-    this.assemblyPlanner = assemblyPlanner;
-    this.models = models;
-    this.tools = tools;
+    this(
+        json,
+        stateStore,
+        assemblyPlanner,
+        models,
+        tools,
+        new dev.workbench.framework.agent.definition.AgentRoleRegistry(),
+        new dev.workbench.framework.skill.SkillRegistry());
   }
 
   /** 创建每次运行独立的框架 Agent；工具按角色及用户授权注册。 */
@@ -81,17 +105,44 @@ public class AgentScopeExecutor implements AgentExecutor {
     AtomicReference<RuntimeException> failure = new AtomicReference<>();
     AgentDefinition definition = assembly.definition();
     var selectedSkills = assembly.skills();
+    boolean english =
+        dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(request.locale());
     String skillGuidance =
         java.util.stream.Stream.concat(
-                selectedSkills.stream().map(skill -> "【" + skill.name() + "】" + skill.guidance()),
+                selectedSkills.stream()
+                    .map(
+                        skill ->
+                            (english ? "[" : "【")
+                                + skill.name()
+                                + (english ? "] " : "】")
+                                + skills.guidance(skill.id(), request.locale())),
                 assembly.privateSkills().stream()
                     .map(
                         skill ->
-                            "【" + skill.name() + " v" + skill.version() + "】" + skill.guidance()))
+                            (english ? "[" : "【")
+                                + skill.name()
+                                + " v"
+                                + skill.version()
+                                + (english ? "] " : "】")
+                                + skill.guidance()))
             .collect(java.util.stream.Collectors.joining("\n"));
+    String localizedSystemPrompt =
+        roles.systemPrompt(role, request.locale())
+            + "\n\n"
+            + (english
+                ? "Built-in skill playbooks (do not grant extra permissions):\n"
+                : "内置技能方法（不授予额外权限）：\n")
+            + skillGuidance;
     var toolContext =
         new AgentToolContext(
-            json, workspaceId, scopedFiles, scenario, runtime, failure, scopedWrites);
+            json,
+            workspaceId,
+            scopedFiles,
+            scenario,
+            runtime,
+            failure,
+            scopedWrites,
+            request.locale());
     Toolkit toolkit =
         assembly.privateTools().isEmpty()
             ? tools.assemble(assembly.toolVersions(), toolContext)
@@ -143,7 +194,7 @@ public class AgentScopeExecutor implements AgentExecutor {
     try (ReActAgent agent =
         ReActAgent.builder()
             .name(definition.name())
-            .sysPrompt(definition.systemPrompt() + "\n\n内置技能方法（不授予额外权限）：\n" + skillGuidance)
+            .sysPrompt(localizedSystemPrompt)
             .model(controlled)
             .stateStore(stateStore)
             .defaultSessionId(agentId)

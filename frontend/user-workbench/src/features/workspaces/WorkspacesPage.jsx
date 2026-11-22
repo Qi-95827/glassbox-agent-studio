@@ -14,8 +14,10 @@ import WorkspaceMemoryPanel from './WorkspaceMemoryPanel';
 import WorkspaceGitPanel from './WorkspaceGitPanel';
 import { googleTokens } from '../../theme/googleTheme';
 import { dateTime, shortId } from '../../utils/format';
+import { useI18n } from '../../i18n/I18nProvider';
 
 export default function WorkspacesPage() {
+  const { t, locale } = useI18n();
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const workspaces = useWorkspaces();
@@ -24,7 +26,7 @@ export default function WorkspacesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const status = useWorkspaceStatus(selectedId);
 
-  usePageChrome({ trail: [{ label: '工作空间' }, { label: '工作区与交付' }] });
+  usePageChrome({ trail: [{ label: t('nav.workspace') }, { label: t('nav.workspaces') }] });
 
   useEffect(() => {
     if (params.get('id') && params.get('id') !== selectedId) {
@@ -59,10 +61,10 @@ export default function WorkspacesPage() {
         >
           <Box>
             <Typography component="h1" sx={{ fontSize: 22, fontWeight: 500 }}>
-              工作区与交付
+              {t('workspace.title')}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              查看 Git 差异、人工审查决定、本地提交与推送 / 合并记录。工作区不是代码执行沙箱。
+              {t('workspace.description')}
             </Typography>
           </Box>
           <Button
@@ -70,7 +72,7 @@ export default function WorkspacesPage() {
             startIcon={<AddRounded />}
             onClick={() => setCreateOpen(true)}
           >
-            新建工作区
+            {t('workspace.new')}
           </Button>
         </Stack>
 
@@ -93,7 +95,7 @@ export default function WorkspacesPage() {
             }}
           >
             <Typography sx={{ fontSize: 13, fontWeight: 600, px: 1, py: 0.75 }}>
-              已创建工作区（{list.length}）
+              {t('workspace.createdCount', { count: list.length })}
             </Typography>
             <Stack spacing={0.4}>
               {list.map(item => {
@@ -135,7 +137,10 @@ export default function WorkspacesPage() {
                       {item.repositoryPath}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      基础 {shortId(item.baseCommit)} · {dateTime(item.createdAt)}
+                      {t('workspace.baseAt', {
+                        id: shortId(item.baseCommit),
+                        time: dateTime(item.createdAt, locale)
+                      })}
                     </Typography>
                   </Box>
                 );
@@ -144,9 +149,9 @@ export default function WorkspacesPage() {
             {!workspaces.isLoading && list.length === 0 && (
               <EmptyState
                 compact
-                title="还没有工作区"
-                description="从可信本地仓库创建独立分支后，才能授权 Agent 读取或修改文件。"
-                action={{ label: '新建工作区', onClick: () => setCreateOpen(true) }}
+                title={t('workspace.emptyTitle')}
+                description={t('workspace.emptyDescription')}
+                action={{ label: t('workspace.new'), onClick: () => setCreateOpen(true) }}
               />
             )}
           </Box>
@@ -162,8 +167,8 @@ export default function WorkspacesPage() {
           >
             {!selected ? (
               <EmptyState
-                title="选择一个工作区"
-                description="左侧列表按创建时间展示当前账号可访问的工作区。"
+                title={t('workspace.selectTitle')}
+                description={t('workspace.selectDescription')}
               />
             ) : (
               <>
@@ -220,7 +225,7 @@ export default function WorkspacesPage() {
                         });
                       }}
                     >
-                      刷新状态
+                      {t('workspace.refresh')}
                     </Button>
                   </Stack>
                   <Tabs
@@ -230,10 +235,10 @@ export default function WorkspacesPage() {
                     scrollButtons={false}
                     sx={{ mt: 1, borderBottom: `1px solid ${googleTokens.outline}` }}
                   >
-                    <Tab value="overview" label="概览与差异" />
-                    <Tab value="files" label="文件" />
-                    <Tab value="memory" label="项目背景" />
-                    <Tab value="git" label="Git 与交付" />
+                    <Tab value="overview" label={t('workspace.tab.overview')} />
+                    <Tab value="files" label={t('workspace.tab.files')} />
+                    <Tab value="memory" label={t('workspace.tab.memory')} />
+                    <Tab value="git" label={t('workspace.tab.git')} />
                   </Tabs>
                 </Box>
 
@@ -242,19 +247,29 @@ export default function WorkspacesPage() {
                     <Stack spacing={1.5}>
                       {status.isLoading && (
                         <Typography variant="body2" color="text.secondary">
-                          正在读取 Git 状态…
+                          {t('workspace.loadingStatus')}
                         </Typography>
                       )}
                       {status.isError && <Alert severity="error">{status.error.message}</Alert>}
                       {status.data?.baseChanged && (
-                        <Alert severity="warning">目标分支已变化，请重新检查差异与审批。</Alert>
+                        <Alert severity="warning">{t('workspace.baseChanged')}</Alert>
                       )}
                       <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
-                        <Chip size="small" label={`基础提交 ${shortId(selected.baseCommit)}`} />
-                        <Chip size="small" label={`创建于 ${dateTime(selected.createdAt)}`} />
                         <Chip
                           size="small"
-                          label={status.data?.changes ? '存在工作区变更' : '工作区干净'}
+                          label={t('workspace.baseCommit', { id: shortId(selected.baseCommit) })}
+                        />
+                        <Chip
+                          size="small"
+                          label={t('workspace.createdAt', {
+                            time: dateTime(selected.createdAt, locale)
+                          })}
+                        />
+                        <Chip
+                          size="small"
+                          label={
+                            status.data?.changes ? t('workspace.hasChanges') : t('workspace.clean')
+                          }
                           sx={{
                             bgcolor: status.data?.changes ? '#FEF7E0' : '#E6F4EA',
                             color: status.data?.changes ? '#B06000' : '#137333'
@@ -263,7 +278,7 @@ export default function WorkspacesPage() {
                       </Stack>
                       <Box>
                         <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                          Git 状态
+                          {t('workspace.gitStatus')}
                         </Typography>
                         <Box
                           component="pre"
@@ -280,13 +295,13 @@ export default function WorkspacesPage() {
                             overflowY: 'auto'
                           }}
                         >
-                          {status.data?.changes || '无变更'}
+                          {status.data?.changes || t('workspace.noChanges')}
                         </Box>
                       </Box>
                       <Divider />
                       <Box>
                         <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                          已跟踪文件差异
+                          {t('workspace.trackedDiff')}
                         </Typography>
                         <Box
                           component="pre"
@@ -303,12 +318,10 @@ export default function WorkspacesPage() {
                             overflowY: 'auto'
                           }}
                         >
-                          {status.data?.diff || '无差异'}
+                          {status.data?.diff || t('workspace.noDiff')}
                         </Box>
                       </Box>
-                      <Alert severity="info">
-                        未跟踪文件不包含在差异中，必须先在工作区交付面板逐项复核；审批仅记录当前差异，不会提交、推送或合并。
-                      </Alert>
+                      <Alert severity="info">{t('workspace.untrackedNote')}</Alert>
                     </Stack>
                   )}
 

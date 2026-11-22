@@ -26,7 +26,44 @@ public record AgentExecutionRequest(
     AgentDefinitionRef definitionRef,
     String expectedDefinitionSha256,
     List<String> writeFiles,
-    String modelConnectionId) {
+    String modelConnectionId,
+    String locale) {
+  /** 旧调用没有语言偏好；默认中文，保持历史行为。 */
+  public AgentExecutionRequest(
+      AgentRole role,
+      String agentId,
+      AgentInput context,
+      String workspaceId,
+      List<String> fileScopes,
+      boolean writeEnabled,
+      Scenario scenario,
+      ModelMode modelMode,
+      CheckpointStage stage,
+      String previous,
+      AgentRuntime runtime,
+      AgentDefinitionRef definitionRef,
+      String expectedDefinitionSha256,
+      List<String> writeFiles,
+      String modelConnectionId) {
+    this(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeFiles,
+        modelConnectionId,
+        null);
+  }
+
   /** 旧调用没有用户模型连接；保持内置 mock / deepseek 行为。 */
   public AgentExecutionRequest(
       AgentRole role,
@@ -201,7 +238,8 @@ public record AgentExecutionRequest(
         definitionRef,
         expectedDefinitionSha256,
         writeFiles,
-        modelMode == ModelMode.USER ? modelConnectionId : null);
+        modelMode == ModelMode.USER ? modelConnectionId : null,
+        locale);
   }
 
   public AgentExecutionRequest withModelConnection(String connectionId) {
@@ -221,7 +259,29 @@ public record AgentExecutionRequest(
         definitionRef,
         expectedDefinitionSha256,
         writeFiles,
-        connectionId);
+        connectionId,
+        locale);
+  }
+
+  /** 任务语言随执行请求向下传递；Prompt 与工具描述按此选择语言。 */
+  public AgentExecutionRequest withLocale(String value) {
+    return new AgentExecutionRequest(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeFiles,
+        modelConnectionId,
+        value);
   }
 
   public AgentExecutionRequest {
@@ -250,5 +310,11 @@ public record AgentExecutionRequest(
         && (definitionRef == null || !expectedDefinitionSha256.matches("[0-9a-f]{64}"))) {
       throw new IllegalArgumentException("计划中的 Agent 定义摘要无效。");
     }
+    locale =
+        locale == null || locale.isBlank()
+            ? "zh-CN"
+            : locale.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
+                ? "en-US"
+                : "zh-CN";
   }
 }

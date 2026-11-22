@@ -310,7 +310,8 @@ class WorkflowScheduler {
             node.definitionRef(),
             node.definitionSha256(),
             writeFiles)
-        .withModelConnection(task.modelConnectionId());
+        .withModelConnection(task.modelConnectionId())
+        .withLocale(task.locale());
     return limited(agent.execute(request), 1900);
   }
 

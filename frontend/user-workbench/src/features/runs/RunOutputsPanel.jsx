@@ -26,18 +26,10 @@ import { Readout, TraceSection } from '../../components/WorkbenchDialog';
 import { useRunDelivery } from '../../hooks/useRunExecution';
 import { runsApi, reportUrl } from '../../api/runs';
 import { useToast } from '../../components/ToastProvider';
-import { CHECK_STATUS_LABELS, RUN_STATES, statusLabel } from '../../constants/labels';
+import { checkStatusLabel, planRoleLabel, statusLabel } from '../../constants/labels';
 import { oneLine, parseJson, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
-
-const settledLabels = {
-  COMPLETED: '运行已完成',
-  BLOCKED: '运行待处理',
-  CANCELLED: '运行已取消',
-  FAILED: '运行失败',
-  INTERRUPTED: '运行已中断',
-  LIMITED: '运行已达限制'
-};
+import { useI18n } from '../../i18n/I18nProvider';
 
 function writtenFiles(detail) {
   const files = new Map();
@@ -61,6 +53,7 @@ function writtenFiles(detail) {
 }
 
 function FileRow({ file, runId, onPreview }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
 
@@ -70,7 +63,7 @@ function FileRow({ file, runId, onPreview }) {
       const payload = await runsApi.deliveryFile(runId, file.path);
       const matches = payload.currentMatches ?? payload.sha256 === file.sha256;
       if (!matches) {
-        toast.warning('当前文件版本已变化，请从本次运行的调用证据查看原版本记录。');
+        toast.warning(t('outputs.versionChanged'));
         return;
       }
       const text = payload.content ?? '';
@@ -128,14 +121,14 @@ function FileRow({ file, runId, onPreview }) {
           {file.path}
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          {file.nodeLabel ? `产出节点 ${file.nodeLabel} · ` : ''}
+          {file.nodeLabel ? `${t('outputs.producedBy', { node: file.nodeLabel })} · ` : ''}
           SHA-256 {file.sha256?.slice(0, 12)}…
         </Typography>
       </Box>
       <Chip
         size="small"
         icon={<TaskAltRounded sx={{ fontSize: '14px !important' }} />}
-        label={file.currentMatches === false ? '当前文件已变化' : '版本已核对'}
+        label={file.currentMatches === false ? t('outputs.changed') : t('outputs.verified')}
         sx={{
           bgcolor: file.currentMatches === false ? '#FEF7E0' : '#E6F4EA',
           color: file.currentMatches === false ? '#B06000' : '#137333'
@@ -149,7 +142,7 @@ function FileRow({ file, runId, onPreview }) {
           onClick={() => load(false)}
           disabled={loading}
         >
-          预览
+          {t('outputs.preview')}
         </Button>
         <Button
           size="small"
@@ -159,7 +152,7 @@ function FileRow({ file, runId, onPreview }) {
           onClick={() => load(true)}
           disabled={loading}
         >
-          下载
+          {t('outputs.download')}
         </Button>
       </Stack>
     </Stack>
@@ -168,6 +161,7 @@ function FileRow({ file, runId, onPreview }) {
 
 /** 交付说明：结论、文件、核对情况与 Git 交付入口。 */
 export default function RunOutputsPanel({ detail, runId, workspaceId }) {
+  const { t, locale } = useI18n();
   const delivery = useRunDelivery(runId);
   const [preview, setPreview] = useState(null);
   const run = detail?.run;
@@ -177,7 +171,6 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
   const checks = data?.checks ?? [];
   const writerNodes = (data?.nodes ?? []).filter(node => node.files?.length);
   const handoffNodes = (data?.nodes ?? []).filter(node => node.inbound?.length);
-  const status = settledLabels[run?.STATUS];
   const taskStatus = task?.TASK_STATUS || run?.STATUS || 'PENDING';
   const workspaceDelivered = Boolean(task?.WORKSPACE_DELIVERED);
   const passed = checks.filter(check => check.status === 'PASSED').length;
@@ -205,26 +198,30 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
             sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}
           >
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-              <Typography sx={{ fontSize: 16, fontWeight: 500 }}>本次运行结论</Typography>
+              <Typography sx={{ fontSize: 16, fontWeight: 500 }}>{t('outputs.title')}</Typography>
               <StatusChip value={taskStatus} />
               {run?.STATUS && taskStatus !== run.STATUS && (
                 <Typography variant="caption" color="text.secondary">
-                  Agent：{statusLabel(run.STATUS)}
+                  {t('home.agentStatus', { status: statusLabel(run.STATUS, locale) })}
                 </Typography>
               )}
             </Stack>
             <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
-              <Chip size="small" label={`产出文件 ${files.length}`} sx={{ bgcolor: '#FFFFFF' }} />
               <Chip
                 size="small"
-                label={`检查通过 ${passed} / 未通过 ${failed}`}
+                label={t('outputs.fileCount', { count: files.length })}
+                sx={{ bgcolor: '#FFFFFF' }}
+              />
+              <Chip
+                size="small"
+                label={t('outputs.checkCounts', { passed, failed })}
                 sx={{ bgcolor: '#FFFFFF' }}
               />
 
               {unverified.length > 0 && (
                 <Chip
                   size="small"
-                  label={`未验证 ${unverified.length}`}
+                  label={t('outputs.unverifiedCount', { count: unverified.length })}
                   sx={{ bgcolor: '#FEF7E0', color: '#B06000' }}
                 />
               )}
@@ -233,8 +230,9 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
           {run?.REASON &&
             (workspaceDelivered ? (
               <Alert severity="success" sx={{ mt: 1.2 }}>
-                工作区已完成 Git 交付，相关写入记录已提交并核对（Agent 执行终态：
-                {statusLabel(run?.STATUS)}）。
+                {t('outputs.deliveredNotice', {
+                  status: statusLabel(run?.STATUS, locale)
+                })}
               </Alert>
             ) : (
               <Alert severity="warning" sx={{ mt: 1.2 }}>
@@ -246,7 +244,7 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
               maxHeight={320}
               text={
                 run?.RESULT?.trim() ||
-                (status ? '本次运行未留下最终输出。' : '最终输出会在运行结算后显示。')
+                (run?.STATUS ? t('outputs.noFinalOutput') : t('outputs.outputPending'))
               }
             />
           </Box>
@@ -254,7 +252,7 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
 
         {unverified.length > 0 && (
           <Alert severity="warning">
-            <Typography variant="subtitle2">尚未验证的事项</Typography>
+            <Typography variant="subtitle2">{t('outputs.unverifiedTitle')}</Typography>
             {unverified.map(item => (
               <Typography key={item} variant="body2">
                 · {item}
@@ -279,16 +277,18 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
               p: { xs: 2, sm: 2.5 }
             }}
           >
-            <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 0.5 }}>交付文件</Typography>
+            <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 0.5 }}>
+              {t('outputs.filesTitle')}
+            </Typography>
             <Typography variant="caption" color="text.secondary">
-              只列出本次运行成功写入、且路径属于交付投影的文件；预览会核对当前摘要。
+              {t('outputs.filesDescription')}
             </Typography>
             <Box sx={{ mt: 1 }}>
               {delivery.isLoading && (
                 <Stack direction="row" spacing={1} sx={{ py: 2, alignItems: 'center' }}>
                   <CircularProgress size={16} />
                   <Typography variant="body2" color="text.secondary">
-                    正在读取交付投影…
+                    {t('outputs.loadingDelivery')}
                   </Typography>
                 </Stack>
               )}
@@ -296,8 +296,8 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                 <EmptyState
                   compact
                   icon={<DescriptionOutlined />}
-                  title="本次运行没有可交付文件"
-                  description="分析或审查类运行通常只产出文本结论；写入授权关闭时也不会产生文件。"
+                  title={t('outputs.noFilesTitle')}
+                  description={t('outputs.noFilesDescription')}
                 />
               )}
               {files.map(file => (
@@ -313,19 +313,26 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
             {writerNodes.length > 0 && (
               <>
                 <Divider sx={{ my: 1.5 }} />
-                <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.75 }}>按节点汇总</Typography>
+                <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.75 }}>
+                  {t('outputs.byNode')}
+                </Typography>
                 {writerNodes.map(node => (
                   <Box key={node.nodeId} sx={{ mb: 1 }}>
                     <Typography variant="body2">
-                      {node.label} ·{' '}
-                      {node.role === 'CODER' ? '开发' : node.role === 'ANALYST' ? '分析' : '审查'}
+                      {node.label} · {planRoleLabel(node.role, locale)}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      写入：{node.files.map(file => file.path).join('、')}
+                      {t('outputs.writes', {
+                        files: node.files
+                          .map(file => file.path)
+                          .join(locale === 'en-US' ? ', ' : '、')
+                      })}
                     </Typography>
                     {node.missingRequiredFiles?.length > 0 && (
                       <Alert severity="warning" sx={{ mt: 0.5 }}>
-                        缺少必需文件：{node.missingRequiredFiles.join('、')}
+                        {t('outputs.missingFiles', {
+                          files: node.missingRequiredFiles.join(locale === 'en-US' ? ', ' : '、')
+                        })}
                       </Alert>
                     )}
                   </Box>
@@ -342,16 +349,16 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                 to={`/workspaces${workspaceId ? `?id=${workspaceId}` : ''}`}
                 disabled={!workspaceId}
               >
-                查看工作区与 Git 交付
+                {t('outputs.openWorkspace')}
               </Button>
               <Button size="small" startIcon={<DownloadRounded />} href={reportUrl(runId)}>
-                下载运行报告
+                {t('outputs.downloadReport')}
               </Button>
               <Button size="small" href={reportUrl(runId, 'SUMMARY')}>
-                精简报告
+                {t('outputs.summaryReport')}
               </Button>
               <Button size="small" href={reportUrl(runId, 'REDACTED')}>
-                脱敏报告
+                {t('outputs.redactedReport')}
               </Button>
             </Stack>
           </Box>
@@ -365,10 +372,12 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                 p: { xs: 2, sm: 2.5 }
               }}
             >
-              <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 0.5 }}>核对情况</Typography>
+              <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 0.5 }}>
+                {t('outputs.checksTitle')}
+              </Typography>
               {checks.length === 0 && (
                 <Typography variant="body2" color="text.secondary">
-                  本次运行没有保存独立的系统检查记录。
+                  {t('outputs.noChecks')}
                 </Typography>
               )}
               <Stack spacing={1.2} sx={{ mt: 0.5 }}>
@@ -386,8 +395,8 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                         size="small"
                         label={
                           check.evidenceCurrent === false
-                            ? '证据已过期'
-                            : CHECK_STATUS_LABELS[check.status] || check.status
+                            ? t('outputs.evidenceStale')
+                            : checkStatusLabel(check.status, locale)
                         }
                         sx={{
                           bgcolor:
@@ -411,7 +420,7 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                       </Typography>
                     )}
                     {check.evidence && (
-                      <TraceSection title="检查证据" dense>
+                      <TraceSection title={t('outputs.checkEvidence')} dense>
                         <Readout maxHeight={150}>{check.evidence}</Readout>
                       </TraceSection>
                     )}
@@ -430,7 +439,7 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                 }}
               >
                 <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 0.75 }}>
-                  节点收到的交接
+                  {t('outputs.inboundHandoffs')}
                 </Typography>
                 {handoffNodes.map(node => (
                   <TraceSection key={node.nodeId} title={node.label}>
@@ -440,8 +449,8 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                         variant="body2"
                         sx={{ overflowWrap: 'anywhere' }}
                       >
-                        {handoff.fromLabel} → {handoff.toLabel}（接收尝试{' '}
-                        {shortId(handoff.attemptId)}…）
+                        {handoff.fromLabel} → {handoff.toLabel}
+                        {t('outputs.receiveAttempt', { id: shortId(handoff.attemptId) })}
                       </Typography>
                     ))}
                   </TraceSection>
@@ -457,19 +466,23 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
                 p: { xs: 2, sm: 2.5 }
               }}
             >
-              <Typography sx={{ fontSize: 15, fontWeight: 500 }}>交付位置</Typography>
+              <Typography sx={{ fontSize: 15, fontWeight: 500 }}>
+                {t('outputs.locationTitle')}
+              </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.4 }}>
                 {task?.WORKSPACE_ID
-                  ? `本运行关联工作区 ${shortId(task.WORKSPACE_ID)}；文件正文仍走工作区读取接口并核对摘要。`
-                  : '该任务没有关联代码工作区，交付以文本结论为主。'}
+                  ? t('outputs.locationWorkspace', { id: shortId(task.WORKSPACE_ID) })
+                  : t('outputs.locationText')}
               </Typography>
               <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{ display: 'block', mt: 0.75 }}
               >
-                运行状态：{RUN_STATES[run?.STATUS] || run?.STATUS || '—'} · 任务 #
-                {shortId(task?.ID)}
+                {t('outputs.runStatus', {
+                  status: statusLabel(run?.STATUS, locale) || '—',
+                  id: shortId(task?.ID)
+                })}
               </Typography>
             </Box>
           </Stack>
@@ -482,11 +495,11 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
         </DialogTitle>
         <DialogContent dividers>
           <Readout mono maxHeight={520}>
-            {preview?.text || '空文件'}
+            {preview?.text || t('outputs.emptyFile')}
           </Readout>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPreview(null)}>关闭</Button>
+          <Button onClick={() => setPreview(null)}>{t('common.close')}</Button>
         </DialogActions>
       </Dialog>
     </Box>

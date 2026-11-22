@@ -19,29 +19,30 @@ import MenuBookOutlined from '@mui/icons-material/MenuBookOutlined';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AppLogo from '../components/AppLogo';
 import { googleTokens } from '../theme/googleTheme';
+import { useI18n } from '../i18n/I18nProvider';
 
 const navigation = [
-  { label: '工作台', path: '/', icon: SpaceDashboardOutlined, match: value => value === '/' },
+  { key: 'nav.home', path: '/', icon: SpaceDashboardOutlined, match: value => value === '/' },
   {
-    label: '观察运行',
+    key: 'nav.runs',
     path: '/runs',
     icon: TimelineOutlined,
     match: value => value.startsWith('/runs')
   },
   {
-    label: '我的 Agent',
+    key: 'nav.agents',
     path: '/agents',
     icon: SmartToyOutlined,
     match: value => value.startsWith('/agents')
   },
   {
-    label: '工作区与交付',
+    key: 'nav.workspaces',
     path: '/workspaces',
     icon: FolderOpenOutlined,
     match: value => value.startsWith('/workspaces')
   },
   {
-    label: '评测与监控',
+    key: 'nav.evaluations',
     path: '/evaluations',
     icon: FactCheckOutlined,
     match: value => value.startsWith('/evaluations')
@@ -93,6 +94,7 @@ function NavButton({ item, active, onClick }) {
 export default function Sidebar({ onNavigate }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   const go = path => {
     onNavigate?.();
@@ -125,20 +127,20 @@ export default function Sidebar({ onNavigate }) {
             '&:hover': { bgcolor: '#FFFFFF', boxShadow: '0 1px 3px rgba(60,64,67,.35)' }
           }}
         >
-          新建任务
+          {t('nav.newTask')}
         </Button>
       </Box>
 
       <Box
         component="nav"
-        aria-label="工作台导航"
+        aria-label={t('nav.aria')}
         sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
         <List disablePadding>
           {navigation.map(item => (
             <NavButton
               key={item.path}
-              item={item}
+              item={{ ...item, label: t(item.key) }}
               active={item.match(location.pathname)}
               onClick={() => go(item.path)}
             />
@@ -150,7 +152,7 @@ export default function Sidebar({ onNavigate }) {
         <List disablePadding>
           <NavButton
             item={{
-              label: '设置',
+              label: t('nav.settings'),
               path: '/settings',
               icon: SettingsOutlined,
               match: v => v.startsWith('/settings')
@@ -161,7 +163,7 @@ export default function Sidebar({ onNavigate }) {
 
           <NavButton
             item={{
-              label: '文档',
+              label: t('nav.docs'),
               path: '/docs',
               icon: MenuBookOutlined,
               match: v => v.startsWith('/docs')
@@ -173,7 +175,7 @@ export default function Sidebar({ onNavigate }) {
         <Stack direction="row" spacing={1} sx={{ px: 1.7, pt: 1.5, alignItems: 'center' }}>
           <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#34A853' }} />
           <Typography sx={{ fontSize: 11.5, color: googleTokens.textSecondary }}>
-            本地工作台
+            {t('nav.localWorkbench')}
           </Typography>
         </Stack>
       </Box>

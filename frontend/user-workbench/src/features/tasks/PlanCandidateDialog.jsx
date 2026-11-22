@@ -25,6 +25,7 @@ import { agentsApi } from '../../api/agents';
 import { parseModelValue } from '../../api/modelConnections';
 import { useModelConnections } from '../../hooks/useModelConnections';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const roleLabels = { ANALYZE: '分析', IMPLEMENT: '开发', REVIEW: '审查' };
 
@@ -51,14 +52,15 @@ function graphModel(candidate) {
 }
 
 function NodeDetail({ node, binding }) {
+  const { t, locale } = useI18n();
   if (!node) {
     return (
       <Typography variant="body2" color="text.secondary">
-        选择一个节点查看目标、范围和产出。
+        {t('plan.selectNode')}
       </Typography>
     );
   }
-  const values = (list, empty = '无') =>
+  const values = (list, empty = t('common.none')) =>
     list?.length ? (
       <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.5 }}>
         {list.map(value => (
@@ -77,7 +79,7 @@ function NodeDetail({ node, binding }) {
         <Typography sx={{ fontSize: 15, fontWeight: 500 }}>{node.title}</Typography>
         <Chip size="small" label={roleLabels[node.role] ?? node.role} />
         <Typography variant="caption" color="text.secondary">
-          键 {node.key}
+          {t('plan.key', { key: node.key })}
         </Typography>
       </Stack>
       {binding && (
@@ -86,12 +88,22 @@ function NodeDetail({ node, binding }) {
             {binding.name || binding.definitionId} v
             {binding.definitionVersion ?? binding.definition_version ?? '—'}
           </Typography>
-          <Typography variant="body2">{binding.reason || '未记录选择理由'}</Typography>
+          <Typography variant="body2">{binding.reason || t('plan.noBindingReason')}</Typography>
           <Typography variant="caption" color="text.secondary">
-            模型：
-            {binding.modelStrategy === 'FIXED' ? `固定 ${binding.modelMode}` : '继承运行模型'}
-            {'；'}Skill：{(binding.skills || []).map(item => item.name).join('、') || '无'}
-            {'；'}工具：{(binding.tools || []).map(item => item.name).join('、') || '无'}
+            {t('plan.bindingLine', {
+              model:
+                binding.modelStrategy === 'FIXED'
+                  ? t('plan.fixedModel', { mode: binding.modelMode })
+                  : t('plan.inheritModel'),
+              skills:
+                (binding.skills || [])
+                  .map(item => item.name)
+                  .join(locale === 'en-US' ? ', ' : '、') || t('common.none'),
+              tools:
+                (binding.tools || [])
+                  .map(item => item.name)
+                  .join(locale === 'en-US' ? ', ' : '、') || t('common.none')
+            })}
           </Typography>
         </Box>
       )}
@@ -100,25 +112,25 @@ function NodeDetail({ node, binding }) {
       </Typography>
       <Box>
         <Typography variant="caption" color="text.secondary">
-          直接依赖
+          {t('plan.dependsOn')}
         </Typography>
         {values(node.dependsOn)}
       </Box>
       <Box>
         <Typography variant="caption" color="text.secondary">
-          读取范围
+          {t('plan.readFiles')}
         </Typography>
         {values(node.readFiles)}
       </Box>
       <Box>
         <Typography variant="caption" color="text.secondary">
-          写入范围
+          {t('plan.writeFiles')}
         </Typography>
         {values(node.writeFiles)}
       </Box>
       <Box>
         <Typography variant="caption" color="text.secondary">
-          节点验收条件
+          {t('plan.acceptance')}
         </Typography>
         {(node.acceptanceCriteria ?? []).map(item => (
           <Typography variant="body2" key={item}>
@@ -135,6 +147,7 @@ function NodeDetail({ node, binding }) {
  * 「确认并创建运行」会提交候选摘要、输入版本与预算，服务端再次校验。
  */
 export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCostMicros }) {
+  const { t } = useI18n();
   const plan = usePlanCandidate(open);
   const [selected, setSelected] = useState(null);
   const [mode, setMode] = useState(input.agentMode || 'BUILTIN');
@@ -164,6 +177,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
       manualAgentVersion: null,
       candidateAgentIds: mode === 'RECOMMEND' ? candidateIds : [],
       readOnly: Boolean(input.readOnly),
+      locale: input.locale,
       writeEnabled: input.readOnly ? false : Boolean(input.writeEnabled),
       modelConnectionId: planModel === 'mock' ? null : parseModelValue(planModel).modelConnectionId
     }),
@@ -222,17 +236,15 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
       onCancel={onClose}
       footer={null}
       width={880}
-      title="执行计划草稿"
-      subtitle="生成和校验阶段只保存候选，不创建任务、运行或写入授权。"
+      title={t('plan.title')}
+      subtitle={t('plan.subtitle')}
     >
       <Stack spacing={1.6}>
-        <Alert severity="info">
-          确认后会创建任务、运行和节点级授权。生成会把已确认的目标、约束、验收条件和文件名发送给规划模型。
-        </Alert>
+        <Alert severity="info">{t('plan.info')}</Alert>
 
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 3, p: 1.5 }}>
           <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
-            节点 Agent 选择
+            {t('plan.agentSelection')}
           </Typography>
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
@@ -241,27 +253,27 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
             <TextField
               select
               size="small"
-              label="选择方式"
+              label={t('plan.selectionMode')}
               value={mode}
               disabled={busy}
               onChange={event => setMode(event.target.value)}
               sx={{ minWidth: 190 }}
             >
-              <MenuItem value="BUILTIN">沿用内置模板</MenuItem>
-              <MenuItem value="MANUAL">指定私有 Agent 版本</MenuItem>
-              <MenuItem value="RECOMMEND">允许规划器从勾选中推荐</MenuItem>
+              <MenuItem value="BUILTIN">{t('plan.mode.BUILTIN')}</MenuItem>
+              <MenuItem value="MANUAL">{t('plan.mode.MANUAL')}</MenuItem>
+              <MenuItem value="RECOMMEND">{t('plan.mode.RECOMMEND')}</MenuItem>
             </TextField>
             <TextField
               select
               size="small"
-              label="规划模型"
+              label={t('plan.planningModel')}
               value={planModel}
               onChange={event => setPlanModel(event.target.value)}
               sx={{ minWidth: 210 }}
             >
-              <ListSubheader>内置免 Key</ListSubheader>
-              <MenuItem value="">服务端内置规划模型</MenuItem>
-              <ListSubheader>我的模型（自带 Key）</ListSubheader>
+              <ListSubheader>{t('idea.builtInNoKey')}</ListSubheader>
+              <MenuItem value="">{t('plan.serverPlanningModel')}</MenuItem>
+              <ListSubheader>{t('composer.myModels')}</ListSubheader>
               {connectionList.map(connection => (
                 <MenuItem key={connection.id} value={`user:${connection.id}`}>
                   {connection.displayName} · {connection.modelName}
@@ -272,7 +284,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
               <TextField
                 select
                 size="small"
-                label="私有 Agent"
+                label={t('plan.privateAgent')}
                 value={manualId ?? ''}
                 onChange={event => setManualId(event.target.value)}
                 sx={{ minWidth: 250 }}
@@ -290,13 +302,13 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
               disabled={busy}
               onClick={() => generate(current?.id ?? null)}
             >
-              应用选择并重新生成
+              {t('plan.applySelection')}
             </Button>
           </Stack>
           {mode === 'RECOMMEND' && (
             <Stack sx={{ mt: 1 }} spacing={0.25}>
               <Typography variant="caption" color="text.secondary">
-                只列出已发布且允许推荐的私有 Agent。
+                {t('plan.recommendHint')}
               </Typography>
               {published
                 .filter(agent => agent.recommendable)
@@ -325,7 +337,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
                 ))}
               {published.filter(agent => agent.recommendable).length === 0 && (
                 <Typography variant="body2" color="text.secondary">
-                  还没有可推荐的已发布 Agent，请先在「我的 Agent」创建并发布。
+                  {t('plan.noRecommendable')}
                 </Typography>
               )}
             </Stack>
@@ -336,7 +348,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
               color="text.secondary"
               sx={{ display: 'block', mt: 0.75 }}
             >
-              这是只读计划：不会获得写入工具，私有 Agent 只能进入分析或审查节点。
+              {t('plan.readOnlyNote')}
             </Typography>
           )}
         </Box>
@@ -345,7 +357,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
           <Alert severity="error">
             {finalError}
             <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
-              如果提示 Agent 失效、撤权或归档，请重新选择后点击「应用选择并重新生成」。
+              {t('plan.agentErrorHint')}
             </Typography>
           </Alert>
         )}
@@ -362,7 +374,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
           <Box sx={{ flex: 1 }} />
           {current?.status === 'GENERATING' && (
             <Button size="small" startIcon={<StopCircleOutlined />} onClick={() => plan.cancel()}>
-              取消生成
+              {t('plan.cancelGenerate')}
             </Button>
           )}
           <Button
@@ -371,7 +383,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
             disabled={busy}
             onClick={() => generate(current?.id ?? null)}
           >
-            重新生成
+            {t('plan.regenerate')}
           </Button>
         </Stack>
 
@@ -385,7 +397,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
 
         {current?.errors?.length > 0 && (
           <Alert severity="warning">
-            <Typography variant="subtitle2">校验未通过</Typography>
+            <Typography variant="subtitle2">{t('plan.invalid')}</Typography>
             {current.errors.map(reason => (
               <Typography variant="body2" key={reason}>
                 · {reason}
@@ -418,7 +430,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
             )}
             <Box>
               <Typography component="h3" sx={{ fontSize: 15, fontWeight: 500, mb: 0.75 }}>
-                {selectedNode ? selectedNode.title : '节点详情'}
+                {selectedNode ? selectedNode.title : t('plan.nodeDetail')}
               </Typography>
               <NodeDetail node={selectedNode} binding={current?.agentBindings?.[selected]} />
             </Box>
@@ -428,13 +440,13 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
                 onClick={() => setSelected(null)}
                 sx={{ alignSelf: 'flex-start' }}
               >
-                返回计划的完整流程图
+                {t('plan.backToGraph')}
               </Button>
             )}
             {current.candidate.assumptions?.length > 0 && (
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  模型假设
+                  {t('plan.assumptions')}
                 </Typography>
                 {current.candidate.assumptions.map(item => (
                   <Typography variant="body2" key={item}>
@@ -445,7 +457,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
             )}
             {current.candidate.openQuestions?.length > 0 && (
               <Alert severity="info">
-                <Typography variant="subtitle2">待确认事项</Typography>
+                <Typography variant="subtitle2">{t('plan.openQuestions')}</Typography>
                 {current.candidate.openQuestions.map(item => (
                   <Typography variant="body2" key={item}>
                     · {item}
@@ -456,24 +468,22 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
             {current.status === 'READY' && (
               <Alert severity="success">
                 <Stack spacing={1.1}>
-                  <Typography>
-                    候选已通过节点、依赖、文件和审查规则校验。确认后创建任务、运行和节点级授权。
-                  </Typography>
+                  <Typography>{t('plan.ready')}</Typography>
                   <Stack direction="row" sx={{ gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                     <TextField
                       select
                       size="small"
-                      label="运行模型"
+                      label={t('plan.runModel')}
                       value={runModel}
                       onChange={event => setRunModel(event.target.value)}
                       sx={{ minWidth: 230 }}
                     >
-                      <ListSubheader>内置免 Key 模型</ListSubheader>
-                      <MenuItem value="mock">模拟模型（内置）</MenuItem>
+                      <ListSubheader>{t('idea.builtInModels')}</ListSubheader>
+                      <MenuItem value="mock">{t('composer.mockModel')}</MenuItem>
                       {legacyDeepSeek && (
-                        <MenuItem value="deepseek">DeepSeek Flash（本机密钥文件）</MenuItem>
+                        <MenuItem value="deepseek">{t('idea.deepseekFile')}</MenuItem>
                       )}
-                      <ListSubheader>我的模型（自带 Key）</ListSubheader>
+                      <ListSubheader>{t('composer.myModels')}</ListSubheader>
                       {connectionList.map(connection => (
                         <MenuItem key={connection.id} value={`user:${connection.id}`}>
                           {connection.displayName} · {connection.modelName}
@@ -484,7 +494,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
                       <TextField
                         size="small"
                         type="number"
-                        label="费用硬预算（微单位）"
+                        label={t('advanced.maxCost')}
                         value={maxCost ?? ''}
                         onChange={event =>
                           setMaxCost(event.target.value === '' ? null : Number(event.target.value))

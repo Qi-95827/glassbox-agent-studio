@@ -3,6 +3,7 @@ import CheckRounded from '@mui/icons-material/CheckRounded';
 import CloseRounded from '@mui/icons-material/CloseRounded';
 import PriorityHighRounded from '@mui/icons-material/PriorityHighRounded';
 import { STATUS_TONES, statusLabel, statusTone } from '../constants/labels';
+import { useI18n } from '../i18n/I18nProvider';
 
 const pulse = keyframes`
   0% { box-shadow: 0 0 0 0 rgba(25, 103, 210, 0.45); }
@@ -15,8 +16,9 @@ const pulse = keyframes`
  * 所有状态都来自后端枚举，未知值原样显示。
  */
 export default function StatusChip({ value, label, sx }) {
+  const { locale } = useI18n();
   const tone = STATUS_TONES[statusTone(value)];
-  const text = label || statusLabel(value);
+  const text = label || statusLabel(value, locale);
   const active = statusTone(value) === 'active';
   const success = statusTone(value) === 'success';
   const error = statusTone(value) === 'error';

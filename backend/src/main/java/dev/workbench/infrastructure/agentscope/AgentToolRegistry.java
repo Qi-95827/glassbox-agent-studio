@@ -47,7 +47,8 @@ public final class AgentToolRegistry {
               new AgentToolProvider.Scope(
                   context.workspaceId(),
                   writes ? context.writePaths() : context.authorizedPaths(),
-                  context.scenario()));
+                  context.scenario(),
+                  context.locale()));
       if (spec == null) throw new IllegalStateException("工具提供者未声明工具：" + entry.getKey());
       if (toolkit.getTool(spec.name()) != null)
         throw new IllegalStateException("工具名称重复：" + spec.name());
@@ -95,12 +96,14 @@ public final class AgentToolRegistry {
               context.scenario(),
               context.runtime(),
               context.failure(),
-              java.util.List.of());
+              java.util.List.of(),
+              context.locale());
       var original =
           provider.create(
-              new AgentToolProvider.Scope(context.workspaceId(), filtered, context.scenario()));
+              new AgentToolProvider.Scope(
+                  context.workspaceId(), filtered, context.scenario(), context.locale()));
       if (original == null) throw new IllegalStateException("私有工具执行器未声明工具。");
-      var spec = privateSpec(original, tool);
+      var spec = privateSpec(original, tool, context.locale());
       if (toolkit.getTool(spec.name()) != null)
         throw new IllegalStateException("私有工具名称重复：" + spec.name());
       int version = ToolContracts.versionFor(kind, context.authorizedPaths().size());
@@ -117,13 +120,21 @@ public final class AgentToolRegistry {
 
   private static <T> ToolSpecification<T> privateSpec(
       ToolSpecification<T> original,
-      PinnedTool tool) {
+      PinnedTool tool,
+      String locale) {
+    boolean english =
+        dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
     return new ToolSpecification<>(
         tool.toolName(),
-        tool.name()
-            + " 只搜索或读取以下扩展名："
-            + String.join(", ", tool.fileExtensions())
-            + "；仍受当前任务与节点授权文件限制。",
+        english
+            ? tool.name()
+                + " only searches or reads these extensions: "
+                + String.join(", ", tool.fileExtensions())
+                + "; the current task and node authorization still apply."
+            : tool.name()
+                + " 只搜索或读取以下扩展名："
+                + String.join(", ", tool.fileExtensions())
+                + "；仍受当前任务与节点授权文件限制。",
         original.parameters(),
         java.util.stream.Stream.concat(
                 original.fingerprintPrefix().stream(),

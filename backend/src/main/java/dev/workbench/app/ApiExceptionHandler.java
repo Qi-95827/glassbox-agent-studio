@@ -14,7 +14,8 @@ public class ApiExceptionHandler {
   @ExceptionHandler(EmptyResultDataAccessException.class)
   @ResponseStatus(HttpStatus.NOT_FOUND)
   public Map<String, String> notFound() {
-    return Map.of("message", "记录不存在。");
+    return Map.of(
+        "message", dev.workbench.framework.i18n.LocalizedMessages.get("record.notFound"));
   }
 
   /** 同一请求标识用于不同内容时要求客户端换标识或读取原记录。 */
@@ -41,6 +42,10 @@ public class ApiExceptionHandler {
   @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
   @ResponseStatus(HttpStatus.BAD_REQUEST)
   public Map<String, String> invalid(RuntimeException error) {
-    return Map.of("message", error.getMessage() == null ? "操作失败。" : error.getMessage());
+    return Map.of(
+        "message",
+        error.getMessage() == null
+            ? dev.workbench.framework.i18n.LocalizedMessages.get("operation.failed")
+            : error.getMessage());
   }
 }

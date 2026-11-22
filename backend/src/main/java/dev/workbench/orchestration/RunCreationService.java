@@ -61,9 +61,15 @@ final class RunCreationService {
   }
 
   private void readGoal(CreateTaskRequest request, Draft draft) {
+    draft.locale =
+        dev.workbench.framework.prompt.PromptResourceLoader.normalizeLocale(
+            request.locale() == null || request.locale().isBlank()
+                ? org.springframework.context.i18n.LocaleContextHolder.getLocale().toLanguageTag()
+                : request.locale());
     draft.goal = request.goal() == null ? "" : request.goal().trim();
     if (draft.goal.isEmpty() || draft.goal.length() > 500) {
-      throw new IllegalArgumentException("请输入 1 到 500 字的任务目标。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.goal"));
     }
     draft.scenario =
         Scenario.fromCode(request.scenario() == null ? "normal" : request.scenario());
@@ -135,7 +141,8 @@ final class RunCreationService {
           || draft.hasFileList
           || draft.writeEnabled
           || draft.memoryEnabled)
-        throw new IllegalArgumentException("请先选择工作区。");
+        throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.workspaceRequired"));
       return;
     }
     authorizeWorkspace(request, draft);
@@ -154,7 +161,9 @@ final class RunCreationService {
     } else {
       draft.fileScopes = new AuthorizedFileSet(requested).paths();
     }
-    if (draft.fileScopes.isEmpty()) throw new IllegalArgumentException("请选择至少一个授权文件或目录。");
+    if (draft.fileScopes.isEmpty())
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.fileRequired"));
     try {
       if (json.writeValueAsString(draft.fileScopes).length() > 20_000)
         throw new IllegalArgumentException("授权文件路径总长度超过允许范围。");
@@ -168,16 +177,20 @@ final class RunCreationService {
   private void readLimits(CreateTaskRequest request, Draft draft) {
     draft.tokenLimit = request.maxReportedTokens();
     if (draft.tokenLimit != null && (draft.tokenLimit < 1 || draft.tokenLimit > 1_000_000))
-      throw new IllegalArgumentException("已报告 Token 上限须在 1 至 1000000 之间。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.maxTokens"));
     draft.identicalLimit = request.maxIdenticalTools();
     if (draft.identicalLimit != null && (draft.identicalLimit < 1 || draft.identicalLimit > 20))
-      throw new IllegalArgumentException("连续相同工具调用上限须在 1 至 20 之间。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.identicalTools"));
     draft.agentRounds = request.maxAgentRounds();
     draft.agentTools = request.maxAgentTools();
     if (draft.agentRounds != null && (draft.agentRounds < 1 || draft.agentRounds > 20))
-      throw new IllegalArgumentException("单个 Agent 模型调用上限须在 1 至 20 之间。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.agentRounds"));
     if (draft.agentTools != null && (draft.agentTools < 0 || draft.agentTools > 20))
-      throw new IllegalArgumentException("单个 Agent 工具调用上限须在 0 至 20 之间。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.agentTools"));
     draft.roleBudgets =
         request.roleBudgets() == null
             ? java.util.Map.<AgentRole, RoleBudget>of()
@@ -256,7 +269,8 @@ final class RunCreationService {
             draft.fileScopes,
             draft.roleBudgets,
             draft.toolBudgets,
-            draft.modelConnectionId);
+            draft.modelConnectionId,
+            draft.locale);
     draft.limits =
         new RunLimits(
             request.maxRounds(),
@@ -281,12 +295,19 @@ final class RunCreationService {
       template = template.withNodeBudgets(request.nodeBudgets());
     }
     draft.template = template;
+    boolean english = dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(draft.locale);
     draft.createdMessage =
         draft.mode == ModelMode.DEEPSEEK
-            ? "任务已创建：AgentScope 使用 DeepSeek Flash，可调用模拟工具。"
+            ? english
+                ? "Task created: AgentScope uses DeepSeek Flash and may call simulated tools."
+                : "任务已创建：AgentScope 使用 DeepSeek Flash，可调用模拟工具。"
             : draft.mode == ModelMode.USER
-                ? "任务已创建：使用你自带的模型连接与 API Key。"
-                : "任务已创建：AgentScope 使用模拟模型和模拟工具。";
+                ? english
+                    ? "Task created: using your own model connection and API key."
+                    : "任务已创建：使用你自带的模型连接与 API Key。"
+                : english
+                    ? "Task created: AgentScope uses the simulated model and simulated tools."
+                    : "任务已创建：AgentScope 使用模拟模型和模拟工具。";
   }
 
   private void persist(Draft draft) {
@@ -304,8 +325,15 @@ final class RunCreationService {
           draft.workspaceScope,
           draft.maxCostMicros);
     } else {
+      boolean english = dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(draft.locale);
       createdMessage =
-          draft.reviewPlan ? "工作流计划已保存，等待用户确认。" : "工作流计划已保存，等待执行。";
+          draft.reviewPlan
+              ? english
+                  ? "Workflow plan saved and awaiting user confirmation."
+                  : "工作流计划已保存，等待用户确认。"
+              : english
+                  ? "Workflow plan saved and awaiting execution."
+                  : "工作流计划已保存，等待执行。";
       taskCreations.persist(
           draft.task,
           java.util.UUID.fromString(draft.runId),
@@ -337,6 +365,7 @@ final class RunCreationService {
   /** 校验过程中的可变创建草稿，保持原有校验顺序与字段来源。 */
   private static final class Draft {
     String goal;
+    String locale;
     Scenario scenario;
     ModelMode mode;
     String modelConnectionId;

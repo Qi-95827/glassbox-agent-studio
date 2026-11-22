@@ -53,6 +53,18 @@ public class SkillRegistry {
     return resolve(ids);
   }
 
+  /** 按任务语言返回技能指导正文；技能标识、版本与权限不变。 */
+  public String guidance(SkillId id, String locale) {
+    String relativePath =
+        switch (Objects.requireNonNull(id, "技能不能为空")) {
+          case ANALYZE_EVIDENCE -> "skills/analyze-evidence.md";
+          case AUTHORIZED_EDIT -> "skills/authorized-edit.md";
+          case REVIEW_EVIDENCE -> "skills/review-evidence.md";
+        };
+    return PromptResourceLoader.load(
+        dev.workbench.framework.prompt.PromptResourceLoader.normalizeLocale(locale), relativePath);
+  }
+
   /** 按可信定义的清单选择技能；技能本身不能授予工具权限。 */
   public List<SkillDefinition> resolve(List<SkillId> ids) {
     if (ids == null

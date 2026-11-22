@@ -23,27 +23,25 @@ import GpsFixedRounded from '@mui/icons-material/GpsFixedRounded';
 import { runsApi } from '../../api/runs';
 import { TraceSection, Readout } from '../../components/WorkbenchDialog';
 import { clock } from '../../utils/format';
+import { useI18n } from '../../i18n/I18nProvider';
 
-const filters = [
-  ['all', '全部'],
-  ['control', '判断与交接'],
-  ['call', '模型与工具']
-];
+const filters = ['all', 'control', 'call'];
 
 const group = event => (/^(MODEL|TOOL)_/.test(event.EVENT_TYPE) ? 'call' : 'control');
 
-const roleOf = event => {
-  if (event.EVENT_TYPE?.startsWith('MODEL_')) return '模型调用';
-  if (event.EVENT_TYPE?.startsWith('TOOL_')) return '工具调用';
-  if (event.EVENT_TYPE?.startsWith('CHECK_')) return '系统检查';
-  if (event.EVENT_TYPE?.startsWith('HANDOFF')) return 'Agent 交接';
-  if (event.EVENT_TYPE?.startsWith('AGENT_')) return 'Agent 实例';
-  return '运行控制';
+const roleKey = event => {
+  if (event.EVENT_TYPE?.startsWith('MODEL_')) return 'replay.role.model';
+  if (event.EVENT_TYPE?.startsWith('TOOL_')) return 'replay.role.tool';
+  if (event.EVENT_TYPE?.startsWith('CHECK_')) return 'replay.role.check';
+  if (event.EVENT_TYPE?.startsWith('HANDOFF')) return 'replay.role.handoff';
+  if (event.EVENT_TYPE?.startsWith('AGENT_')) return 'replay.role.agent';
+  return 'replay.role.control';
 };
 
 const findById = (items, id) => (id ? items?.find(item => item.ID === id) : undefined);
 
 function Evidence({ event, run, nodeDetail }) {
+  const { t } = useI18n();
   const tool = findById(run?.tools, event.TOOL_CALL_ID);
   const model = findById(run?.models, event.MODEL_CALL_ID);
   const agent = findById(run?.agents, event.AGENT_ID);
@@ -62,12 +60,12 @@ function Evidence({ event, run, nodeDetail }) {
       {tool && (
         <Box>
           <Typography variant="subtitle2">
-            {tool.TOOL_NAME} · {starting ? '开始调用' : tool.STATUS}
+            {tool.TOOL_NAME} · {starting ? t('replay.started') : tool.STATUS}
           </Typography>
           {!starting && tool.RESULT && <Readout>{tool.RESULT}</Readout>}
           {!starting && tool.ERROR_MESSAGE && <Readout>{tool.ERROR_MESSAGE}</Readout>}
           {!starting && tool.RESOURCE_VERSION && (
-            <TraceSection title="记录的资源版本" dense>
+            <TraceSection title={t('replay.resourceVersion')} dense>
               <Readout mono>{tool.RESOURCE_VERSION}</Readout>
             </TraceSection>
           )}
@@ -76,11 +74,14 @@ function Evidence({ event, run, nodeDetail }) {
       {model && (
         <Box>
           <Typography variant="subtitle2">
-            {model.MODEL_NAME} · {starting ? '开始调用' : model.STATUS}
+            {model.MODEL_NAME} · {starting ? t('replay.started') : model.STATUS}
           </Typography>
           {!starting && (
             <Typography variant="body2">
-              输入 {model.INPUT_TOKENS ?? '未知'} / 输出 {model.OUTPUT_TOKENS ?? '未知'} Token
+              {t('replay.tokens', {
+                input: model.INPUT_TOKENS ?? t('common.unknown'),
+                output: model.OUTPUT_TOKENS ?? t('common.unknown')
+              })}
             </Typography>
           )}
           {!starting && model.ERROR_MESSAGE && <Readout>{model.ERROR_MESSAGE}</Readout>}
@@ -89,7 +90,7 @@ function Evidence({ event, run, nodeDetail }) {
       {check && (
         <Box>
           <Typography variant="subtitle2">
-            {check.checkId} · {starting ? '开始检查' : check.status}
+            {check.checkId} · {starting ? t('replay.checkStarted') : check.status}
           </Typography>
           {!starting && check.summary && <Readout>{check.summary}</Readout>}
           {!starting && check.evidence && <Readout>{check.evidence}</Readout>}
@@ -98,10 +99,10 @@ function Evidence({ event, run, nodeDetail }) {
       {handoffs.map(row => (
         <Box key={`${row.receiverAttemptId}:${row.dependencyNodeId}`}>
           <Typography variant="subtitle2">
-            {row.senderNodeLabel || row.dependencyNodeLabel || '来源节点'} →{' '}
-            {row.receiverNodeLabel || '接收节点'}
+            {row.senderNodeLabel || row.dependencyNodeLabel || t('glassbox.sender')} →{' '}
+            {row.receiverNodeLabel || t('glassbox.receiver')}
           </Typography>
-          <Readout>{row.sourceResult || '交接正文未记录。'}</Readout>
+          <Readout>{row.sourceResult || t('glassbox.noBody')}</Readout>
           {row.toolEvidence?.map(evidence => (
             <Typography
               key={evidence.toolCallId}
@@ -116,24 +117,24 @@ function Evidence({ event, run, nodeDetail }) {
       ))}
       {!starting && agent?.RESULT && !tool && !model && (
         <Box>
-          <Typography variant="subtitle2">Agent 实例保存的结果</Typography>
+          <Typography variant="subtitle2">{t('replay.agentResult')}</Typography>
           <Readout>{agent.RESULT}</Readout>
         </Box>
       )}
       {!tool && !model && !check && handoffs.length === 0 && !agent?.RESULT && (
         <Typography variant="body2" color="text.secondary">
-          该事件没有关联的模型、工具或检查正文；可展开数据库原记录查看字段。
+          {t('replay.noEvidence')}
         </Typography>
       )}
-      <TraceSection title="数据库原记录" subtitle="可能包含事件之后的结算结果">
+      <TraceSection title={t('replay.rawRecord')} subtitle={t('replay.rawRecordHint')}>
         <Readout mono maxHeight={220}>
           {JSON.stringify(
             [
-              ['事件记录', event],
-              ['工具调用记录', tool],
-              ['模型调用记录', model],
-              ['检查记录', check],
-              ['Agent 实例记录', agent]
+              [t('replay.raw.event'), event],
+              [t('replay.raw.tool'), tool],
+              [t('replay.raw.model'), model],
+              [t('replay.raw.check'), check],
+              [t('replay.raw.agent'), agent]
             ].filter(([, record]) => record),
             null,
             2
@@ -159,6 +160,7 @@ export default function RunReplayPanel({
   eventNames,
   onLocate
 }) {
+  const { t, locale } = useI18n();
   const [filter, setFilter] = useState('all');
   const [selectedId, setSelectedId] = useState(null);
   const [playing, setPlaying] = useState(false);
@@ -222,7 +224,7 @@ export default function RunReplayPanel({
         <Stack spacing={1.2} sx={{ alignItems: 'center' }}>
           <CircularProgress size={22} />
           <Typography variant="body2" color="text.secondary">
-            正在读取当前运行的执行记录…
+            {t('replay.loadingRun')}
           </Typography>
         </Stack>
       </Box>
@@ -255,9 +257,9 @@ export default function RunReplayPanel({
               setPlaying(false);
             }}
           >
-            {filters.map(([value, label]) => (
+            {filters.map(value => (
               <ToggleButton key={value} value={value}>
-                {label}
+                {t(`replay.filter.${value}`)}
               </ToggleButton>
             ))}
           </ToggleButtonGroup>
@@ -274,7 +276,7 @@ export default function RunReplayPanel({
                 setSelectedId(visible[index - 1]?.ID);
               }}
             >
-              上一步
+              {t('replay.previous')}
             </Button>
             <Button
               size="small"
@@ -283,7 +285,7 @@ export default function RunReplayPanel({
               disabled={!playing && nextId == null}
               onClick={() => setPlaying(value => !value)}
             >
-              {playing ? '暂停' : '播放'}
+              {playing ? t('replay.pause') : t('replay.play')}
             </Button>
             <Button
               size="small"
@@ -294,7 +296,7 @@ export default function RunReplayPanel({
                 setSelectedId(nextId);
               }}
             >
-              下一步
+              {t('replay.next')}
             </Button>
           </Stack>
         </Paper>
@@ -302,10 +304,10 @@ export default function RunReplayPanel({
         {!event ? (
           <Alert severity="info">
             {eventsLoading
-              ? '正在读取当前运行的事件…'
+              ? t('replay.loadingEvents')
               : scopedEvents.length
-                ? '当前类别下没有已记录的事件。'
-                : '当前运行没有已记录的事件。'}
+                ? t('replay.emptyCategory')
+                : t('replay.emptyRun')}
           </Alert>
         ) : (
           <Box
@@ -318,7 +320,7 @@ export default function RunReplayPanel({
           >
             <Paper variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden' }}>
               <Typography sx={{ px: 1.5, py: 1.2, fontSize: 13, fontWeight: 600 }}>
-                事件顺序
+                {t('replay.order')}
               </Typography>
               <Divider />
               <List
@@ -338,7 +340,7 @@ export default function RunReplayPanel({
                   >
                     <ListItemText
                       primary={eventNames[item.EVENT_TYPE] || item.EVENT_TYPE}
-                      secondary={`#${item.RUN_SEQ ?? item.ID} · ${clock(item.CREATED_AT)}`}
+                      secondary={`#${item.RUN_SEQ ?? item.ID} · ${clock(item.CREATED_AT, locale)}`}
                       slotProps={{ primary: { fontSize: 13 }, secondary: { fontSize: 11.5 } }}
                     />
                   </ListItemButton>
@@ -355,23 +357,24 @@ export default function RunReplayPanel({
                 >
                   <Chip
                     size="small"
-                    label={roleOf(event)}
+                    label={t(roleKey(event))}
                     sx={{ bgcolor: '#E8F0FE', color: '#1967D2' }}
                   />
 
                   <Typography variant="caption" color="text.secondary">
-                    {clock(event.CREATED_AT)} · 事件 #{event.RUN_SEQ ?? '—'}
+                    {clock(event.CREATED_AT, locale)} ·{' '}
+                    {t('replay.eventNumber', { id: event.RUN_SEQ ?? '—' })}
                   </Typography>
                 </Stack>
                 <Typography sx={{ fontSize: 16, fontWeight: 500 }}>
                   {eventNames[event.EVENT_TYPE] || event.EVENT_TYPE}
                 </Typography>
                 <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                  {event.MESSAGE || '未记录事件正文'}
+                  {event.MESSAGE || t('replay.noMessage')}
                 </Typography>
                 {event.REASON_CODE && (
                   <Typography variant="caption" color="text.secondary">
-                    原因编码 {event.REASON_CODE}
+                    {t('replay.reasonCode', { code: event.REASON_CODE })}
                   </Typography>
                 )}
                 {nodeId && (
@@ -381,10 +384,12 @@ export default function RunReplayPanel({
                     onClick={() => onLocate?.(nodeId, event.EVENT_TYPE)}
                     sx={{ alignSelf: 'flex-start' }}
                   >
-                    在流程图定位
+                    {t('replay.locate')}
                   </Button>
                 )}
-                {error && <Alert severity="warning">关联记录未读取成功：{error}</Alert>}
+                {error && (
+                  <Alert severity="warning">{t('replay.relatedFailed', { message: error })}</Alert>
+                )}
                 <Divider />
                 <Evidence event={event} run={detail} nodeDetail={nodeDetail} />
               </Stack>

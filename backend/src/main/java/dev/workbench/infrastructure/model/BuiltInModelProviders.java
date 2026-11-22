@@ -37,7 +37,8 @@ class BuiltInModelProviders {
                 request.scenario(),
                 request.fileScopes(),
                 textOnly,
-                workflowInput));
+                workflowInput,
+                request.locale()));
       }
     };
   }

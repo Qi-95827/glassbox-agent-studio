@@ -24,7 +24,42 @@ public record PlanCandidateInput(
     Integer manualAgentVersion,
     List<String> candidateAgentIds,
     boolean readOnly,
-    String modelConnectionId) {
+    String modelConnectionId,
+    String locale) {
+  /** 兼容未选择自带 Key 连接、也未记录语言的旧候选与客户端。 */
+  public PlanCandidateInput(
+      String goal,
+      TaskEntryKind entryKind,
+      String workspaceId,
+      boolean writeEnabled,
+      List<String> fileScopes,
+      List<String> constraints,
+      List<String> acceptanceCriteria,
+      String deliverable,
+      String agentMode,
+      String manualAgentId,
+      Integer manualAgentVersion,
+      List<String> candidateAgentIds,
+      boolean readOnly,
+      String modelConnectionId) {
+    this(
+        goal,
+        entryKind,
+        workspaceId,
+        writeEnabled,
+        fileScopes,
+        constraints,
+        acceptanceCriteria,
+        deliverable,
+        agentMode,
+        manualAgentId,
+        manualAgentVersion,
+        candidateAgentIds,
+        readOnly,
+        modelConnectionId,
+        null);
+  }
+
   /** 兼容未选择自带 Key 连接的旧候选与客户端。 */
   public PlanCandidateInput(
       String goal,
@@ -129,6 +164,39 @@ public record PlanCandidateInput(
             : modelConnectionId.strip();
     if (modelConnectionId != null && !modelConnectionId.matches("[A-Za-z0-9-]{1,36}"))
       throw new IllegalArgumentException("模型连接标识无效。");
+    locale =
+        locale == null || locale.isBlank()
+            ? null
+            : locale.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
+                ? "en-US"
+                : "zh-CN";
+  }
+
+  /** 请求未显式指定任务语言时，由控制器从 Accept-Language 注入。 */
+  public PlanCandidateInput withLocale(String value) {
+    String normalized =
+        value == null || value.isBlank()
+            ? null
+            : value.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
+                ? "en-US"
+                : "zh-CN";
+    if (java.util.Objects.equals(locale, normalized)) return this;
+    return new PlanCandidateInput(
+        goal,
+        entryKind,
+        workspaceId,
+        writeEnabled,
+        fileScopes,
+        constraints,
+        acceptanceCriteria,
+        deliverable,
+        agentMode,
+        manualAgentId,
+        manualAgentVersion,
+        candidateAgentIds,
+        readOnly,
+        modelConnectionId,
+        normalized);
   }
 
   /** 已确认的授权快照；模型节点只能引用其中的文件。 */
@@ -153,7 +221,8 @@ public record PlanCandidateInput(
         manualAgentVersion,
         candidateAgentIds,
         readOnly,
-        connectionId);
+        connectionId,
+        locale);
   }
 
   /** 输入摘要进入候选摘要；同一内容的重复请求得到同一指纹。 */

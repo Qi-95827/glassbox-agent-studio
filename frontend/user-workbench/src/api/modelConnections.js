@@ -1,4 +1,5 @@
 import { del, get, post, put } from './client';
+import { getCurrentLocale } from '../i18n';
 
 export const modelConnectionsApi = {
   presets: () => get('/model-connections/presets'),
@@ -30,9 +31,14 @@ export function selectedConnection(list, value) {
   return (list?.connections ?? []).find(item => item.id === modelConnectionId) ?? null;
 }
 
-export function modelSelectionLabel(list, value) {
+export function modelSelectionLabel(list, value, locale = getCurrentLocale()) {
   const connection = selectedConnection(list, value);
   if (connection) return connection.displayName || connection.modelName;
-  if (value === 'deepseek') return 'DeepSeek Flash（本机密钥文件）';
-  return '模拟模型（免 Key）';
+  const english = String(locale || '')
+    .toLowerCase()
+    .startsWith('en');
+  if (value === 'deepseek') {
+    return english ? 'DeepSeek Flash (local key file)' : 'DeepSeek Flash（本机密钥文件）';
+  }
+  return english ? 'Simulated model (no key)' : '模拟模型（免 Key）';
 }

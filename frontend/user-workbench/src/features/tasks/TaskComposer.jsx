@@ -27,7 +27,7 @@ import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useEntryPolicies } from '../../hooks/useTasks';
 import { useToast } from '../../components/ToastProvider';
 import { numberOrNull, splitLines } from '../../utils/format';
-import { ENTRY_KINDS } from '../../constants/labels';
+import { entryKindLabel } from '../../constants/labels';
 import { workflowCompatible } from '../bug/bugEntryDefaults';
 import TaskIdeaDialog from './TaskIdeaDialog';
 import PlanCandidateDialog from './PlanCandidateDialog';
@@ -35,6 +35,7 @@ import AdvancedRunConfig from './AdvancedRunConfig';
 import NewWorkspaceDialog from '../workspaces/NewWorkspaceDialog';
 import BugVerifyDialog from '../bug/BugVerifyDialog';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const entryOptions = ['GENERAL', 'REQUIREMENT', 'DESIGN', 'CODE', 'TEST', 'BUG'];
 
@@ -106,6 +107,7 @@ function ConfigChip({ icon, label, onClick, strong }) {
 }
 
 export default function TaskComposer({ onCreated, onModelChange }) {
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const toast = useToast();
@@ -156,16 +158,16 @@ export default function TaskComposer({ onCreated, onModelChange }) {
 
   const create = async () => {
     if (!draft.goal.trim()) {
-      toast.warning('请先描述任务目标');
+      toast.warning(t('composer.goalRequired'));
       goalRef.current?.focus();
       return;
     }
     if (draft.entryKind === 'BUG' && !draft.workspaceId) {
-      toast.warning('模拟 Bug 任务需要选择工作区');
+      toast.warning(t('composer.bugWorkspaceRequired'));
       return;
     }
     if (workflowMismatch) {
-      toast.warning('当前任务设置与所选工作流不兼容');
+      toast.warning(t('composer.workflowMismatch'));
       return;
     }
     setSending(true);
@@ -199,10 +201,11 @@ export default function TaskComposer({ onCreated, onModelChange }) {
         bugId: draft.entryKind === 'BUG' ? draft.bugId : null,
         memoryEnabled: Boolean(draft.workspaceId && draft.memoryEnabled),
         constraints,
-        acceptanceCriteria
+        acceptanceCriteria,
+        locale
       });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      toast.success(draft.reviewPlan ? '已创建任务，等待确认计划' : '任务已创建并开始运行');
+      toast.success(draft.reviewPlan ? t('composer.createdReview') : t('composer.createdRun'));
       if (onCreated) onCreated(result.runId);
       else navigate(`/runs/${result.runId}`);
     } catch (error) {
@@ -240,12 +243,12 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           size="small"
           value={draft.entryKind}
           onChange={(_, value) => value && patch({ entryKind: value })}
-          aria-label="任务入口类型"
+          aria-label={t('composer.entryAria')}
           sx={{ flexWrap: 'wrap', rowGap: 0.5 }}
         >
           {entryOptions.map(value => (
             <ToggleButton key={value} value={value} sx={{ px: 1.6 }}>
-              {ENTRY_KINDS[value]}
+              {entryKindLabel(value, locale)}
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
@@ -267,7 +270,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           multiline
           minRows={4}
           maxRows={12}
-          placeholder="描述你想构建的功能、约束与验收标准…"
+          placeholder={t('composer.goalPlaceholder')}
           value={draft.goal}
           onChange={event => patch({ goal: event.target.value })}
           variant="standard"
@@ -286,14 +289,14 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap' }}>
             <ConfigChip
               icon={<AutoAwesomeRounded sx={{ fontSize: 16, color: '#1A73E8' }} />}
-              label={modelSelectionLabel(connections.data, draft.model)}
+              label={modelSelectionLabel(connections.data, draft.model, locale)}
               strong={Boolean(selection.modelConnectionId)}
               onClick={event => setModelMenu(event.currentTarget)}
             />
 
             <ConfigChip
               icon={<FolderOpenOutlined sx={{ fontSize: 16, color: '#5F6368' }} />}
-              label={workspace ? workspace.branchName : '选择工作区'}
+              label={workspace ? workspace.branchName : t('composer.chooseWorkspace')}
               strong={Boolean(workspace)}
               onClick={event => setWorkspaceMenu(event.currentTarget)}
             />
@@ -313,7 +316,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
               onClick={() => setIdeaOpen(true)}
               sx={{ whiteSpace: 'nowrap' }}
             >
-              整理想法
+              {t('composer.organizeIdea')}
             </Button>
             <Button
               variant="contained"
@@ -321,7 +324,9 @@ export default function TaskComposer({ onCreated, onModelChange }) {
               loading={sending}
               endIcon={<ChevronRightRounded />}
             >
-              {hasPlannableRoute && draft.reviewPlan ? '生成计划' : '开始运行'}
+              {hasPlannableRoute && draft.reviewPlan
+                ? t('composer.generatePlan')
+                : t('composer.startRun')}
             </Button>
           </Stack>
         </Stack>
@@ -340,7 +345,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             setModelMenu(null);
           }}
         >
-          模拟模型（无需密钥）
+          {t('composer.mockModel')}
         </MenuItem>
         {legacyDeepSeek && (
           <MenuItem
@@ -350,7 +355,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
               setModelMenu(null);
             }}
           >
-            DeepSeek Flash（本机密钥文件兜底）
+            {t('composer.deepseekFile')}
           </MenuItem>
         )}
         <Divider />
@@ -359,7 +364,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           color="text.secondary"
           sx={{ display: 'block', px: 2, py: 0.5 }}
         >
-          我的模型（自带 Key）
+          {t('composer.myModels')}
         </Typography>
         {connectionList.length === 0 && (
           <Typography
@@ -367,7 +372,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             color="text.secondary"
             sx={{ display: 'block', px: 2, py: 0.5 }}
           >
-            尚未配置。添加后即可使用自己的额度。
+            {t('composer.noConnections')}
           </Typography>
         )}
         {connectionList.map(connection => (
@@ -384,7 +389,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             <Stack sx={{ minWidth: 0 }}>
               <Typography sx={{ fontSize: 13 }} noWrap>
                 {connection.displayName}
-                {connection.isDefault ? ' · 默认' : ''}
+                {connection.isDefault ? ` · ${t('common.default')}` : ''}
               </Typography>
               <Typography variant="caption" color="text.secondary" noWrap>
                 {connection.modelName} · {connection.keyMasked}
@@ -399,7 +404,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             navigate('/settings');
           }}
         >
-          <AddRounded fontSize="small" sx={{ mr: 1 }} /> 配置我的 API Key
+          <AddRounded fontSize="small" sx={{ mr: 1 }} /> {t('composer.configureKey')}
         </MenuItem>
       </Menu>
 
@@ -441,7 +446,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             setWorkspaceDialog(true);
           }}
         >
-          <AddRounded fontSize="small" sx={{ mr: 1 }} /> 新建工作区
+          <AddRounded fontSize="small" sx={{ mr: 1 }} /> {t('composer.newWorkspace')}
         </MenuItem>
         {draft.workspaceId && (
           <MenuItem
@@ -450,7 +455,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
               setWorkspaceMenu(null);
             }}
           >
-            不使用工作区
+            {t('composer.noWorkspace')}
           </MenuItem>
         )}
       </Menu>
@@ -504,7 +509,8 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           constraints,
           acceptanceCriteria,
           deliverable: null,
-          modelConnectionId: selection.modelConnectionId
+          modelConnectionId: selection.modelConnectionId,
+          locale
         }}
       />
 

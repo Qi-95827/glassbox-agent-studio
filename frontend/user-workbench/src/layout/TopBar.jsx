@@ -18,41 +18,45 @@ import NotificationsNoneRounded from '@mui/icons-material/NotificationsNoneRound
 import LogoutRounded from '@mui/icons-material/LogoutRounded';
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined';
 import FactCheckOutlined from '@mui/icons-material/FactCheckOutlined';
+import TranslateRounded from '@mui/icons-material/TranslateRounded';
 import { useLocation, useNavigate } from 'react-router-dom';
 import StatusChip from '../components/StatusChip';
 import { useAuth } from '../features/auth/AuthGate';
 import { useChrome } from './pageChrome';
 import { googleTokens } from '../theme/googleTheme';
+import { useI18n } from '../i18n/I18nProvider';
 
-const sectionNames = {
-  '/': '工作台',
-  '/runs': '观察运行',
-  '/agents': '我的 Agent',
-  '/workspaces': '工作区与交付',
-  '/evaluations': '评测与监控',
-  '/settings': '设置',
-  '/docs': '文档'
+const sectionKeys = {
+  '/': 'nav.home',
+  '/runs': 'nav.runs',
+  '/agents': 'nav.agents',
+  '/workspaces': 'nav.workspaces',
+  '/evaluations': 'nav.evaluations',
+  '/settings': 'nav.settings',
+  '/docs': 'nav.docs'
 };
 
-function fallbackTrail(pathname) {
+function fallbackTrail(pathname, t) {
   if (pathname.startsWith('/runs/')) {
     return [
-      { label: '工作空间' },
-      { label: '观察运行' },
-      { label: `运行 #${pathname.split('/')[2]?.slice(0, 8) ?? ''}`, mono: true }
+      { label: t('nav.workspace') },
+      { label: t('nav.runs') },
+      {
+        label: t('common.runId', { id: pathname.split('/')[2]?.slice(0, 8) ?? '' }),
+        mono: true
+      }
     ];
   }
-  const base = Object.keys(sectionNames).find(
+  const base = Object.keys(sectionKeys).find(
     key => key !== '/' && (pathname === key || pathname.startsWith(`${key}/`))
   );
-  return [{ label: '工作空间' }, { label: sectionNames[base || '/'] }];
+  return [{ label: t('nav.workspace') }, { label: t(sectionKeys[base || '/']) }];
 }
 
 function Breadcrumb({ trail }) {
   return (
     <Stack
       direction="row"
-
       sx={{
         minWidth: 0,
         overflow: 'hidden',
@@ -64,7 +68,6 @@ function Breadcrumb({ trail }) {
         <Stack
           key={`${item.label}:${index}`}
           direction="row"
-
           sx={{ minWidth: 0, alignItems: 'center' }}
         >
           {index > 0 && (
@@ -95,10 +98,11 @@ export default function TopBar({ onOpenNav }) {
   const location = useLocation();
   const { user, logout, loggingOut } = useAuth();
   const { page } = useChrome();
+  const { t, locale, toggleLocale, isEnglish } = useI18n();
   const [userAnchor, setUserAnchor] = useState(null);
   const [notifyAnchor, setNotifyAnchor] = useState(null);
 
-  const trail = page?.trail?.length ? page.trail : fallbackTrail(location.pathname);
+  const trail = page?.trail?.length ? page.trail : fallbackTrail(location.pathname, t);
   const initial = (user?.displayName || user?.username || 'A').slice(0, 1).toUpperCase();
 
   return (
@@ -116,7 +120,7 @@ export default function TopBar({ onOpenNav }) {
       }}
     >
       <IconButton
-        aria-label="打开导航"
+        aria-label={t('topbar.openNav')}
         onClick={onOpenNav}
         sx={{ display: { xs: 'inline-flex', md: 'none' } }}
         size="small"
@@ -130,13 +134,7 @@ export default function TopBar({ onOpenNav }) {
       {page?.status && <StatusChip value={page.status} />}
 
       {page?.model?.label && (
-        <Tooltip
-          title={
-            page.model.readOnly
-              ? '模型来自已保存的任务/运行，不能在顶栏修改'
-              : '模型在任务创建区选择'
-          }
-        >
+        <Tooltip title={page.model.readOnly ? t('topbar.modelReadonly') : t('topbar.modelHint')}>
           <Box
             sx={{
               height: 32,
@@ -158,15 +156,15 @@ export default function TopBar({ onOpenNav }) {
         </Tooltip>
       )}
 
-      <Tooltip title="使用文档">
-        <IconButton size="small" onClick={() => navigate('/docs')} aria-label="使用文档">
+      <Tooltip title={t('topbar.help')}>
+        <IconButton size="small" onClick={() => navigate('/docs')} aria-label={t('topbar.help')}>
           <HelpOutlineRounded fontSize="small" />
         </IconButton>
       </Tooltip>
-      <Tooltip title="通知">
+      <Tooltip title={t('topbar.notifications')}>
         <IconButton
           size="small"
-          aria-label="通知"
+          aria-label={t('topbar.notifications')}
           onClick={event => setNotifyAnchor(event.currentTarget)}
         >
           <Badge variant="dot" color="error" overlap="circular">
@@ -181,9 +179,11 @@ export default function TopBar({ onOpenNav }) {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
         <Box sx={{ px: 2, py: 1.2, width: 260 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 500 }}>通知</Typography>
+          <Typography sx={{ fontSize: 13, fontWeight: 500 }}>
+            {t('topbar.notificationsTitle')}
+          </Typography>
           <Typography variant="caption" color="text.secondary">
-            当前没有新的运行告警。评测与监控页可查看服务端告警记录。
+            {t('topbar.notificationsEmpty')}
           </Typography>
         </Box>
         <Divider />
@@ -194,13 +194,38 @@ export default function TopBar({ onOpenNav }) {
           }}
         >
           <FactCheckOutlined fontSize="small" sx={{ mr: 1 }} />
-          打开评测与监控
+          {t('topbar.openMonitoring')}
         </MenuItem>
       </Menu>
 
+      <Tooltip
+        title={
+          isEnglish ? t('topbar.languageSwitchToChinese') : t('topbar.languageSwitchToEnglish')
+        }
+      >
+        <ButtonBase
+          onClick={toggleLocale}
+          aria-label={t('topbar.language')}
+          lang={locale}
+          sx={{
+            height: 30,
+            px: 1,
+            borderRadius: 9999,
+            border: `1px solid ${googleTokens.outlineStrong}`,
+            color: '#3C4043',
+            fontSize: 12,
+            fontWeight: 500,
+            gap: 0.4
+          }}
+        >
+          <TranslateRounded sx={{ fontSize: 16 }} />
+          {isEnglish ? '中文' : 'EN'}
+        </ButtonBase>
+      </Tooltip>
+
       <ButtonBase
         onClick={event => setUserAnchor(event.currentTarget)}
-        aria-label="账号菜单"
+        aria-label={t('topbar.accountMenu')}
         sx={{ borderRadius: '50%' }}
       >
         <Avatar
@@ -226,7 +251,8 @@ export default function TopBar({ onOpenNav }) {
         <Box sx={{ px: 2, py: 1.2, minWidth: 220 }}>
           <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{user?.displayName}</Typography>
           <Typography variant="caption" color="text.secondary">
-            {user?.username} · {user?.role === 'ADMIN' ? '管理员' : '普通用户'}
+            {user?.username} ·{' '}
+            {user?.role === 'ADMIN' ? t('topbar.roleAdmin') : t('topbar.roleUser')}
           </Typography>
         </Box>
         <Divider />
@@ -237,7 +263,7 @@ export default function TopBar({ onOpenNav }) {
           }}
         >
           <SettingsOutlined fontSize="small" sx={{ mr: 1 }} />
-          设置与自检
+          {t('topbar.settings')}
         </MenuItem>
         <MenuItem
           disabled={loggingOut}
@@ -247,7 +273,7 @@ export default function TopBar({ onOpenNav }) {
           }}
         >
           <LogoutRounded fontSize="small" sx={{ mr: 1 }} />
-          退出登录
+          {t('topbar.logout')}
         </MenuItem>
       </Menu>
     </Box>

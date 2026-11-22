@@ -31,8 +31,9 @@ public class MonitoringDashboardController {
   }
 
   @GetMapping("/api/monitoring/runs/{runId}/diagnostics")
-  public RunDiagnostics diagnostics(@PathVariable String runId) {
+  public RunDiagnostics diagnostics(
+      @PathVariable String runId, java.util.Locale locale) {
     ownership.requireRun(runId);
-    return diagnostics.diagnose(runId);
+    return diagnostics.diagnose(runId, locale);
   }
 }

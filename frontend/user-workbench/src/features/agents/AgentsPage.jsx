@@ -18,6 +18,7 @@ import AgentCatalogDialog from './AgentCatalogDialog';
 import AgentDraftDialog from './AgentDraftDialog';
 import AccountsPanel from './AccountsPanel';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 function PanelHeading({ title, description, actions }) {
   return (
@@ -41,6 +42,7 @@ function PanelHeading({ title, description, actions }) {
 }
 
 export default function AgentsPage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
   const { skills, tools, agents } = useMyAgents();
@@ -51,7 +53,7 @@ export default function AgentsPage() {
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [draftOpen, setDraftOpen] = useState(false);
 
-  usePageChrome({ trail: [{ label: '工作空间' }, { label: '我的 Agent' }] });
+  usePageChrome({ trail: [{ label: t('nav.workspace') }, { label: t('nav.agents') }] });
 
   const act = async (type, id, action, message) => {
     try {
@@ -82,11 +84,13 @@ export default function AgentsPage() {
         >
           <Box>
             <Typography component="h1" sx={{ fontSize: 22, fontWeight: 500 }}>
-              我的 Agent
+              {t('agents.title')}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              当前账号：{user?.displayName}（{user?.username}）。私有 Skill、工具和 Agent
-              只对当前账号可见。
+              {t('agents.description', {
+                name: user?.displayName,
+                username: user?.username
+              })}
             </Typography>
           </Box>
           <Stack direction="row" spacing={0.75}>
@@ -95,11 +99,15 @@ export default function AgentsPage() {
               startIcon={<AccountTreeOutlined />}
               onClick={() => setCatalogOpen(true)}
             >
-              内置角色目录
+              {t('agents.catalog')}
             </Button>
             {tab !== 'accounts' && (
               <Button variant="contained" startIcon={<AddRounded />} onClick={openNew}>
-                新建{tab === 'skills' ? ' Skill' : tab === 'tools' ? '工具' : ' Agent'}
+                {tab === 'skills'
+                  ? t('agents.newSkill')
+                  : tab === 'tools'
+                    ? t('agents.newTool')
+                    : t('agents.newAgent')}
               </Button>
             )}
           </Stack>
@@ -116,31 +124,30 @@ export default function AgentsPage() {
           onChange={(_, value) => setTab(value)}
           sx={{ borderBottom: `1px solid ${googleTokens.outline}`, mb: 2.5 }}
         >
-          <Tab value="agents" label={`我的 Agent（${agentRows.length}）`} />
-          <Tab value="skills" label={`我的 Skill（${skillRows.length}）`} />
-          <Tab value="tools" label={`我的工具（${toolRows.length}）`} />
-          {user?.role === 'ADMIN' && <Tab value="accounts" label="账号与归属" />}
+          <Tab value="agents" label={t('agents.tab.agents', { count: agentRows.length })} />
+          <Tab value="skills" label={t('agents.tab.skills', { count: skillRows.length })} />
+          <Tab value="tools" label={t('agents.tab.tools', { count: toolRows.length })} />
+          {user?.role === 'ADMIN' && <Tab value="accounts" label={t('agents.tab.accounts')} />}
         </Tabs>
 
         {tab === 'agents' && (
           <>
             <PanelHeading
-              title="私有 Agent 草稿"
-              description="发布后固定 Skill / 工具版本；旧运行继续使用发布时的组件。"
+              title={t('agents.privateDrafts')}
+              description={t('agents.privateDraftsDescription')}
               actions={
                 <Button
                   variant="outlined"
                   startIcon={<AutoAwesomeOutlined />}
                   onClick={() => setDraftOpen(true)}
                 >
-                  从思路生成草稿
+                  {t('agents.generateDraft')}
                 </Button>
               }
             />
 
             <Alert severity="info" sx={{ mb: 2 }}>
-              从设计思路生成的是可编辑草稿；本地规则不调用模型，模型生成会把思路发送给已配置的
-              DeepSeek。无论哪种方式都不会直接发布或执行。
+              {t('agents.draftNote')}
             </Alert>
             <Stack spacing={1.5}>
               {agentRows.map(row => (
@@ -148,12 +155,12 @@ export default function AgentsPage() {
                   key={row.id}
                   row={row}
                   onEdit={() => setEditor({ type: 'agent', initial: row })}
-                  onPublish={() => act('agent', row.id, 'publish', 'Agent 已发布新版本')}
-                  onArchive={() => act('agent', row.id, 'archive', 'Agent 已归档')}
+                  onPublish={() => act('agent', row.id, 'publish', t('agents.published'))}
+                  onArchive={() => act('agent', row.id, 'archive', t('agents.archived'))}
                   onVersions={() => setVersions({ type: 'agent', id: row.id })}
                 >
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 0.75 }}>
-                    {row.description || '未填写简介'}
+                    {row.description || t('agents.noDescription')}
                   </Typography>
                   <Typography
                     variant="body2"

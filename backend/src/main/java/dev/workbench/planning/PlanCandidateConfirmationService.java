@@ -256,6 +256,9 @@ class PlanCandidateConfirmationService {
         input.fileScopes(),
         Map.of(),
         Map.of(),
-        modelConnectionId);
+        modelConnectionId,
+        input.locale() == null
+            ? dev.workbench.framework.prompt.PromptResourceLoader.ZH_CN
+            : input.locale());
   }
 }

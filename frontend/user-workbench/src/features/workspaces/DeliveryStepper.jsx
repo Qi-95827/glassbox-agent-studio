@@ -9,6 +9,7 @@ import {
 } from '../../hooks/useWorkspaces';
 import { dateTime, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const deliveryLabels = {
   PENDING: '待批准',
@@ -55,6 +56,7 @@ export function deliveryActiveStep({
  * 每一步只由服务端已保存的差异、审批、提交或交付记录推导，不根据按钮点击推断成功。
  */
 export default function DeliveryStepper({ workspaceId }) {
+  const { t, locale } = useI18n();
   const theme = useTheme();
   const narrow = useMediaQuery(theme.breakpoints.down('lg'));
   const status = useWorkspaceStatus(workspaceId);
@@ -107,41 +109,46 @@ export default function DeliveryStepper({ workspaceId }) {
 
   const steps = [
     {
-      label: '差异核对',
+      label: t('delivery.step.diff'),
       detail: hasDiff
         ? latestApproval
-          ? `已基于差异创建审查 #${shortId(latestApproval.ID)}`
-          : '存在未审批的工作区差异'
-        : '工作区没有待审查差异'
+          ? t('delivery.reviewCreated', { id: shortId(latestApproval.ID) })
+          : t('delivery.unapprovedDiff')
+        : t('delivery.noDiffReview')
     },
     {
-      label: '审查批准',
+      label: t('delivery.step.approval'),
       detail: consumedByCommit
-        ? `已通过并用于提交 · ${dateTime(latestApproval.UPDATED_AT || latestApproval.CREATED_AT)}`
+        ? t('delivery.consumedByCommit', {
+            time: dateTime(latestApproval.UPDATED_AT || latestApproval.CREATED_AT, locale)
+          })
         : latestApproval
-          ? `${approvalLabels[approvalStatus] || approvalStatus} · ${dateTime(latestApproval.UPDATED_AT || latestApproval.CREATED_AT)}`
-          : '还没有审查记录',
+          ? t('delivery.approvalState', {
+              status: approvalLabels[approvalStatus] || approvalStatus,
+              time: dateTime(latestApproval.UPDATED_AT || latestApproval.CREATED_AT, locale)
+            })
+          : t('delivery.noApproval'),
       error: approvalInvalid
     },
     {
-      label: '本地提交',
+      label: t('delivery.step.commit'),
       detail: latestCommit
         ? `LOCAL_COMMIT · ${shortId(latestCommit.commitId || latestCommit.ID || latestCommit.id)}`
         : approved
-          ? '已批准，可创建本地提交'
+          ? t('delivery.canCommit')
           : approvalInvalid
-            ? '审批已失效，需重新审查'
-            : '需要先获得有效批准'
+            ? t('delivery.approvalInvalid')
+            : t('delivery.needApproval')
     },
     {
-      label: '推送 / 合并',
+      label: t('delivery.step.push'),
       detail: latestDelivery
         ? `${latestDelivery.kind || latestDelivery.KIND} · ${
             deliveryLabels[deliveryStatus] || deliveryStatus
           }`
         : committed
-          ? '需要时可准备推送或合并'
-          : '完成本地提交后再决定',
+          ? t('delivery.canPush')
+          : t('delivery.commitFirst'),
       error: deliveryFailed,
       optional: true
     }
@@ -157,7 +164,7 @@ export default function DeliveryStepper({ workspaceId }) {
         bgcolor: '#FBFCFD'
       }}
     >
-      <Typography sx={{ fontSize: 13.5, fontWeight: 600 }}>Git 交付进度</Typography>
+      <Typography sx={{ fontSize: 13.5, fontWeight: 600 }}>{t('delivery.title')}</Typography>
       <Typography variant="caption" color="text.secondary">
         仅按服务端记录推导；当前在独立隔离分支
         {status.data?.branch ? `（${status.data.branch}）` : ''}提交，推送 / 合并是可选的最后一步。

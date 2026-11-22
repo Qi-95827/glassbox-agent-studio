@@ -36,7 +36,7 @@ class BuiltInToolProviders {
   AgentToolProvider simulatedToolProvider(SimulatedTool simulatedTool) {
     return provider(
         ToolKind.SIMULATED_INSPECTION,
-        scope -> AgentTool.specification(simulatedTool, scope.scenario()));
+        scope -> AgentTool.specification(simulatedTool, scope.scenario(), scope.locale()));
   }
 
   @Bean
@@ -47,8 +47,9 @@ class BuiltInToolProviders {
           var files = new AuthorizedFileSet(scope.authorizedPaths());
           return files.paths().size() == 1
               ? WorkspaceReadTool.specification(
-                  workspaces, scope.workspaceId(), files.paths().getFirst())
-              : WorkspaceScopedReadTool.specification(workspaces, scope.workspaceId(), files);
+                  workspaces, scope.workspaceId(), files.paths().getFirst(), scope.locale())
+              : WorkspaceScopedReadTool.specification(
+                  workspaces, scope.workspaceId(), files, scope.locale());
         });
   }
 
@@ -60,8 +61,9 @@ class BuiltInToolProviders {
           var files = new AuthorizedFileSet(scope.authorizedPaths());
           return files.paths().size() == 1
               ? WorkspaceWriteTool.specification(
-                  workspaces, scope.workspaceId(), files.paths().getFirst())
-              : WorkspaceScopedWriteTool.specification(workspaces, scope.workspaceId(), files);
+                  workspaces, scope.workspaceId(), files.paths().getFirst(), scope.locale())
+              : WorkspaceScopedWriteTool.specification(
+                  workspaces, scope.workspaceId(), files, scope.locale());
         });
   }
 
@@ -73,6 +75,7 @@ class BuiltInToolProviders {
             WorkspaceSearchTool.specification(
                 new AuthorizedCodeSearch(workspaces),
                 scope.workspaceId(),
-                new AuthorizedFileSet(scope.authorizedPaths())));
+                new AuthorizedFileSet(scope.authorizedPaths()),
+                scope.locale()));
   }
 }

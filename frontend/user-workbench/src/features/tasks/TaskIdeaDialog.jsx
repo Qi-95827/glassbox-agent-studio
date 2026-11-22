@@ -21,9 +21,10 @@ import { tasksApi } from '../../api/tasks';
 import { workspacesApi } from '../../api/workspaces';
 import { modelSelectionLabel, parseModelValue } from '../../api/modelConnections';
 import { useModelConnections } from '../../hooks/useModelConnections';
-import { ENTRY_KINDS } from '../../constants/labels';
+import { entryKindLabel } from '../../constants/labels';
 import { splitLines } from '../../utils/format';
 import PlanCandidateDialog from './PlanCandidateDialog';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const entries = ['GENERAL', 'REQUIREMENT', 'DESIGN', 'CODE', 'TEST'];
 
@@ -37,6 +38,7 @@ export default function TaskIdeaDialog({
   onCreated,
   onManual
 }) {
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const connections = useModelConnections(open);
   const [idea, setIdea] = useState('');
@@ -86,7 +88,8 @@ export default function TaskIdeaDialog({
         const draft = await tasksApi.draftIdea({
           idea: targetIdea,
           mode: targetMode,
-          modelConnectionId: selectedConnection.modelConnectionId
+          modelConnectionId: selectedConnection.modelConnectionId,
+          locale
         });
         setForm({
           entryKind: draft.entryKind,
@@ -112,7 +115,7 @@ export default function TaskIdeaDialog({
         setPhase(null);
       }
     },
-    [idea, mode]
+    [idea, mode, locale]
   );
 
   useEffect(() => {
@@ -159,7 +162,8 @@ export default function TaskIdeaDialog({
       acceptanceCriteria,
       modelMode: selection.modelMode,
       modelConnectionId: selection.modelConnectionId,
-      reviewPlan
+      reviewPlan,
+      locale
     };
   }
 
@@ -199,16 +203,16 @@ export default function TaskIdeaDialog({
   return (
     <WorkbenchDialog
       open={open}
-      title="新建任务"
-      subtitle="先把想法整理成可编辑草稿，再决定是否创建运行。"
+      title={t('idea.title')}
+      subtitle={t('idea.subtitle')}
       width={720}
       footer={null}
       onCancel={() => !busy && onClose()}
     >
       <Stack spacing={2} sx={{ pt: 0.5 }}>
         <TextField
-          label="你想做什么？"
-          placeholder="例如：做一个能看柱状条交换的冒泡排序网页"
+          label={t('idea.prompt')}
+          placeholder={t('idea.placeholder')}
           multiline
           minRows={3}
           fullWidth
@@ -229,7 +233,7 @@ export default function TaskIdeaDialog({
           <TextField
             select
             size="small"
-            label="整理方式"
+            label={t('idea.mode')}
             value={mode}
             onChange={event => {
               if (event.target.value === '__configure') {
@@ -242,10 +246,10 @@ export default function TaskIdeaDialog({
             disabled={busy}
             sx={{ minWidth: 220 }}
           >
-            <ListSubheader>内置免 Key</ListSubheader>
-            <MenuItem value="LOCAL">本地规则（不调用模型）</MenuItem>
-            {legacyDeepSeek && <MenuItem value="deepseek">DeepSeek Flash（本机密钥文件）</MenuItem>}
-            <ListSubheader>我的模型（自带 Key）</ListSubheader>
+            <ListSubheader>{t('idea.builtInNoKey')}</ListSubheader>
+            <MenuItem value="LOCAL">{t('idea.localRules')}</MenuItem>
+            {legacyDeepSeek && <MenuItem value="deepseek">{t('idea.deepseekFile')}</MenuItem>}
+            <ListSubheader>{t('composer.myModels')}</ListSubheader>
             {connectionList.map(connection => (
               <MenuItem key={connection.id} value={`user:${connection.id}`}>
                 {connection.displayName} · {connection.modelName}
@@ -253,7 +257,7 @@ export default function TaskIdeaDialog({
             ))}
             <Divider />
             <MenuItem value="__configure">
-              <AddRounded fontSize="small" sx={{ mr: 1 }} /> + 配置我的 API Key
+              <AddRounded fontSize="small" sx={{ mr: 1 }} /> + {t('composer.configureKey')}
             </MenuItem>
           </TextField>
           <Button
@@ -263,16 +267,15 @@ export default function TaskIdeaDialog({
             disabled={busy || !idea.trim()}
             onClick={generate}
           >
-            {form ? '重新整理' : '整理成任务草稿'}
+            {form ? t('idea.regenerate') : t('idea.generate')}
           </Button>
           <Button disabled={busy || stale} onClick={fillManual}>
-            {form ? '填入完整表单' : '手动填写任务'}
+            {form ? t('idea.fillForm') : t('idea.manual')}
           </Button>
         </Stack>
         {mode !== 'LOCAL' && (
           <Typography variant="caption" color="text.secondary">
-            点击整理会把上方想法发送给「{modelSelectionLabel(connections.data, mode)}」， 使用自带
-            Key 时费用由你的服务商结算。
+            {t('idea.sendNote', { model: modelSelectionLabel(connections.data, mode) })}
           </Typography>
         )}
         {error && <Alert severity="error">{error}</Alert>}
@@ -280,22 +283,22 @@ export default function TaskIdeaDialog({
           <>
             <Divider />
             <Typography component="h3" sx={{ fontSize: 16, fontWeight: 500 }}>
-              可编辑草稿
+              {t('idea.draftTitle')}
             </Typography>
-            {stale && <Alert severity="info">想法已修改，请重新整理后再创建任务。</Alert>}
+            {stale && <Alert severity="info">{t('idea.stale')}</Alert>}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
               <TextField
                 select
                 fullWidth
                 size="small"
-                label="任务入口"
+                label={t('advanced.entry')}
                 value={form.entryKind}
                 disabled={busy}
                 onChange={event => change('entryKind', event.target.value)}
               >
                 {entries.map(value => (
                   <MenuItem key={value} value={value}>
-                    {ENTRY_KINDS[value]}
+                    {entryKindLabel(value, locale)}
                   </MenuItem>
                 ))}
               </TextField>
@@ -303,7 +306,7 @@ export default function TaskIdeaDialog({
                 select
                 fullWidth
                 size="small"
-                label="执行模型"
+                label={t('idea.executionModel')}
                 value={modelValue}
                 disabled={busy}
                 onChange={event => {
@@ -315,12 +318,10 @@ export default function TaskIdeaDialog({
                   setModelValue(event.target.value);
                 }}
               >
-                <ListSubheader>内置免 Key 模型</ListSubheader>
-                <MenuItem value="mock">模拟模型（免 Key）</MenuItem>
-                {legacyDeepSeek && (
-                  <MenuItem value="deepseek">DeepSeek Flash（本机密钥文件）</MenuItem>
-                )}
-                <ListSubheader>我的模型（自带 Key）</ListSubheader>
+                <ListSubheader>{t('idea.builtInModels')}</ListSubheader>
+                <MenuItem value="mock">{t('composer.mockModel')}</MenuItem>
+                {legacyDeepSeek && <MenuItem value="deepseek">{t('idea.deepseekFile')}</MenuItem>}
+                <ListSubheader>{t('composer.myModels')}</ListSubheader>
                 {connectionList.map(connection => (
                   <MenuItem key={connection.id} value={`user:${connection.id}`}>
                     {connection.displayName} · {connection.modelName}
@@ -328,12 +329,12 @@ export default function TaskIdeaDialog({
                 ))}
                 <Divider />
                 <MenuItem value="__configure">
-                  <AddRounded fontSize="small" sx={{ mr: 1 }} /> + 配置我的 API Key
+                  <AddRounded fontSize="small" sx={{ mr: 1 }} /> + {t('composer.configureKey')}
                 </MenuItem>
               </TextField>
             </Stack>
             <TextField
-              label="任务目标"
+              label={t('idea.goal')}
               multiline
               minRows={2}
               value={form.goal}

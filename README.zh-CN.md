@@ -140,6 +140,17 @@
 
 ---
 
+## 全栈中英双语架构：为什么专门维护两套外置 Prompt？
+
+不同于普通 Web 应用，AI Agent 平台的国际化包含**三个独立层级**：前端 UI、后端校验与诊断、以及**大模型 Prompt**。
+
+因为 **Glass-Box Agent Studio** 定位为**面向学习者的玻璃盒可视化项目**，我们专门在 `backend/src/main/resources/prompts/`（中文）与 `prompts/en/`（英文）维护了**中英两套镜像外置 Prompt 与工具契约**：
+1. **最大化玻璃盒学习可读性**：中文用户在「模型 I/O」中直接看到母语级清晰的中文 System Prompt、Skill 规范与工具 Schema；英文用户切到 `EN` 后看到的也是地道英文 Prompt，不需要在学习多 Agent 原理时额外跨语言脑内翻译，也方便对照学习双语 Prompt 工程写法。
+2. **任务语言冻结与自动回退（`tasks.locale`）**：每次任务创建时落库冻结语言偏好（Flyway `V6`），由 `PromptResourceLoader.load(locale, path)` 按语言加载并附带输出语言指令，英文资源缺失时自动回退中文，保证历史任务永不失效。
+3. **代码与语言解耦**：前端采用零第三方依赖的 JSON 语言包（右上角一键 `中文 / EN` 实时切换），后端采用语义化 `gate` + Spring `MessageSource`（`Accept-Language`），即使切换语言查看历史旧运行，安检门、交接校验与 5 步故障排查向导也能自动切为当前界面语言。
+
+---
+
 ## 5 分钟快速启动
 
 ### 环境要求
@@ -194,7 +205,7 @@ backend/src/main/java/
   dev.workbench.framework       纯契约、ToolGateway、SecretCipher 与交接提取器
   dev.workbench.infrastructure  AgentScope Java 2.0.4 与 OpenAI 兼容模型适配层
   dev.workbench.modelconnection BYOK 加密模型连接管理、连通性探测与费用估算
-  dev.workbench.persistence     JPA 实体、Repository 与 Flyway V1~V5 数据库迁移（H2）
+  dev.workbench.persistence     JPA 实体、Repository 与 Flyway V1~V6 数据库迁移（H2）
   dev.workbench.planning        想法整理、入口路由、候选 DAG 生成与校验
   dev.workbench.orchestration   运行生命周期、DAG 调度、断点控制与交接协调
   dev.workbench.delivery        执行图投影、节点详情投影与交付聚合
@@ -204,8 +215,10 @@ backend/src/main/java/
   dev.workbench.evaluation      版本化评测套件、数据集与批次对照
   dev.workbench.observability   游标事件流、类 Grafana 监控看板与 5 步故障诊断
 backend/src/main/resources/
-  prompts/                      外置化 Agent / Skill / 规划 Prompt 与工具契约
-  db/migration/                 Flyway 版本化迁移脚本（V1 ~ V5）
+  prompts/                      外置化中文 Agent / Skill / 规划 Prompt 与工具契约（默认）
+  prompts/en/                   外置化英文镜像 Prompt 与工具契约（英文任务专用）
+  i18n/                         Spring MessageSource 国际化资源（zh_CN / en_US）
+  db/migration/                 Flyway 版本化迁移脚本（V1 ~ V6）
 ```
 
 ---

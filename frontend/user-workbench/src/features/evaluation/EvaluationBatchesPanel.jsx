@@ -9,9 +9,10 @@ import WorkbenchDialog from '../../components/WorkbenchDialog';
 import { useEvaluationDetail, useEvaluations } from '../../hooks/useEvaluations';
 import { evaluationApi } from '../../api/evaluations';
 import { useToast } from '../../components/ToastProvider';
-import { COMPARISON_NAMES, EVALUATION_SUITES, RUN_STATES } from '../../constants/labels';
+import { comparisonLabel, evaluationSuiteLabel, statusLabel } from '../../constants/labels';
 import { dateTime, duration, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const emptyConfig = {
   suite: 'LOCAL_AGENT_V2',
@@ -23,6 +24,7 @@ const emptyConfig = {
 
 /** 种子评测：启动、逐项断言、停止与历史批次对照。 */
 export default function EvaluationBatchesPanel({ onOpenRun }) {
+  const { t, locale } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const evaluations = useEvaluations();
@@ -59,7 +61,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
       setComparison(null);
       setStartOpen(false);
       queryClient.invalidateQueries({ queryKey: ['evaluations'] });
-      toast.success('已启动模拟评测');
+      toast.success(t('eval.started'));
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -71,7 +73,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
     try {
       await evaluationApi.cancel(activeId);
       queryClient.invalidateQueries({ queryKey: ['evaluation', activeId] });
-      toast.info('已请求停止评测');
+      toast.info(t('eval.stopRequested'));
     } catch (error) {
       toast.error(error.message);
     }
@@ -79,7 +81,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
 
   const compare = async () => {
     if (!baseline || !activeId || baseline === activeId) {
-      toast.warning('请选择两个不同的评测批次');
+      toast.warning(t('eval.selectTwo'));
       return;
     }
     try {
@@ -96,14 +98,14 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
         sx={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}
       >
         <Typography variant="body2" color="text.secondary">
-          使用模拟模型和工具检查固定流程，不访问真实模型、仓库或外部服务。
+          {t('eval.description')}
         </Typography>
         <Button
           variant="contained"
           startIcon={<PlayArrowRounded />}
           onClick={() => setStartOpen(true)}
         >
-          运行种子集
+          {t('eval.runSeed')}
         </Button>
       </Stack>
 
@@ -150,11 +152,11 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
                 >
                   <StatusChip value={row.status} />
                   <Typography variant="caption" color="text.secondary">
-                    {dateTime(row.createdAt)}
+                    {dateTime(row.createdAt, locale)}
                   </Typography>
                 </Stack>
                 <Typography sx={{ fontSize: 13, fontWeight: active ? 600 : 500, mt: 0.5 }}>
-                  {EVALUATION_SUITES[row.suite] || row.suite}
+                  {evaluationSuiteLabel(row.suite, locale)}
                 </Typography>
                 <Typography
                   variant="caption"
@@ -169,8 +171,8 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
           {!evaluations.isLoading && list.length === 0 && (
             <EmptyState
               compact
-              title="还没有评测批次"
-              description="运行种子集后会在这里保留批次与逐项断言。"
+              title={t('eval.emptyTitle')}
+              description={t('eval.emptyDescription')}
             />
           )}
         </Box>
@@ -185,10 +187,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
           }}
         >
           {!batch ? (
-            <EmptyState
-              title="选择一个评测批次"
-              description="批次详情包含通过、失败与未完成案例；未完成不计通过。"
-            />
+            <EmptyState title={t('eval.selectTitle')} description={t('eval.selectDescription')} />
           ) : (
             <Stack spacing={1.6}>
               <Stack
@@ -202,27 +201,32 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
                     sx={{ alignItems: 'center', flexWrap: 'wrap' }}
                   >
                     <Typography sx={{ fontSize: 16, fontWeight: 500 }}>
-                      {EVALUATION_SUITES[batch.suite] || batch.suite}
+                      {evaluationSuiteLabel(batch.suite, locale)}
                     </Typography>
                     <StatusChip value={batch.status} />
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
-                    {dateTime(batch.createdAt)} · #{shortId(batch.id)} · 定义摘要{' '}
-                    {batch.definitionSha256?.slice(0, 16) || '历史记录未知'}
+                    {t('eval.batchMeta', {
+                      time: dateTime(batch.createdAt, locale),
+                      id: shortId(batch.id),
+                      sha: batch.definitionSha256?.slice(0, 16) || t('eval.unknownHistory')
+                    })}
                   </Typography>
                 </Box>
                 {['RUNNING', 'CANCELLING'].includes(batch.status) && (
                   <Button size="small" color="error" variant="outlined" onClick={cancel}>
-                    停止评测
+                    {t('eval.stop')}
                   </Button>
                 )}
               </Stack>
               <Typography variant="body2" color="text.secondary">
-                通过 {cases.filter(item => item.status === 'PASSED').length} / {cases.length}；
-                未完成或中断不计通过。
+                {t('eval.passSummary', {
+                  passed: cases.filter(item => item.status === 'PASSED').length,
+                  total: cases.length
+                })}
               </Typography>
               {batch.definitionJson && (
-                <TraceSection title="评测定义快照" dense>
+                <TraceSection title={t('eval.snapshot')} dense>
                   <Readout mono maxHeight={180}>
                     {batch.definitionJson}
                   </Readout>
@@ -244,17 +248,18 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
                           {item.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {item.explanation || '等待评测结果'}
+                          {item.explanation || t('eval.waitingResult')}
                         </Typography>
                       </Box>
                       <StatusChip value={item.status} />
                     </Stack>
                     {item.checks?.length > 0 ? (
-                      <TraceSection title={`逐项断言（${item.checks.length}）`}>
+                      <TraceSection title={t('eval.checks', { count: item.checks.length })}>
                         <Stack spacing={0.5}>
                           {item.checks.map(check => (
                             <Typography key={check.code} variant="caption" color="text.secondary">
-                              {check.passed ? '通过' : '未通过'} · {check.detail}
+                              {check.passed ? t('eval.passed') : t('eval.notPassed')} ·{' '}
+                              {check.detail}
                             </Typography>
                           ))}
                         </Stack>
@@ -265,35 +270,35 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
                         color="text.secondary"
                         sx={{ display: 'block', mt: 0.5 }}
                       >
-                        逐项断言尚未记录。
+                        {t('eval.noChecks')}
                       </Typography>
                     )}
                     {item.runId && (
                       <Button size="small" sx={{ mt: 0.5 }} onClick={() => onOpenRun(item.runId)}>
-                        查看运行 #{shortId(item.runId)}
+                        {t('eval.openRun', { id: shortId(item.runId) })}
                       </Button>
                     )}
                   </Box>
                 ))}
                 {cases.length === 0 && (
                   <Typography variant="body2" color="text.secondary">
-                    批次尚无案例记录。
+                    {t('eval.noCases')}
                   </Typography>
                 )}
               </Stack>
 
               <Box>
                 <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.75 }}>
-                  历史批次对照
+                  {t('eval.compareTitle')}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  当前选中批次作为候选。评测定义一致也不能证明代码和环境一致；对照不会分析差异原因。
+                  {t('eval.compareNote')}
                 </Typography>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
                   <TextField
                     select
                     size="small"
-                    label="基线批次"
+                    label={t('eval.baseline')}
                     value={baseline}
                     onChange={event => {
                       setBaseline(event.target.value);
@@ -305,13 +310,13 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
                       .filter(row => row.id !== activeId)
                       .map(row => (
                         <MenuItem key={row.id} value={row.id}>
-                          {EVALUATION_SUITES[row.suite] || row.suite} · {dateTime(row.createdAt)} ·{' '}
-                          {RUN_STATES[row.status] || row.status}
+                          {evaluationSuiteLabel(row.suite, locale)} ·{' '}
+                          {dateTime(row.createdAt, locale)} · {statusLabel(row.status, locale)}
                         </MenuItem>
                       ))}
                   </TextField>
                   <Button variant="outlined" onClick={compare} disabled={!baseline}>
-                    对照
+                    {t('eval.compare')}
                   </Button>
                 </Stack>
               </Box>
@@ -321,8 +326,8 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
                   <Alert severity={comparison.comparableDefinition ? 'info' : 'warning'}>
                     {comparison.comparabilityReason ||
                       (comparison.comparableDefinition
-                        ? '套件编码及评测定义快照一致'
-                        : '评测定义不同、缺失或无效：所有案例均无法判断')}
+                        ? t('eval.comparable')
+                        : t('eval.notComparable'))}
                   </Alert>
                   {(comparison.cases ?? []).map(item => (
                     <Box
@@ -330,23 +335,25 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
                       sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 1 }}
                     >
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        {item.title} · {COMPARISON_NAMES[item.outcome] || item.outcome}
+                        {item.title} · {comparisonLabel(item.outcome, locale)}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        基线：
-                        {RUN_STATES[item.baseline?.status] || item.baseline?.status || '无记录'} →
-                        候选：
-                        {RUN_STATES[item.candidate?.status] || item.candidate?.status || '无记录'}
+                        {t('eval.compareStatus', {
+                          baseline:
+                            statusLabel(item.baseline?.status, locale) || t('eval.noRecord'),
+                          candidate:
+                            statusLabel(item.candidate?.status, locale) || t('eval.noRecord')
+                        })}
                       </Typography>
                       <Stack direction="row" spacing={0.75} sx={{ mt: 0.5 }}>
                         {item.baseline?.runId && (
                           <Button size="small" onClick={() => onOpenRun(item.baseline.runId)}>
-                            基线运行
+                            {t('eval.baselineRun')}
                           </Button>
                         )}
                         {item.candidate?.runId && (
                           <Button size="small" onClick={() => onOpenRun(item.candidate.runId)}>
-                            候选运行
+                            {t('eval.candidateRun')}
                           </Button>
                         )}
                       </Stack>
@@ -357,7 +364,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
 
               <Chip
                 size="small"
-                label={`耗时 ${duration(batch.durationMs)}`}
+                label={t('eval.duration', { value: duration(batch.durationMs) })}
                 sx={{ alignSelf: 'flex-start', bgcolor: '#F1F3F4' }}
               />
             </Stack>
@@ -370,23 +377,23 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
         onCancel={() => setStartOpen(false)}
         onOk={start}
         confirmLoading={busy}
-        okText="运行种子集"
+        okText={t('eval.runSeed')}
         width={620}
-        title="运行本地种子评测"
-        subtitle="使用模拟模型与工具，不访问真实仓库或外部服务。"
+        title={t('eval.dialogTitle')}
+        subtitle={t('eval.dialogSubtitle')}
       >
         <Stack spacing={1.5} sx={{ pt: 0.5 }}>
-          <Alert severity="info">批次完成不代表所有样本通过；逐项断言会保留在批次详情中。</Alert>
+          <Alert severity="info">{t('eval.dialogNote')}</Alert>
           <TextField
             select
             size="small"
-            label="评测种子集"
+            label={t('eval.suite')}
             value={config.suite}
             onChange={event => setConfig({ ...config, suite: event.target.value })}
           >
-            {Object.entries(EVALUATION_SUITES).map(([value, label]) => (
+            {['LOCAL_AGENT_V2', 'DYNAMIC_WORKFLOW_V1', 'DYNAMIC_CHECK_V1'].map(value => (
               <MenuItem key={value} value={value}>
-                {label}
+                {evaluationSuiteLabel(value, locale)}
               </MenuItem>
             ))}
           </TextField>
@@ -394,7 +401,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
             <TextField
               size="small"
               type="number"
-              label="套件版本（可选）"
+              label={t('eval.suiteVersion')}
               value={config.version}
               onChange={event => setConfig({ ...config, version: event.target.value })}
               sx={{ flex: 1 }}
@@ -403,7 +410,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
             <TextField
               size="small"
               type="number"
-              label="模型轮次上限"
+              label={t('eval.maxRounds')}
               value={config.maxRounds}
               onChange={event => setConfig({ ...config, maxRounds: event.target.value })}
               sx={{ flex: 1 }}
@@ -413,7 +420,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
             <TextField
               size="small"
               type="number"
-              label="工具上限"
+              label={t('eval.maxTools')}
               value={config.maxTools}
               onChange={event => setConfig({ ...config, maxTools: event.target.value })}
               sx={{ flex: 1 }}
@@ -422,7 +429,7 @@ export default function EvaluationBatchesPanel({ onOpenRun }) {
             <TextField
               size="small"
               type="number"
-              label="时间上限（秒）"
+              label={t('eval.maxSeconds')}
               value={config.maxSeconds}
               onChange={event => setConfig({ ...config, maxSeconds: event.target.value })}
               sx={{ flex: 1 }}

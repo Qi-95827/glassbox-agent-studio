@@ -25,19 +25,12 @@ import { useToast } from '../../components/ToastProvider';
 import DeliveryStepper from './DeliveryStepper';
 import { dateTime, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
-
-const deliveryStatusNames = {
-  PENDING: '待批准',
-  APPROVED: '已批准',
-  REJECTED: '已拒绝',
-  STARTED: '执行中',
-  CONFIRMED: '已确认',
-  CONFLICT: '冲突，需核对',
-  UNKNOWN: '结果未知，需核对'
-};
+import { statusLabel } from '../../constants/labels';
+import { useI18n } from '../../i18n/I18nProvider';
 
 /** Git 与交付：审查决定、本地提交、未跟踪文件复核、推送/合并审批。 */
 export default function WorkspaceGitPanel({ workspace }) {
+  const { t, locale } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const status = useWorkspaceStatus(workspace.id);
@@ -82,10 +75,7 @@ export default function WorkspaceGitPanel({ workspace }) {
 
   return (
     <Stack spacing={2.5}>
-      <Alert severity="warning">
-        工作区不是沙箱。提交只包含已批准的全部已跟踪差异；推送与合并绑定当前 HEAD
-        与目标分支，冲突或未知结果不会自动重试。
-      </Alert>
+      <Alert severity="warning">{t('git.boundary')}</Alert>
 
       <DeliveryStepper workspaceId={workspace.id} />
 
@@ -94,29 +84,25 @@ export default function WorkspaceGitPanel({ workspace }) {
           direction="row"
           sx={{ mb: 1, justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <Typography sx={{ fontSize: 14, fontWeight: 600 }}>人工审查</Typography>
-          <Tooltip
-            title={
-              hasReviewableChanges
-                ? '针对当前未提交的工作区差异发起人工审查'
-                : '当前工作区没有待审查的差异，无需发起审查'
-            }
-          >
+          <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{t('git.reviewTitle')}</Typography>
+          <Tooltip title={hasReviewableChanges ? t('git.reviewHint') : t('git.noReviewHint')}>
             <span>
               <Button
                 size="small"
                 variant="outlined"
                 loading={busy}
                 disabled={!hasReviewableChanges}
-                onClick={() => run(() => workspacesApi.proposeApproval(workspace.id), '审查已创建')}
+                onClick={() =>
+                  run(() => workspacesApi.proposeApproval(workspace.id), t('git.reviewCreated'))
+                }
               >
-                {hasReviewableChanges ? '发起审查' : '无待审差异'}
+                {hasReviewableChanges ? t('git.proposeReview') : t('git.noDiffToReview')}
               </Button>
             </span>
           </Tooltip>
         </Stack>
         <Typography variant="caption" color="text.secondary">
-          仅记录当前差异的审查结果，不会提交、推送或合并；未跟踪文件尚不支持审批。
+          {t('git.reviewNote')}
         </Typography>
         <Stack spacing={1} sx={{ mt: 1 }}>
           {(approvals.data ?? []).map(row => (
@@ -139,9 +125,9 @@ export default function WorkspaceGitPanel({ workspace }) {
                 }
               />
               <Typography variant="body2" sx={{ flex: 1, fontFamily: googleTokens.mono }}>
-                #{shortId(row.ID)} · {dateTime(row.UPDATED_AT || row.CREATED_AT)}
+                #{shortId(row.ID)} · {dateTime(row.UPDATED_AT || row.CREATED_AT, locale)}
                 {row.STATUS === 'STALE' && !hasReviewableChanges && hasLocalCommit
-                  ? '（已用于本地提交）'
+                  ? t('git.usedForCommit')
                   : ''}
               </Typography>
               {row.STATUS === 'PENDING' && (
@@ -150,19 +136,25 @@ export default function WorkspaceGitPanel({ workspace }) {
                     size="small"
                     variant="outlined"
                     onClick={() =>
-                      run(() => workspacesApi.decideApproval(row.ID, 'APPROVE'), '已记录批准决定')
+                      run(
+                        () => workspacesApi.decideApproval(row.ID, 'APPROVE'),
+                        t('git.approvedRecorded')
+                      )
                     }
                   >
-                    批准
+                    {t('git.approve')}
                   </Button>
                   <Button
                     size="small"
                     color="error"
                     onClick={() =>
-                      run(() => workspacesApi.decideApproval(row.ID, 'REJECT'), '已记录拒绝决定')
+                      run(
+                        () => workspacesApi.decideApproval(row.ID, 'REJECT'),
+                        t('git.rejectedRecorded')
+                      )
                     }
                   >
-                    拒绝
+                    {t('git.reject')}
                   </Button>
                 </Stack>
               )}
@@ -170,7 +162,7 @@ export default function WorkspaceGitPanel({ workspace }) {
           ))}
           {(approvals.data ?? []).length === 0 && (
             <Typography variant="body2" color="text.secondary">
-              还没有审查记录。
+              {t('git.noReviews')}
             </Typography>
           )}
         </Stack>
@@ -179,28 +171,31 @@ export default function WorkspaceGitPanel({ workspace }) {
       <Divider />
 
       <Box>
-        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>创建本地提交</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{t('git.commitTitle')}</Typography>
         <Typography variant="caption" color="text.secondary">
-          只提交已批准的全部已跟踪差异，不会推送或合并；状态变化会拒绝提交。
+          {t('git.commitNote')}
         </Typography>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ mt: 1.2 }}>
           <TextField
             select
             size="small"
-            label="选择有效批准"
+            label={t('git.selectApproval')}
             value={approvalId}
             onChange={event => setApprovalId(event.target.value)}
             sx={{ minWidth: 260 }}
           >
             {approved.map(row => (
               <MenuItem key={row.ID} value={row.ID}>
-                批准 #{shortId(row.ID)} · {dateTime(row.UPDATED_AT)}
+                {t('git.approvalOption', {
+                  id: shortId(row.ID),
+                  time: dateTime(row.UPDATED_AT, locale)
+                })}
               </MenuItem>
             ))}
           </TextField>
           <TextField
             size="small"
-            label="提交说明"
+            label={t('git.commitMessage')}
             value={message}
             onChange={event => setMessage(event.target.value)}
             slotProps={{ htmlInput: { maxLength: 200 } }}
@@ -219,22 +214,23 @@ export default function WorkspaceGitPanel({ workspace }) {
                 });
                 setApprovalId('');
                 setMessage('');
-              }, '本地提交已创建')
+              }, t('git.commitCreated'))
             }
           >
-            创建本地提交
+            {t('git.createCommit')}
           </Button>
         </Stack>
         <Stack spacing={0.5} sx={{ mt: 1.2 }}>
           {(commits.data ?? []).map(row => (
             <Typography key={row.id} variant="caption" color="text.secondary">
               {row.kind || 'LOCAL_COMMIT'} · {row.status || row.STATUS} ·{' '}
-              {(row.commitId || row.ID)?.slice(0, 8)} · {dateTime(row.createdAt || row.CREATED_AT)}
+              {(row.commitId || row.ID)?.slice(0, 8)} ·{' '}
+              {dateTime(row.createdAt || row.CREATED_AT, locale)}
             </Typography>
           ))}
           {(commits.data ?? []).length === 0 && (
             <Typography variant="caption" color="text.secondary">
-              暂无提交记录。
+              {t('git.noCommits')}
             </Typography>
           )}
         </Stack>
@@ -243,23 +239,23 @@ export default function WorkspaceGitPanel({ workspace }) {
       <Divider />
 
       <Box>
-        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>未跟踪文件</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{t('git.untrackedTitle')}</Typography>
         <Typography variant="caption" color="text.secondary">
-          新建文本文件或复核现有未跟踪文件；复核结果绑定内容摘要。
+          {t('git.untrackedNote')}
         </Typography>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
           <TextField
             size="small"
-            label="新文件相对路径"
+            label={t('git.newFilePath')}
             value={untrackedPath}
             onChange={event => setUntrackedPath(event.target.value)}
-            placeholder="例如 notes/verification.txt"
+            placeholder="notes/verification.txt"
             sx={{ minWidth: 240 }}
           />
 
           <TextField
             size="small"
-            label="文件内容"
+            label={t('git.fileContent')}
             value={content}
             onChange={event => setContent(event.target.value)}
             sx={{ flex: 1 }}
@@ -277,10 +273,10 @@ export default function WorkspaceGitPanel({ workspace }) {
                 });
                 setUntrackedPath('');
                 setContent('');
-              }, '新文件已创建并登记')
+              }, t('git.fileCreated'))
             }
           >
-            创建并登记
+            {t('git.createAndRegister')}
           </Button>
         </Stack>
         <Stack spacing={0.75} sx={{ mt: 1 }}>
@@ -305,8 +301,15 @@ export default function WorkspaceGitPanel({ workspace }) {
                   {file.path}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {file.size} 字节 · {file.sha256?.slice(0, 12)} ·{' '}
-                  {file.declared ? `已复核（${file.declarationSource || '已声明'}）` : '未复核'}
+                  {t('git.fileMeta', {
+                    size: file.size,
+                    sha: file.sha256?.slice(0, 12),
+                    state: file.declared
+                      ? t('git.reviewed', {
+                          source: file.declarationSource || t('git.declared')
+                        })
+                      : t('git.unreviewed')
+                  })}
                 </Typography>
               </Box>
               {!file.declared && (
@@ -320,18 +323,18 @@ export default function WorkspaceGitPanel({ workspace }) {
                           path: file.path,
                           sha256: file.sha256
                         }),
-                      '已复核未跟踪文件'
+                      t('git.fileReviewed')
                     )
                   }
                 >
-                  复核
+                  {t('git.review')}
                 </Button>
               )}
             </Stack>
           ))}
           {(untracked.data ?? []).length === 0 && (
             <Typography variant="caption" color="text.secondary">
-              没有未跟踪文件。
+              {t('git.noUntracked')}
             </Typography>
           )}
         </Stack>
@@ -340,14 +343,14 @@ export default function WorkspaceGitPanel({ workspace }) {
       <Divider />
 
       <Box>
-        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>推送或合并</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{t('git.deliveryTitle')}</Typography>
         <Typography variant="caption" color="text.secondary">
-          先准备请求，再批准并执行；执行结果冲突或未知时保留记录供人工核对。
+          {t('git.deliveryNote')}
         </Typography>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
           <TextField
             size="small"
-            label="远端"
+            label={t('git.remote')}
             value={remote}
             onChange={event => setRemote(event.target.value)}
             sx={{ width: 130 }}
@@ -355,7 +358,7 @@ export default function WorkspaceGitPanel({ workspace }) {
 
           <TextField
             size="small"
-            label="目标分支"
+            label={t('git.targetBranch')}
             value={target}
             onChange={event => setTarget(event.target.value)}
             sx={{ width: 170 }}
@@ -363,7 +366,7 @@ export default function WorkspaceGitPanel({ workspace }) {
 
           <TextField
             size="small"
-            label="说明（可选）"
+            label={t('git.note')}
             value={note}
             onChange={event => setNote(event.target.value)}
             sx={{ flex: 1, minWidth: 200 }}
@@ -381,11 +384,11 @@ export default function WorkspaceGitPanel({ workspace }) {
                     target,
                     note
                   }),
-                '已准备推送，请核对并批准'
+                t('git.pushPrepared')
               )
             }
           >
-            准备推送
+            {t('git.preparePush')}
           </Button>
           <Button
             variant="outlined"
@@ -399,11 +402,11 @@ export default function WorkspaceGitPanel({ workspace }) {
                     target,
                     note
                   }),
-                '已准备合并，请核对并批准'
+                t('git.mergePrepared')
               )
             }
           >
-            准备合并
+            {t('git.prepareMerge')}
           </Button>
           <Button
             size="small"
@@ -412,29 +415,37 @@ export default function WorkspaceGitPanel({ workspace }) {
               const latestCommit = (commits.data ?? [])[0];
               const latestApproval = (approvals.data ?? [])[0];
               const summary = [
-                `## 变更交付摘要`,
-                `- **开发分支**：\`${workspace.workBranch || workspace.branch || workspace.id}\``,
-                `- **目标分支**：\`${target || 'main'}\`（远端 \`${remote || 'origin'}\`）`,
-                `- **基础提交**：\`${shortId(workspace.baseCommit)}\``,
+                t('git.prTitle'),
+                t('git.prDevBranch', {
+                  branch: workspace.workBranch || workspace.branch || workspace.id
+                }),
+                t('git.prTargetBranch', { target: target || 'main', remote: remote || 'origin' }),
+                t('git.prBase', { id: shortId(workspace.baseCommit) }),
                 latestCommit
-                  ? `- **最新本地提交**：\`${shortId(latestCommit.commitId || latestCommit.ID || latestCommit.id)}\`（${latestCommit.status || latestCommit.STATUS || 'CONFIRMED'}）`
-                  : '- **本地提交**：尚未提交',
+                  ? t('git.prCommit', {
+                      id: shortId(latestCommit.commitId || latestCommit.ID || latestCommit.id),
+                      status: latestCommit.status || latestCommit.STATUS || 'CONFIRMED'
+                    })
+                  : t('git.prNoCommit'),
                 latestApproval
-                  ? `- **人工审查记录**：#${shortId(latestApproval.ID)}（${latestApproval.STATUS}）`
-                  : '- **人工审查记录**：无',
-                note ? `\n### 补充说明\n${note}` : ''
+                  ? t('git.prApproval', {
+                      id: shortId(latestApproval.ID),
+                      status: latestApproval.STATUS
+                    })
+                  : t('git.prNoApproval'),
+                note ? t('git.prNote', { note }) : ''
               ]
                 .filter(Boolean)
                 .join('\n');
               try {
                 await navigator.clipboard.writeText(summary);
-                toast.success('已复制 PR 摘要到剪贴板');
+                toast.success(t('git.prCopied'));
               } catch {
-                toast.info('当前浏览器不支持自动复制，请手动复制提交信息');
+                toast.info(t('git.copyUnsupported'));
               }
             }}
           >
-            复制 PR 摘要
+            {t('git.copyPr')}
           </Button>
         </Stack>
         <Stack spacing={1} sx={{ mt: 1.2 }}>
@@ -456,8 +467,8 @@ export default function WorkspaceGitPanel({ workspace }) {
                   {request.kind} · {request.remote}:{request.target}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {deliveryStatusNames[request.status] || request.status} · HEAD{' '}
-                  {shortId(request.headCommit)} · {request.sourceBranch}
+                  {statusLabel(request.status, locale)} · HEAD {shortId(request.headCommit)} ·{' '}
+                  {request.sourceBranch}
                 </Typography>
                 {request.resultDetail && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
@@ -471,19 +482,25 @@ export default function WorkspaceGitPanel({ workspace }) {
                   <Button
                     size="small"
                     onClick={() =>
-                      run(() => workspacesApi.decideDelivery(request.id, true), '已批准')
+                      run(
+                        () => workspacesApi.decideDelivery(request.id, true),
+                        t('git.approvedRecorded')
+                      )
                     }
                   >
-                    批准
+                    {t('git.approve')}
                   </Button>
                   <Button
                     size="small"
                     color="error"
                     onClick={() =>
-                      run(() => workspacesApi.decideDelivery(request.id, false), '已拒绝')
+                      run(
+                        () => workspacesApi.decideDelivery(request.id, false),
+                        t('git.rejectedRecorded')
+                      )
                     }
                   >
-                    拒绝
+                    {t('git.reject')}
                   </Button>
                 </Stack>
               )}
@@ -497,21 +514,21 @@ export default function WorkspaceGitPanel({ workspace }) {
                       () => workspacesApi.executeDelivery(request.id),
                       result =>
                         result.status === 'CONFIRMED'
-                          ? '交付已确认'
+                          ? t('git.deliveryConfirmed')
                           : result.status === 'CONFLICT'
-                            ? '存在冲突或远端拒绝，请核对'
-                            : '结果未知，请核对远端或工作区'
+                            ? t('git.deliveryConflict')
+                            : t('git.deliveryUnknown')
                     )
                   }
                 >
-                  执行
+                  {t('git.execute')}
                 </Button>
               )}
             </Stack>
           ))}
           {(deliveries.data ?? []).length === 0 && (
             <Typography variant="caption" color="text.secondary">
-              还没有推送或合并记录。
+              {t('git.noDeliveries')}
             </Typography>
           )}
         </Stack>

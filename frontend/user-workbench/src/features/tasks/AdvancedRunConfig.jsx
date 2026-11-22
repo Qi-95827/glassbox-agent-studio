@@ -22,24 +22,25 @@ import RoleBudgetEditor from '../agents/RoleBudgetEditor';
 import ToolBudgetEditor from '../tools/ToolBudgetEditor';
 import NodeBudgetEditor from '../workflows/NodeBudgetEditor';
 import EntryRoutePreview from '../workflows/EntryRoutePreview';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const workflows = [
-  ['compatibility', '兼容流程（自动路由）', true],
-  ['dual-analysis', '双视角分析（纯文本）', 'text'],
-  ['workspace-analysis', '授权文件分析（只读）', 'analysis'],
-  ['workspace-change', '分析、修改与审查', 'change'],
-  ['bug-fix', '模拟 Bug 复现、修复与回归', 'bug']
+  ['compatibility', true],
+  ['dual-analysis', 'text'],
+  ['workspace-analysis', 'analysis'],
+  ['workspace-change', 'change'],
+  ['bug-fix', 'bug']
 ];
 
 const limits = [
-  ['rounds', '最大轮次', '不设上限'],
-  ['tools', '工具总次数', '不设上限'],
-  ['perTool', '单工具次数'],
-  ['seconds', '时间（秒）'],
-  ['maxAgentRounds', '单 Agent 模型调用'],
-  ['maxAgentTools', '单 Agent 工具调用'],
-  ['tokenLimit', '已报告 Token 上限'],
-  ['identicalLimit', '连续相同工具上限']
+  'rounds',
+  'tools',
+  'perTool',
+  'seconds',
+  'maxAgentRounds',
+  'maxAgentTools',
+  'tokenLimit',
+  'identicalLimit'
 ];
 
 /**
@@ -47,6 +48,7 @@ const limits = [
  * 只编辑任务草稿；兼容性判断只是前端预检，最终由服务端校验。
  */
 export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onOpenPlan }) {
+  const { t } = useI18n();
   const fileScopes = splitLines(draft.fileScopes);
   const directories = splitLines(draft.directories);
   const acceptance = splitLines(draft.acceptance);
@@ -77,10 +79,10 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
         <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
           <TuneRounded sx={{ fontSize: 17, color: googleTokens.textSecondary }} />
           <Typography variant="body2" sx={{ fontWeight: 500 }}>
-            高级运行配置
+            {t('advanced.title')}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            限额、工作流、授权范围与预算默认折叠
+            {t('advanced.subtitle')}
           </Typography>
         </Stack>
       </AccordionSummary>
@@ -100,7 +102,7 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
             <TextField
               select
               size="small"
-              label="工作流"
+              label={t('advanced.workflow')}
               value={draft.workflowTemplate ?? 'compatibility'}
               onChange={event =>
                 patch({
@@ -109,33 +111,33 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
                 })
               }
             >
-              {workflows.map(([value, label, gate]) => (
+              {workflows.map(([value, gate]) => (
                 <MenuItem key={value} value={value} disabled={gate !== true && !eligible[gate]}>
-                  {label}
+                  {t(`advanced.workflow.${value}`)}
                 </MenuItem>
               ))}
             </TextField>
             <TextField
               select
               size="small"
-              label="模拟工具场景"
+              label={t('advanced.scenario')}
               value={draft.scenario}
               onChange={event => patch({ scenario: event.target.value })}
             >
-              <MenuItem value="normal">正常执行</MenuItem>
-              <MenuItem value="fail">工具失败</MenuItem>
-              <MenuItem value="slow">慢速执行（测试取消）</MenuItem>
+              <MenuItem value="normal">{t('advanced.scenario.normal')}</MenuItem>
+              <MenuItem value="fail">{t('advanced.scenario.fail')}</MenuItem>
+              <MenuItem value="slow">{t('advanced.scenario.slow')}</MenuItem>
               <MenuItem value="repeat" disabled={draft.model === 'deepseek'}>
-                重复调用
+                {t('advanced.scenario.repeat')}
               </MenuItem>
             </TextField>
             <TextField
               size="small"
               type="number"
-              label="费用硬预算（微单位）"
+              label={t('advanced.maxCost')}
               value={draft.maxCost}
               onChange={event => patch({ maxCost: event.target.value })}
-              placeholder="留空不限额"
+              placeholder={t('advanced.noLimit')}
             />
           </Box>
 
@@ -148,22 +150,22 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
           >
             <TextField
               size="small"
-              label="任务约束（每行一条，可选）"
+              label={t('advanced.constraints')}
               multiline
               minRows={2}
               value={draft.constraints}
               onChange={event => patch({ constraints: event.target.value })}
-              placeholder="例如：只修改授权文件"
+              placeholder={t('advanced.constraintsPlaceholder')}
             />
             <TextField
               size="small"
-              label="验收条件（每行一条，可选）"
+              label={t('advanced.acceptance')}
               multiline
               minRows={2}
               value={draft.acceptance}
               onChange={event => patch({ acceptance: event.target.value })}
-              placeholder="例如：指定回归测试通过"
-              helperText="验收条件需要证据，模型回答不等于验证通过。"
+              placeholder={t('advanced.acceptancePlaceholder')}
+              helperText={t('advanced.acceptanceHint')}
             />
           </Box>
 
@@ -177,18 +179,18 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
               }}
             >
               <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.75 }}>
-                工作区授权范围
+                {t('advanced.scope')}
               </Typography>
               <Stack spacing={1.5}>
                 <TextField
                   size="small"
-                  label="授权文件（每行一个相对路径）"
+                  label={t('advanced.files')}
                   multiline
                   minRows={2}
                   value={draft.fileScopes}
                   onChange={event => patch({ fileScopes: event.target.value })}
-                  placeholder="例如 src/App.jsx"
-                  helperText="最多 20 个文件；任务只能访问所列的现有文件。"
+                  placeholder={t('advanced.filesPlaceholder')}
+                  helperText={t('advanced.filesHint')}
                 />
                 <AuthorizedFilePicker
                   workspaceId={draft.workspaceId}
@@ -204,7 +206,7 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
                 >
                   <TextField
                     size="small"
-                    label="目录范围（每行一个，可选）"
+                    label={t('advanced.directories')}
                     multiline
                     minRows={2}
                     value={draft.directories}
@@ -212,7 +214,7 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
                   />
                   <TextField
                     size="small"
-                    label="排除路径（每行一个，可选）"
+                    label={t('advanced.exclusions')}
                     multiline
                     minRows={2}
                     value={draft.exclusions}
@@ -228,7 +230,7 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
                         onChange={event => patch({ writeEnabled: event.target.checked })}
                       />
                     }
-                    label={<Typography variant="body2">允许 Agent 修改所列文件</Typography>}
+                    label={<Typography variant="body2">{t('advanced.allowWrite')}</Typography>}
                   />
                   <FormControlLabel
                     control={
@@ -238,13 +240,11 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
                         onChange={event => patch({ memoryEnabled: event.target.checked })}
                       />
                     }
-                    label={<Typography variant="body2">读取项目背景记忆</Typography>}
+                    label={<Typography variant="body2">{t('advanced.memory')}</Typography>}
                   />
                 </Stack>
                 {draft.writeEnabled && (
-                  <Alert severity="warning">
-                    写入授权仅覆盖上方所列文件；修改结果仍需独立审查与人工批准才能提交。
-                  </Alert>
+                  <Alert severity="warning">{t('advanced.writeWarning')}</Alert>
                 )}
               </Stack>
             </Box>
@@ -254,13 +254,13 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
               <TextField
                 size="small"
-                label="模拟 Bug"
+                label={t('advanced.bug')}
                 value={draft.bugId}
                 onChange={event => patch({ bugId: event.target.value })}
                 sx={{ minWidth: 220 }}
               />
               <Button variant="outlined" onClick={onOpenBug}>
-                打开 Bug 验证台
+                {t('advanced.openBug')}
               </Button>
             </Stack>
           )}
@@ -276,15 +276,15 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
               gap: 1.5
             }}
           >
-            {limits.map(([key, label, placeholder]) => (
+            {limits.map(key => (
               <TextField
                 key={key}
                 size="small"
                 type="number"
-                label={label}
+                label={t(`advanced.limit.${key}`)}
                 value={draft[key]}
                 onChange={event => patch({ [key]: event.target.value })}
-                placeholder={placeholder}
+                placeholder={['rounds', 'tools'].includes(key) ? t('advanced.noLimit') : undefined}
               />
             ))}
           </Box>
@@ -312,7 +312,7 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
                   onChange={event => patch({ reviewPlan: event.target.checked })}
                 />
               }
-              label={<Typography variant="body2">先审阅计划再运行</Typography>}
+              label={<Typography variant="body2">{t('advanced.reviewPlan')}</Typography>}
             />
           )}
 

@@ -11,13 +11,21 @@ public final class AgentTool {
   private AgentTool() {}
 
   static ToolSpecification<String> specification(SimulatedTool delegate, Scenario scenario) {
-    var copy = PromptResourceLoader.tool("simulated_inspection");
+    return specification(delegate, scenario, null);
+  }
+
+  static ToolSpecification<String> specification(
+      SimulatedTool delegate, Scenario scenario, String locale) {
+    var copy = PromptResourceLoader.tool(locale, "simulated_inspection");
+    boolean english = PromptResourceLoader.isEnglish(locale);
     return new ToolSpecification<>(
         "inspect_simulated_issue",
         copy.description(),
         List.of(),
         List.of(scenario.code()),
-        "AgentScope 调用了模拟检查工具。",
+        english
+            ? "AgentScope called the simulated inspection tool."
+            : "AgentScope 调用了模拟检查工具。",
         arguments -> {},
         (arguments, check) -> delegate.execute(scenario, check),
         (arguments, result) -> result);

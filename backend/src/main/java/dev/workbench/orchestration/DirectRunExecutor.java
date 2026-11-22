@@ -237,7 +237,8 @@ final class DirectRunExecutor {
                 runtimeFor(state.runId, state.agentId, state.control),
                 analystDefinition.reference(),
                 analystDefinition.sha256())
-            .withModelConnection(state.task.modelConnectionId()));
+            .withModelConnection(state.task.modelConnectionId())
+            .withLocale(state.task.locale()));
     if (answer.length() > 2000) answer = answer.substring(0, 1990) + "…（结果已截断）";
     state.answer = answer;
     state.evidenceRun = state.runId;
@@ -290,7 +291,8 @@ final class DirectRunExecutor {
                 runtimeFor(state.runId, coderId, state.control),
                 coderDefinition.reference(),
                 coderDefinition.sha256())
-            .withModelConnection(state.task.modelConnectionId()));
+            .withModelConnection(state.task.modelConnectionId())
+            .withLocale(state.task.locale()));
     if (answer.length() > 1900) answer = answer.substring(0, 1890) + "…（结果已截断）";
     state.answer = answer;
     Handoff codingResult =

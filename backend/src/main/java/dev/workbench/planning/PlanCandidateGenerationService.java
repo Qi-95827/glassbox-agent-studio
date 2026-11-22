@@ -26,7 +26,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>生成请求先持久化再异步调用模型，页面轮询状态。候选只做建议：服务端校验通过才进入 READY，任何状态都不会创建任务、运行、节点、工作区或工具授权。取消与结算都使用状态条件更新，晚到的模型响应不能覆盖用户取消或新输入造成的过期。
  */
 class PlanCandidateGenerationService {
-  private static final String INSTRUCTIONS =
+  private static final String DEFAULT_INSTRUCTIONS =
       dev.workbench.framework.prompt.PromptResourceLoader.load("planning/plan-candidate.md");
 
   private final PlanCandidateStoreService store;
@@ -235,9 +235,18 @@ class PlanCandidateGenerationService {
     PlanCandidateModel.Reply reply = null;
     try {
       PlanningAgentSnapshot planning = store.readPlanning(row.getAgentAliasesJson());
+      String instructions =
+          input.locale() == null
+              ? DEFAULT_INSTRUCTIONS
+              : dev.workbench.framework.prompt.PromptResourceLoader.load(
+                  input.locale(), "planning/plan-candidate.md");
+      instructions =
+          instructions
+              + "\n\n"
+              + dev.workbench.framework.prompt.PromptResourceLoader.outputLanguageDirective(
+                  input.locale());
       reply =
-          model.propose(
-              INSTRUCTIONS, planningInput(input, planning), input.modelConnectionId());
+          model.propose(instructions, planningInput(input, planning), input.modelConnectionId());
       if (reply.text() == null || reply.text().length() > 200_000)
         throw new IllegalStateException("模型返回内容为空或超出计划容量。");
       PlanCandidateDraft draft =
@@ -345,6 +354,9 @@ class PlanCandidateGenerationService {
   private String planningInput(PlanCandidateInput input, PlanningAgentSnapshot planning) {
     var value = new LinkedHashMap<String, Object>();
     value.put("goal", input.goal());
+    value.put(
+        "locale",
+        dev.workbench.framework.prompt.PromptResourceLoader.normalizeLocale(input.locale()));
     value.put("entryKind", input.entryKind().name());
     value.put("deliverable", input.deliverable());
     value.put("constraints", input.constraints());

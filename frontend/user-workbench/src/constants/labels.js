@@ -1,4 +1,54 @@
+import { getCurrentLocale, translate } from '../i18n';
+
 /** 全站业务字典：只描述后端已存在的状态与类型，不在页面内重复硬编码。 */
+
+function localized(domain, value, fallback, locale) {
+  if (value == null || value === '') return fallback;
+  const key = `labels.${domain}.${value}`;
+  const text = translate(locale || getCurrentLocale(), key);
+  return text === key ? fallback : text;
+}
+
+/** 按语言读取业务枚举标签；静态导出继续保留，供历史调用与测试使用。 */
+export function statusLabelFor(value, locale) {
+  return localized('status', value, RUN_STATES[value] || value || '未开始', locale);
+}
+
+export function entryKindLabel(value, locale) {
+  return localized('entryKind', value, ENTRY_KINDS[value] || '通用目标', locale);
+}
+
+export function planRoleLabel(value, locale) {
+  return localized('role', value, PLAN_ROLES[value] || value || '', locale);
+}
+
+export function skillNameLabel(value, locale) {
+  return localized('skill', value, SKILL_NAMES[value] || value || '', locale);
+}
+
+export function toolNameLabel(value, locale) {
+  return localized('tool', value, TOOL_NAMES[value] || value || '', locale);
+}
+
+export function eventNameLabel(value, locale) {
+  return localized('event', value, EVENT_NAMES[value] || value || '', locale);
+}
+
+export function stopCauseLabel(value, locale) {
+  return localized('stopCause', value, STOP_CAUSES[value] || value || '', locale);
+}
+
+export function checkStatusLabel(value, locale) {
+  return localized('checkStatus', value, CHECK_STATUS_LABELS[value] || value || '', locale);
+}
+
+export function evaluationSuiteLabel(value, locale) {
+  return localized('suite', value, EVALUATION_SUITES[value] || value || '', locale);
+}
+
+export function comparisonLabel(value, locale) {
+  return localized('comparison', value, COMPARISON_NAMES[value] || value || '', locale);
+}
 
 export const RUN_STATES = {
   PENDING: '排队中',
@@ -191,8 +241,8 @@ export function statusTone(value) {
   return TONE_BY_STATUS[value] || 'neutral';
 }
 
-export function statusLabel(value) {
-  return RUN_STATES[value] || value || '未开始';
+export function statusLabel(value, locale) {
+  return statusLabelFor(value, locale);
 }
 
 /** 运行是否仍会变化：决定是否继续轮询。 */
@@ -233,13 +283,27 @@ export function modelKey(value) {
 }
 
 /** 模型编码映射；缺失或未知编码不伪装成具体模型。 */
-export function modelLabel(value, fallback = '未知模型') {
+export function modelLabel(value, fallback, locale) {
   const text = String(value ?? '').trim();
-  if (!text) return fallback;
-  return MODEL_LABELS[text] || MODEL_LABELS[text.toLowerCase()] || text;
+  const effectiveFallback = fallback ?? localized('common', 'unknownModel', '未知模型', locale);
+  if (!text) return effectiveFallback;
+  const key = modelKey(text);
+  if (key === 'mixed') return localized('model', 'mixed', effectiveFallback, locale);
+  return localized(
+    'model',
+    key,
+    MODEL_LABELS[text] || MODEL_LABELS[text.toLowerCase()] || text,
+    locale
+  );
 }
 
 /** 节点显示名：历史计划可能没有 label/key，至少用角色名避免“未命名步骤”。 */
-export function nodeTitle(node, fallback = '未命名步骤') {
-  return node?.label || node?.key || PLAN_ROLES[node?.role] || fallback;
+export function nodeTitle(node, fallback, locale) {
+  return (
+    node?.label ||
+    node?.key ||
+    planRoleLabel(node?.role, locale) ||
+    fallback ||
+    localized('common', 'unnamedStep', '未命名步骤', locale)
+  );
 }

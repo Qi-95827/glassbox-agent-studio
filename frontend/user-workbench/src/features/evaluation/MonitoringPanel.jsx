@@ -34,40 +34,19 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useMonitoringAlerts, useMonitoringDashboard } from '../../hooks/useEvaluations';
 import { evaluationApi } from '../../api/evaluations';
-import { RUN_STATES, TOOL_NAMES, modelLabel } from '../../constants/labels';
+import { statusLabel, toolNameLabel, modelLabel } from '../../constants/labels';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 import { dateTime, duration, oneLine, shortId } from '../../utils/format';
 import StatusChip from '../../components/StatusChip';
 import EmptyState from '../../components/EmptyState';
 import RunDiagnosticsDrawer from '../runs/RunDiagnosticsDrawer';
 import { DonutChart, GaugeArc, TrendChart, CHART_COLORS } from './monitoring/MonitoringCharts';
 
-const RANGES = [
-  { value: '24h', label: '近 24 小时' },
-  { value: '7d', label: '近 7 天' },
-  { value: '30d', label: '近 30 天' },
-  { value: 'all', label: '全部' }
-];
-
-const STATUS_OPTIONS = [
-  { value: '', label: '全部状态' },
-  { value: 'COMPLETED', label: '已完成' },
-  { value: 'FAILED', label: '失败' },
-  { value: 'BLOCKED', label: '阻塞' },
-  { value: 'RUNNING', label: '运行中' }
-];
-
-const TREND_MODES = [
-  { value: 'runs', label: '运行量' },
-  { value: 'duration', label: '平均耗时' },
-  { value: 'tokens', label: 'Token 消耗' }
-];
-
-const DONUT_MODES = [
-  { value: 'taskStatus', label: '任务状态' },
-  { value: 'model', label: '模型占比' },
-  { value: 'tool', label: '工具分布' }
-];
+const RANGES = ['24h', '7d', '30d', 'all'];
+const STATUS_OPTIONS = ['', 'COMPLETED', 'FAILED', 'BLOCKED', 'RUNNING'];
+const TREND_MODES = ['runs', 'duration', 'tokens'];
+const DONUT_MODES = ['taskStatus', 'model', 'tool'];
 
 function PanelCard({ title, subtitle, action, children, sx }) {
   return (
@@ -111,9 +90,9 @@ function MetricValue({ children, color }) {
   );
 }
 
-function formatNumber(value) {
+function formatNumber(value, locale = 'zh-CN') {
   const number = Number(value);
-  return Number.isFinite(number) ? number.toLocaleString('zh-CN') : '0';
+  return Number.isFinite(number) ? number.toLocaleString(locale) : '0';
 }
 
 function rateText(value) {
@@ -123,6 +102,7 @@ function rateText(value) {
 
 /** 类 Grafana 的细粒度运行监控看板：KPI、时序、圆盘、明细表与快捷排查入口。 */
 export default function MonitoringPanel() {
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const [range, setRange] = useState('7d');
   const [statusFilter, setStatusFilter] = useState('');
@@ -161,23 +141,23 @@ export default function MonitoringPanel() {
     if (donutMode === 'taskStatus') {
       return (data.distributions.taskStatusBreakdown ?? []).map(slice => ({
         key: slice.status,
-        label: RUN_STATES[slice.status] || slice.status,
+        label: statusLabel(slice.status, locale),
         value: slice.count
       }));
     }
     if (donutMode === 'model') {
       return (data.distributions.modelBreakdown ?? []).map(slice => ({
         key: slice.model,
-        label: modelLabel(slice.model),
+        label: modelLabel(slice.model, undefined, locale),
         value: slice.calls
       }));
     }
     return (data.distributions.toolBreakdown ?? []).map(slice => ({
       key: slice.tool,
-      label: TOOL_NAMES[slice.tool] || slice.tool,
+      label: toolNameLabel(slice.tool, locale),
       value: slice.calls
     }));
-  }, [data, donutMode]);
+  }, [data, donutMode, locale]);
 
   const runSelfCheck = async () => {
     setChecking(true);
@@ -186,7 +166,7 @@ export default function MonitoringPanel() {
     } catch (error) {
       setSelfCheck({
         status: 'ERROR',
-        checks: [{ name: '请求失败', status: 'FAILED', detail: error.message }]
+        checks: [{ name: t('monitoring.requestFailed'), status: 'FAILED', detail: error.message }]
       });
     } finally {
       setChecking(false);
@@ -232,43 +212,43 @@ export default function MonitoringPanel() {
             size="small"
             value={range}
             onChange={(_, value) => value && setRange(value)}
-            aria-label="监控时间范围"
+            aria-label={t('monitoring.rangeAria')}
           >
             {RANGES.map(item => (
-              <ToggleButton key={item.value} value={item.value}>
-                {item.label}
+              <ToggleButton key={item} value={item}>
+                {t(`monitoring.range.${item}`)}
               </ToggleButton>
             ))}
           </ToggleButtonGroup>
 
           <FormControl size="small" sx={{ minWidth: 128 }}>
-            <InputLabel id="monitor-status-label">状态</InputLabel>
+            <InputLabel id="monitor-status-label">{t('common.status')}</InputLabel>
             <Select
               labelId="monitor-status-label"
-              label="状态"
+              label={t('common.status')}
               value={statusFilter}
               onChange={event => setStatusFilter(event.target.value)}
             >
               {STATUS_OPTIONS.map(item => (
-                <MenuItem key={item.value || 'all'} value={item.value}>
-                  {item.label}
+                <MenuItem key={item || 'all'} value={item}>
+                  {item ? statusLabel(item, locale) : t('monitoring.allStatuses')}
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
 
           <FormControl size="small" sx={{ minWidth: 150 }}>
-            <InputLabel id="monitor-model-label">模型</InputLabel>
+            <InputLabel id="monitor-model-label">{t('common.model')}</InputLabel>
             <Select
               labelId="monitor-model-label"
-              label="模型"
+              label={t('common.model')}
               value={modelFilter}
               onChange={event => setModelFilter(event.target.value)}
             >
-              <MenuItem value="">全部模型</MenuItem>
+              <MenuItem value="">{t('monitoring.allModels')}</MenuItem>
               {modelOptions.map(item => (
                 <MenuItem key={item.model} value={item.model}>
-                  {modelLabel(item.model)}
+                  {modelLabel(item.model, undefined, locale)}
                 </MenuItem>
               ))}
             </Select>
@@ -278,22 +258,22 @@ export default function MonitoringPanel() {
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
           <Stack direction="row" spacing={0.4} sx={{ alignItems: 'center' }}>
             <Typography variant="caption" color="text.secondary">
-              自动刷新（30s）
+              {t('monitoring.autoRefresh')}
             </Typography>
             <Switch
               size="small"
               checked={autoRefresh}
               onChange={event => setAutoRefresh(event.target.checked)}
-              inputProps={{ 'aria-label': '自动刷新开关' }}
+              inputProps={{ 'aria-label': t('monitoring.autoRefresh') }}
             />
           </Stack>
-          <Tooltip title="立即刷新看板与告警">
+          <Tooltip title={t('monitoring.refreshNow')}>
             <span>
               <IconButton
                 size="small"
                 onClick={refreshAll}
                 disabled={dashboard.isFetching}
-                aria-label="手动刷新监控"
+                aria-label={t('monitoring.refreshNow')}
               >
                 {dashboard.isFetching ? (
                   <CircularProgress size={16} />
@@ -304,12 +284,18 @@ export default function MonitoringPanel() {
             </span>
           </Tooltip>
           <Typography variant="caption" color="text.secondary">
-            {data?.generatedAt ? `更新于 ${dateTime(data.generatedAt)}` : '等待数据'}
+            {data?.generatedAt
+              ? t('monitoring.updatedAt', { time: dateTime(data.generatedAt, locale) })
+              : t('monitoring.waitingData')}
           </Typography>
         </Stack>
       </Box>
 
-      {dashboard.isError && <Alert severity="error">监控读取失败：{dashboard.error.message}</Alert>}
+      {dashboard.isError && (
+        <Alert severity="error">
+          {t('monitoring.loadFailed', { message: dashboard.error.message })}
+        </Alert>
+      )}
 
       {dashboard.isLoading && !data && (
         <Stack
@@ -319,7 +305,7 @@ export default function MonitoringPanel() {
         >
           <CircularProgress size={20} />
           <Typography variant="body2" color="text.secondary">
-            正在聚合运行监控数据…
+            {t('monitoring.loading')}
           </Typography>
         </Stack>
       )}
@@ -327,9 +313,9 @@ export default function MonitoringPanel() {
       {data && summary?.totalRuns === 0 && (
         <PanelCard>
           <EmptyState
-            title="该时间段暂无运行数据"
-            description="可以切换到「全部」查看历史运行；任务开始执行后，KPI、趋势与节点排行会自动出现。"
-            action={{ label: '查看全部历史', onClick: () => setRange('all') }}
+            title={t('monitoring.emptyTitle')}
+            description={t('monitoring.emptyDescription')}
+            action={{ label: t('monitoring.viewAllHistory'), onClick: () => setRange('all') }}
           />
         </PanelCard>
       )}
@@ -347,24 +333,28 @@ export default function MonitoringPanel() {
               gap: 1.5
             }}
           >
-            <PanelCard title="任务成功率">
+            <PanelCard title={t('monitoring.kpi.successTitle')}>
               <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
-                <GaugeArc value={summary.successRate} label="成功率" />
+                <GaugeArc value={summary.successRate} label={t('monitoring.successRate')} />
                 <Stack spacing={0.3} sx={{ minWidth: 0 }}>
                   <Typography variant="caption" color="text.secondary">
-                    完成 {formatNumber(summary.completedRuns)} / 总运行{' '}
-                    {formatNumber(summary.totalRuns)}
+                    {t('monitoring.kpi.completed', {
+                      completed: formatNumber(summary.completedRuns, locale),
+                      total: formatNumber(summary.totalRuns, locale)
+                    })}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    已交付 {formatNumber(summary.deliveredRuns)} · 失败{' '}
-                    {formatNumber(summary.failedRuns)}
+                    {t('monitoring.kpi.deliveredFailed', {
+                      delivered: formatNumber(summary.deliveredRuns, locale),
+                      failed: formatNumber(summary.failedRuns, locale)
+                    })}
                   </Typography>
                 </Stack>
               </Stack>
             </PanelCard>
 
-            <PanelCard title="总运行数 / 异常数">
-              <MetricValue>{formatNumber(summary.totalRuns)}</MetricValue>
+            <PanelCard title={t('monitoring.kpi.totalTitle')}>
+              <MetricValue>{formatNumber(summary.totalRuns, locale)}</MetricValue>
               <Button
                 size="small"
                 variant="text"
@@ -378,14 +368,19 @@ export default function MonitoringPanel() {
                   color: summary.anomalyRunCount > 0 ? googleTokens.errorFg : googleTokens.successFg
                 }}
               >
-                异常 {formatNumber(summary.anomalyRunCount)} 次 · 点击筛选
+                {t('monitoring.kpi.anomaly', {
+                  count: formatNumber(summary.anomalyRunCount, locale)
+                })}
               </Button>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                阻塞 {formatNumber(summary.blockedRuns)} · 失败 {formatNumber(summary.failedRuns)}
+                {t('monitoring.kpi.blockedFailed', {
+                  blocked: formatNumber(summary.blockedRuns, locale),
+                  failed: formatNumber(summary.failedRuns, locale)
+                })}
               </Typography>
             </PanelCard>
 
-            <PanelCard title="平均耗时 / P95 耗时">
+            <PanelCard title={t('monitoring.kpi.durationTitle')}>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
                 <SpeedRounded sx={{ fontSize: 18, color: googleTokens.infoFg, mt: 0.6 }} />
                 <Box>
@@ -397,7 +392,7 @@ export default function MonitoringPanel() {
               </Stack>
             </PanelCard>
 
-            <PanelCard title="Token 消耗（已知）">
+            <PanelCard title={t('monitoring.kpi.tokensTitle')}>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
                 <TokenRounded sx={{ fontSize: 18, color: CHART_COLORS.purple, mt: 0.6 }} />
                 <Box sx={{ minWidth: 0 }}>
@@ -405,8 +400,8 @@ export default function MonitoringPanel() {
                     {formatNumber(summary.totalInputTokens + summary.totalOutputTokens)}
                   </MetricValue>
                   <Typography variant="caption" color="text.secondary">
-                    In {formatNumber(summary.totalInputTokens)} · Out{' '}
-                    {formatNumber(summary.totalOutputTokens)}
+                    In {formatNumber(summary.totalInputTokens, locale)} · Out{' '}
+                    {formatNumber(summary.totalOutputTokens, locale)}
                   </Typography>
                 </Box>
               </Stack>
@@ -415,14 +410,17 @@ export default function MonitoringPanel() {
                 color="text.secondary"
                 sx={{ display: 'block', mt: 0.5 }}
               >
-                模型调用 {formatNumber(summary.totalModelCalls)} 次 · 费用台账{' '}
-                {summary.estimatedCost == null
-                  ? '未记录'
-                  : Number(summary.estimatedCost).toFixed(4)}
+                {t('monitoring.kpi.modelCalls', {
+                  count: formatNumber(summary.totalModelCalls, locale),
+                  cost:
+                    summary.estimatedCost == null
+                      ? t('list.notRecorded')
+                      : Number(summary.estimatedCost).toFixed(4)
+                })}
               </Typography>
             </PanelCard>
 
-            <PanelCard title="ToolGateway 拦截">
+            <PanelCard title={t('monitoring.kpi.gatewayTitle')}>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
                 <VerifiedUserOutlined sx={{ fontSize: 18, color: CHART_COLORS.warning, mt: 0.6 }} />
                 <Box>
@@ -434,8 +432,10 @@ export default function MonitoringPanel() {
                     {formatNumber(summary.toolDenyCount)}
                   </MetricValue>
                   <Typography variant="caption" color="text.secondary">
-                    拦截率 {rateText(summary.toolDenyRate)} · 工具调用{' '}
-                    {formatNumber(summary.totalToolCalls)}
+                    {t('monitoring.kpi.denyRate', {
+                      rate: rateText(summary.toolDenyRate),
+                      calls: formatNumber(summary.totalToolCalls, locale)
+                    })}
                   </Typography>
                 </Box>
               </Stack>
@@ -450,19 +450,19 @@ export default function MonitoringPanel() {
             }}
           >
             <PanelCard
-              title="时序趋势"
-              subtitle="运行量、平均耗时与 Token 消耗共用同一时间分桶；悬停查看单桶明细。"
+              title={t('monitoring.trendTitle')}
+              subtitle={t('monitoring.trendSubtitle')}
               action={
                 <ToggleButtonGroup
                   exclusive
                   size="small"
                   value={trendMode}
                   onChange={(_, value) => value && setTrendMode(value)}
-                  aria-label="趋势指标切换"
+                  aria-label={t('monitoring.trendTitle')}
                 >
                   {TREND_MODES.map(item => (
-                    <ToggleButton key={item.value} value={item.value}>
-                      {item.label}
+                    <ToggleButton key={item} value={item}>
+                      {t(`monitoring.trend.${item}`)}
                     </ToggleButton>
                   ))}
                 </ToggleButtonGroup>
@@ -472,19 +472,19 @@ export default function MonitoringPanel() {
             </PanelCard>
 
             <PanelCard
-              title="分布圆盘"
-              subtitle="在任务状态、模型调用与工具调用之间切换。"
+              title={t('monitoring.donutTitle')}
+              subtitle={t('monitoring.donutSubtitle')}
               action={
                 <ToggleButtonGroup
                   exclusive
                   size="small"
                   value={donutMode}
                   onChange={(_, value) => value && setDonutMode(value)}
-                  aria-label="圆盘指标切换"
+                  aria-label={t('monitoring.donutTitle')}
                 >
                   {DONUT_MODES.map(item => (
-                    <ToggleButton key={item.value} value={item.value}>
-                      {item.label}
+                    <ToggleButton key={item} value={item}>
+                      {t(`monitoring.donut.${item}`)}
                     </ToggleButton>
                   ))}
                 </ToggleButtonGroup>
@@ -493,7 +493,11 @@ export default function MonitoringPanel() {
               <DonutChart
                 slices={donutSlices}
                 totalLabel={
-                  donutMode === 'taskStatus' ? '运行' : donutMode === 'model' ? '调用' : '工具'
+                  donutMode === 'taskStatus'
+                    ? t('monitoring.donut.runs')
+                    : donutMode === 'model'
+                      ? t('monitoring.donut.calls')
+                      : t('monitoring.donut.tools')
                 }
                 valueSuffix=""
               />
@@ -501,41 +505,39 @@ export default function MonitoringPanel() {
           </Box>
 
           <PanelCard
-            title="细粒度运行监控"
-            subtitle="按任务名、双层状态、模型、耗时、Token 与工具安检结果定位异常；一键排查会打开服务端诊断向导。"
+            title={t('monitoring.detailTitle')}
+            subtitle={t('monitoring.detailSubtitle')}
             action={
               <ToggleButtonGroup
                 exclusive
                 size="small"
                 value={anomaliesOnly ? 'anomaly' : 'all'}
                 onChange={(_, value) => value && setAnomaliesOnly(value === 'anomaly')}
-                aria-label="运行异常筛选"
+                aria-label={t('monitoring.detailTitle')}
               >
-                <ToggleButton value="all">全部</ToggleButton>
-                <ToggleButton value="anomaly">仅看异常</ToggleButton>
+                <ToggleButton value="all">{t('monitoring.all')}</ToggleButton>
+                <ToggleButton value="anomaly">{t('monitoring.anomaliesOnly')}</ToggleButton>
               </ToggleButtonGroup>
             }
           >
             {visibleRuns.length === 0 ? (
               <EmptyState
                 compact
-                title={anomaliesOnly ? '当前筛选下没有异常运行' : '暂无近期运行明细'}
-                description={
-                  anomaliesOnly ? '可以切回「全部」，或放宽时间范围后再次查看。' : undefined
-                }
+                title={anomaliesOnly ? t('monitoring.emptyAnomalies') : t('monitoring.emptyRuns')}
+                description={anomaliesOnly ? t('monitoring.emptyAnomaliesHint') : undefined}
               />
             ) : (
               <TableContainer sx={{ maxHeight: 520 }}>
                 <Table stickyHeader size="small" sx={{ minWidth: 920 }}>
                   <TableHead>
                     <TableRow>
-                      <TableCell>任务 / 运行</TableCell>
-                      <TableCell>双层状态</TableCell>
-                      <TableCell>模型</TableCell>
-                      <TableCell align="right">耗时</TableCell>
-                      <TableCell align="right">Token（In / Out）</TableCell>
-                      <TableCell align="right">工具（通过 / 拦截）</TableCell>
-                      <TableCell align="right">操作</TableCell>
+                      <TableCell>{t('monitoring.colTaskRun')}</TableCell>
+                      <TableCell>{t('monitoring.colStatus')}</TableCell>
+                      <TableCell>{t('common.model')}</TableCell>
+                      <TableCell align="right">{t('list.colDuration')}</TableCell>
+                      <TableCell align="right">Token (In / Out)</TableCell>
+                      <TableCell align="right">{t('monitoring.colTools')}</TableCell>
+                      <TableCell align="right">{t('common.actions')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -562,7 +564,7 @@ export default function MonitoringPanel() {
                                 }}
                               />
                             )}
-                            {oneLine(run.taskTitle || '未命名任务', 34)}
+                            {oneLine(run.taskTitle || t('common.unnamedTask'), 34)}
                           </Typography>
                           <Typography
                             variant="caption"
@@ -584,14 +586,16 @@ export default function MonitoringPanel() {
                         </TableCell>
                         <TableCell>
                           <Typography variant="caption">
-                            {run.model === 'mixed' ? '混合模型' : modelLabel(run.model)}
+                            {run.model === 'mixed'
+                              ? t('common.mixedModel')
+                              : modelLabel(run.model, undefined, locale)}
                           </Typography>
                           <Typography
                             variant="caption"
                             color="text.secondary"
                             sx={{ display: 'block' }}
                           >
-                            {run.nodeCount} 个节点
+                            {t('monitoring.nodeCount', { count: run.nodeCount })}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
@@ -622,7 +626,7 @@ export default function MonitoringPanel() {
                               onClick={() => setDiagnosticsRunId(run.runId)}
                               sx={{ minHeight: 28, fontSize: 12 }}
                             >
-                              一键排查
+                              {t('run.quickTriage')}
                             </Button>
                             <Button
                               size="small"
@@ -630,7 +634,7 @@ export default function MonitoringPanel() {
                               onClick={() => openRunNode(run.runId)}
                               sx={{ minHeight: 28, fontSize: 12 }}
                             >
-                              查看运行
+                              {t('history.openRun')}
                             </Button>
                           </Stack>
                         </TableCell>

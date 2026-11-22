@@ -1,5 +1,6 @@
 package dev.workbench.infrastructure.model;
 
+import dev.workbench.framework.i18n.LocalizedMessages;
 import dev.workbench.framework.trace.SensitiveDataMasker;
 import dev.workbench.modelconnection.ModelProbe;
 import dev.workbench.modelconnection.ModelProviderType;
@@ -43,10 +44,16 @@ public class OpenAICompatibleModelProbe implements ModelProbe {
               .stream(false)
               .generateOptions(GenerateOptions.builder().parallelToolCalls(false).build())
               .build();
+      boolean english =
+          dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(
+              dev.workbench.framework.i18n.LocalizedMessages.detectLocaleCode());
       model
           .stream(
               List.of(
-                  Msg.builder().role(MsgRole.SYSTEM).textContent("连接性测试，只回复 ok。").build(),
+                  Msg.builder()
+                      .role(MsgRole.SYSTEM)
+                      .textContent(english ? "Connectivity check; reply only ok." : "连接性测试，只回复 ok。")
+                      .build(),
                   Msg.builder().role(MsgRole.USER).textContent("ping").build()),
               List.of(),
               GenerateOptions.builder()
@@ -58,7 +65,7 @@ public class OpenAICompatibleModelProbe implements ModelProbe {
                           .build())
                   .build())
           .blockLast(PROBE_TIMEOUT.plusSeconds(5));
-      return new ProbeResult(true, "已连通，模型返回正常。");
+      return new ProbeResult(true, LocalizedMessages.get("probe.ok"));
     } catch (RuntimeException e) {
       return new ProbeResult(false, reason(e));
     }
@@ -67,24 +74,32 @@ public class OpenAICompatibleModelProbe implements ModelProbe {
   private static String reason(Throwable error) {
     Throwable current = error;
     for (int depth = 0; current != null && depth < 8; depth++) {
-      if (current instanceof AuthenticationException) return "401 密钥无效或已过期。";
-      if (current instanceof PermissionDeniedException) return "403 无权访问该模型。";
-      if (current instanceof NotFoundException) return "404 模型不存在或接口路径不正确。";
-      if (current instanceof RateLimitException) return "429 服务限流或额度不足，请稍后重试。";
-      if (current instanceof BadRequestException) return "400 请求被拒绝，请检查 Model ID 与参数。";
+      if (current instanceof AuthenticationException)
+        return LocalizedMessages.get("probe.auth");
+      if (current instanceof PermissionDeniedException)
+        return LocalizedMessages.get("probe.forbidden");
+      if (current instanceof NotFoundException)
+        return LocalizedMessages.get("probe.notFound");
+      if (current instanceof RateLimitException)
+        return LocalizedMessages.get("probe.rateLimit");
+      if (current instanceof BadRequestException)
+        return LocalizedMessages.get("probe.badRequest");
       if (current instanceof HttpTransportException transport
           && Integer.valueOf(401).equals(transport.getStatusCode()))
-        return "401 密钥无效或已过期。";
-      if (current instanceof TimeoutException) return "连接超时，请检查 Base URL 与网络。";
+        return LocalizedMessages.get("probe.auth");
+      if (current instanceof TimeoutException)
+        return LocalizedMessages.get("probe.timeout");
       String text = current.getMessage();
       if (text != null
           && (text.toLowerCase(java.util.Locale.ROOT).contains("timeout")
               || text.contains("超时")))
-        return "连接超时，请检查 Base URL 与网络。";
+        return LocalizedMessages.get("probe.timeout");
       if (current.getCause() == current) break;
       current = current.getCause();
     }
-    String message = error.getMessage() == null ? "连接失败。" : error.getMessage();
+    String message = error.getMessage();
+    if (message == null || message.isBlank())
+      return LocalizedMessages.get("probe.failed");
     return SensitiveDataMasker.maskAndTruncate(message, 300).text();
   }
 }

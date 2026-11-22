@@ -20,18 +20,31 @@ public final class WorkspaceWriteTool {
 
   static ToolSpecification<WriteReceipt> specification(
       WorkspaceService service, String id, String scope) {
-    var copy = PromptResourceLoader.tool("workspace_write_single");
+    return specification(service, id, scope, null);
+  }
+
+  static ToolSpecification<WriteReceipt> specification(
+      WorkspaceService service, String id, String scope, String locale) {
+    var copy = PromptResourceLoader.tool(locale, "workspace_write_single");
+    boolean english = PromptResourceLoader.isEnglish(locale);
+    var expected = new ToolSpecification.Parameter("expectedSha256", copy.parameter("expectedSha256"));
+    var content = new ToolSpecification.Parameter("content", copy.parameter("content"));
     return new ToolSpecification<>(
         "write_authorized_file",
         copy.description(),
-        List.of(EXPECTED, CONTENT),
+        List.of(expected, content),
         List.of(id, scope),
-        "修改用户授权的工作区文件。",
+        english
+            ? "Modify a workspace file authorized by the user."
+            : "修改用户授权的工作区文件。",
         arguments -> validateInput(arguments.get("expectedSha256"), arguments.get("content")),
         (arguments, check) ->
             writeFile(
                 service, id, scope, arguments.get("expectedSha256"), arguments.get("content")),
-        (arguments, receipt) -> "已修改授权文件，尚需审查和测试。",
+        (arguments, receipt) ->
+            english
+                ? "Authorized file modified; review and tests are still required."
+                : "已修改授权文件，尚需审查和测试。",
         (arguments, receipt) ->
             dev.workbench.framework.tool.ResourceVersion.encode(
                 java.util.Map.of(scope, receipt.sha256())));

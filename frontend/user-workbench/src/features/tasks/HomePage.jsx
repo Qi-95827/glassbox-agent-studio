@@ -9,11 +9,12 @@ import StatusChip from '../../components/StatusChip';
 import EmptyState from '../../components/EmptyState';
 import TaskComposer from './TaskComposer';
 import TeachingPlaybooks from './TeachingPlaybooks';
-import { ENTRY_KINDS, modelLabel, statusLabel } from '../../constants/labels';
+import { entryKindLabel, modelLabel, statusLabel } from '../../constants/labels';
 import { googleTokens } from '../../theme/googleTheme';
 import { oneLine, timeAgo } from '../../utils/format';
+import { useI18n } from '../../i18n/I18nProvider';
 
-function RunRow({ task }) {
+function RunRow({ task, t, locale }) {
   const navigate = useNavigate();
   return (
     <ButtonBase
@@ -36,7 +37,7 @@ function RunRow({ task }) {
         <StatusChip value={task.taskStatus || task.status} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography noWrap sx={{ fontSize: 13.5, fontWeight: 500 }}>
-            {oneLine(task.goal, 96) || '未命名任务'}
+            {oneLine(task.goal, 96) || t('common.unnamedTask')}
           </Typography>
           <Stack direction="row" spacing={1} sx={{ minWidth: 0, alignItems: 'center' }}>
             <Typography
@@ -46,13 +47,13 @@ function RunRow({ task }) {
               #{task.runId?.slice(0, 8)}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Agent：{statusLabel(task.status)}
+              {t('home.agentStatus', { status: statusLabel(task.status, locale) })}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              {ENTRY_KINDS[task.entryKind] || '通用目标'}
+              {entryKindLabel(task.entryKind, locale)}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              {timeAgo(task.createdAt)}
+              {timeAgo(task.createdAt, locale)}
             </Typography>
           </Stack>
         </Box>
@@ -65,13 +66,14 @@ function RunRow({ task }) {
 /** 工作台首页：渐进式披露的任务编写区 + 最近运行概览。 */
 export default function HomePage() {
   const navigate = useNavigate();
+  const { t, locale } = useI18n();
   const tasks = useTasks();
   const recent = (tasks.data ?? []).filter(task => !task.archived).slice(0, 5);
   const [model, setModel] = useState('mock');
 
   usePageChrome({
-    trail: [{ label: '工作空间' }, { label: '工作台' }],
-    model: { label: modelLabel(model), value: model, readOnly: false }
+    trail: [{ label: t('nav.workspace') }, { label: t('nav.home') }],
+    model: { label: modelLabel(model, undefined, locale), value: model, readOnly: false }
   });
 
   return (
@@ -82,10 +84,10 @@ export default function HomePage() {
             component="h1"
             sx={{ fontSize: 22, fontWeight: 500, letterSpacing: '-0.01em' }}
           >
-            你想构建什么？
+            {t('home.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            描述目标与验收条件，Agent 会先给出计划；低频预算与授权参数收在高级配置里。
+            {t('home.description')}
           </Typography>
         </Stack>
 
@@ -95,15 +97,14 @@ export default function HomePage() {
 
         <Stack
           direction="row"
-
           sx={{ mt: 4.5, mb: 1, alignItems: 'center', justifyContent: 'space-between' }}
         >
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
             <PlayCircleOutlineRounded sx={{ fontSize: 19, color: googleTokens.textSecondary }} />
-            <Typography sx={{ fontSize: 15, fontWeight: 500 }}>最近运行</Typography>
+            <Typography sx={{ fontSize: 15, fontWeight: 500 }}>{t('home.recentRuns')}</Typography>
           </Stack>
           <Button size="small" endIcon={<ChevronRightRounded />} onClick={() => navigate('/runs')}>
-            查看全部
+            {t('common.viewAll')}
           </Button>
         </Stack>
 
@@ -117,18 +118,18 @@ export default function HomePage() {
         >
           {tasks.isLoading && (
             <Typography variant="body2" color="text.secondary" sx={{ p: 3 }}>
-              正在读取最近运行…
+              {t('home.loadingRuns')}
             </Typography>
           )}
           {!tasks.isLoading && recent.length === 0 && (
             <EmptyState
               compact
-              title="还没有运行记录"
-              description="在上方描述第一个任务，确认计划后即可在这里追踪执行过程。"
+              title={t('home.emptyTitle')}
+              description={t('home.emptyDescription')}
             />
           )}
           {recent.map(task => (
-            <RunRow key={task.id} task={task} />
+            <RunRow key={task.id} task={task} t={t} locale={locale} />
           ))}
         </Box>
 
@@ -137,7 +138,7 @@ export default function HomePage() {
           color="text.secondary"
           sx={{ display: 'block', mt: 2, textAlign: 'center' }}
         >
-          模拟模型与真实模型分开标示；运行记录全部来自服务端持久化事件。
+          {t('home.footer')}
         </Typography>
       </Box>
     </Box>

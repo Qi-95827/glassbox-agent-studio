@@ -260,7 +260,9 @@ public class ModelConnectionService {
   public ConnectionView setDefault(String id) {
     String owner = ownerId();
     var row = requireOwned(id, owner);
-    if (!row.isEnabled()) throw new IllegalStateException("请先启用该模型连接。");
+    if (!row.isEnabled())
+      throw new IllegalStateException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.disabled"));
     String now = WorkbenchTime.now();
     connections.clearDefault(owner, now);
     row.setDefaultFlag(true);
@@ -329,7 +331,9 @@ public class ModelConnectionService {
   @Transactional(readOnly = true)
   public String requireEnabledOwned(String id) {
     var row = requireOwned(id, ownerId());
-    if (!row.isEnabled()) throw new IllegalStateException("所选模型连接已停用，请启用或换一个模型。");
+    if (!row.isEnabled())
+      throw new IllegalStateException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.disabled"));
     return row.getId();
   }
 
@@ -344,12 +348,20 @@ public class ModelConnectionService {
   /** 运行时解析：连接标识来自已校验并冻结的任务，不再读取浏览器会话。 */
   @Transactional(readOnly = true)
   public RuntimeModelConnection resolveForExecution(String id) {
-    if (id == null || id.isBlank()) throw new IllegalStateException("缺少模型连接标识。");
+    if (id == null || id.isBlank())
+      throw new IllegalStateException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.idMissing"));
     var row =
         connections
             .findById(id)
-            .orElseThrow(() -> new IllegalStateException("所选模型连接不存在，请重新选择。"));
-    if (!row.isEnabled()) throw new IllegalStateException("所选模型连接已停用，请重新选择。");
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        dev.workbench.framework.i18n.LocalizedMessages.get(
+                            "modelConnection.notFound")));
+    if (!row.isEnabled())
+      throw new IllegalStateException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.disabled"));
     return runtime(row);
   }
 
@@ -418,18 +430,24 @@ public class ModelConnectionService {
 
   private Input validate(
       SaveRequest request, boolean creating, UserModelConnectionEntity existing) {
-    if (request == null) throw new IllegalArgumentException("缺少模型连接配置。");
+    if (request == null)
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.missing"));
     ModelProviderType provider = requiredProvider(request.providerType());
     String displayName =
         request.displayName() == null || request.displayName().isBlank()
             ? provider.label() + " · " + safeModel(request.modelName())
             : request.displayName().strip();
-    if (displayName.length() > 80) throw new IllegalArgumentException("展示名不能超过 80 字。");
+    if (displayName.length() > 80)
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.nameTooLong"));
     String modelName = validateModelName(request.modelName());
     String baseUrl = validateBaseUrl(request.baseUrl());
     String apiKey = request.apiKey();
     if (apiKey != null && !apiKey.isBlank()) apiKey = validateApiKey(apiKey);
-    else if (creating) throw new IllegalArgumentException("请输入 API Key。");
+    else if (creating)
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.apiKeyRequired"));
     else apiKey = null;
     boolean enabled = request.enabled() == null || request.enabled();
     double inputPrice = price(request.inputPricePer1m(), "输入参考单价");
@@ -439,7 +457,8 @@ public class ModelConnectionService {
             ? existing == null ? "CNY" : existing.getCurrency()
             : request.currency().strip().toUpperCase(Locale.ROOT);
     if (!List.of("CNY", "USD", "EUR").contains(currency))
-      throw new IllegalArgumentException("参考单价的币种只支持 CNY、USD 或 EUR。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.currency"));
     return new Input(
         displayName,
         provider,
@@ -455,18 +474,22 @@ public class ModelConnectionService {
   private static double price(Double value, String label) {
     if (value == null) return 0;
     if (value < 0 || value > 1_000_000)
-      throw new IllegalArgumentException(label + "需在 0 至 1000000 之间（每百万 Token）。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.price"));
     return value;
   }
 
   private static ModelProviderType requiredProvider(String code) {
-    if (code == null || code.isBlank()) throw new IllegalArgumentException("请选择模型服务商。");
+    if (code == null || code.isBlank())
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.providerRequired"));
     return ModelProviderType.fromCode(code);
   }
 
   private static String validateModelName(String value) {
     if (value == null || !value.strip().matches("[A-Za-z0-9._:/-]{1,120}"))
-      throw new IllegalArgumentException("Model ID 需为 1 至 120 位字母、数字、点、下划线、冒号、斜杠或连字符。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.modelNameInvalid"));
     return value.strip();
   }
 
@@ -475,10 +498,13 @@ public class ModelConnectionService {
   }
 
   private static String validateApiKey(String value) {
-    if (value == null || value.isBlank()) throw new IllegalArgumentException("请输入 API Key。");
+    if (value == null || value.isBlank())
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.apiKeyRequired"));
     String key = value.strip();
     if (key.length() < 4 || key.length() > 1000 || key.contains("\n") || key.contains("\r"))
-      throw new IllegalArgumentException("API Key 格式无效。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.apiKeyInvalid"));
     return key;
   }
 
@@ -486,7 +512,9 @@ public class ModelConnectionService {
    * 只允许 https 公网地址；http 仅允许本机回环，避免把服务端请求引向内网。
    */
   static String validateBaseUrl(String value) {
-    if (value == null || value.isBlank()) throw new IllegalArgumentException("请填写 Base URL。");
+    if (value == null || value.isBlank())
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlRequired"));
     String text = value.strip();
     if (text.endsWith("/")) text = text.substring(0, text.length() - 1);
     try {
@@ -494,11 +522,15 @@ public class ModelConnectionService {
       String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
       String host = uri.getHost();
       if (host == null || host.isBlank())
-        throw new IllegalArgumentException("Base URL 必须包含有效主机名。");
+        throw new IllegalArgumentException(
+            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlHost"));
       if (uri.getUserInfo() != null)
-        throw new IllegalArgumentException("Base URL 不能包含用户名或口令。");
+        throw new IllegalArgumentException(
+            dev.workbench.framework.i18n.LocalizedMessages.get(
+                "modelConnection.baseUrlCredentials"));
       if (!List.of("http", "https").contains(scheme))
-        throw new IllegalArgumentException("Base URL 只支持 http 或 https。");
+        throw new IllegalArgumentException(
+            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlScheme"));
       String normalized = host.toLowerCase(Locale.ROOT);
       boolean loopback =
           normalized.equals("localhost")
@@ -506,12 +538,15 @@ public class ModelConnectionService {
               || normalized.equals("::1")
               || normalized.equals("[::1]");
       if ("http".equals(scheme) && !loopback)
-        throw new IllegalArgumentException("http 只允许本机回环地址；公网地址请使用 https。");
+        throw new IllegalArgumentException(
+            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlLoopback"));
       if ("https".equals(scheme) && isPrivateLiteral(normalized))
-        throw new IllegalArgumentException("Base URL 不能指向内网地址。");
+        throw new IllegalArgumentException(
+            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlPrivate"));
       return text;
     } catch (URISyntaxException e) {
-      throw new IllegalArgumentException("Base URL 格式无效。");
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlInvalid"));
     }
   }
 

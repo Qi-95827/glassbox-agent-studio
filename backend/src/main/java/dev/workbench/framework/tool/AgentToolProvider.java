@@ -14,9 +14,21 @@ public interface AgentToolProvider {
   /** 根据任务既有授权构造声明。实际动作在注册后的网关调用中执行。 */
   ToolSpecification<?> create(Scope scope);
 
-  record Scope(String workspaceId, List<String> authorizedPaths, Scenario scenario) {
+  record Scope(
+      String workspaceId, List<String> authorizedPaths, Scenario scenario, String locale) {
+    /** 旧调用没有任务语言；工具描述回退中文。 */
+    public Scope(String workspaceId, List<String> authorizedPaths, Scenario scenario) {
+      this(workspaceId, authorizedPaths, scenario, null);
+    }
+
     public Scope {
       authorizedPaths = List.copyOf(authorizedPaths);
+      locale =
+          locale == null || locale.isBlank()
+              ? "zh-CN"
+              : locale.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
+                  ? "en-US"
+                  : "zh-CN";
     }
   }
 }

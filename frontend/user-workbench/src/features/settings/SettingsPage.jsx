@@ -19,22 +19,27 @@ import { evaluationApi } from '../../api/evaluations';
 import CostPricePanel from '../workflows/CostPricePanel';
 import ModelConnectionPanel from './ModelConnectionPanel';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 /** 设置：账号、模型与 API Key、环境边界、自检与高级价格版本。 */
 export default function SettingsPage() {
+  const { t } = useI18n();
   const { user, logout, loggingOut } = useAuth();
   const navigate = useNavigate();
   const [selfCheck, setSelfCheck] = useState(null);
   const [checking, setChecking] = useState(false);
 
-  usePageChrome({ trail: [{ label: '工作空间' }, { label: '设置' }] });
+  usePageChrome({ trail: [{ label: t('nav.workspace') }, { label: t('nav.settings') }] });
 
   const runCheck = async () => {
     setChecking(true);
     try {
       setSelfCheck(await evaluationApi.selfCheck());
     } catch (error) {
-      setSelfCheck({ status: 'ERROR', checks: [{ name: '请求失败', detail: error.message }] });
+      setSelfCheck({
+        status: 'ERROR',
+        checks: [{ name: t('monitoring.requestFailed'), detail: error.message }]
+      });
     } finally {
       setChecking(false);
     }
@@ -44,10 +49,10 @@ export default function SettingsPage() {
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ maxWidth: 840, mx: 'auto', px: { xs: 2, sm: 3 }, py: { xs: 3, md: 4 } }}>
         <Typography component="h1" sx={{ fontSize: 22, fontWeight: 500, mb: 0.5 }}>
-          设置
+          {t('settings.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          账号、模型与 API Key、环境边界与本机自检。密钥只显示掩码，不会在页面回显明文。
+          {t('settings.description')}
         </Typography>
 
         <Stack spacing={2}>
@@ -59,21 +64,26 @@ export default function SettingsPage() {
               p: 2.5
             }}
           >
-            <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 1 }}>当前账号</Typography>
+            <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 1 }}>
+              {t('settings.account')}
+            </Typography>
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
               <Typography variant="body2">{user?.displayName}</Typography>
               <Typography variant="caption" color="text.secondary">
                 {user?.username}
               </Typography>
-              <Chip size="small" label={user?.role === 'ADMIN' ? '管理员' : '普通用户'} />
-              {user?.legacyClaimed && <Chip size="small" label="已领取旧 LOCAL 历史" />}
+              <Chip
+                size="small"
+                label={user?.role === 'ADMIN' ? t('topbar.roleAdmin') : t('topbar.roleUser')}
+              />
+              {user?.legacyClaimed && <Chip size="small" label={t('settings.legacyClaimed')} />}
             </Stack>
             <Typography
               variant="caption"
               color="text.secondary"
               sx={{ display: 'block', mt: 0.75 }}
             >
-              身份来自服务端会话；页面不把请求体中的用户字段作为归属依据。
+              {t('settings.identityNote')}
             </Typography>
             <Button
               variant="outlined"
@@ -84,7 +94,7 @@ export default function SettingsPage() {
                 navigate('/');
               }}
             >
-              退出登录
+              {t('topbar.logout')}
             </Button>
           </Box>
 
@@ -98,24 +108,17 @@ export default function SettingsPage() {
               p: 2.5
             }}
           >
-            <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 1 }}>环境边界</Typography>
+            <Typography sx={{ fontSize: 15, fontWeight: 500, mb: 1 }}>
+              {t('settings.boundaries')}
+            </Typography>
             <Stack spacing={0.6}>
-              <Typography variant="body2">
-                服务端：同源 <code>/api</code>，开发环境代理到 <code>127.0.0.1:8088</code>。
-              </Typography>
-              <Typography variant="body2">
-                模型：模拟模型与真实模型分开标示；使用自带 Key 时费用由你的服务商结算。
-              </Typography>
-              <Typography variant="body2">
-                工作区：仅可信本地仓库；工作区不是代码执行沙箱，写入需要逐任务授权。
-              </Typography>
-              <Typography variant="body2">
-                评测：本地种子评测使用模拟模型与工具，不访问真实模型、仓库或外部服务。
-              </Typography>
+              <Typography variant="body2">{t('settings.boundaryServer')}</Typography>
+              <Typography variant="body2">{t('settings.boundaryModel')}</Typography>
+              <Typography variant="body2">{t('settings.boundaryWorkspace')}</Typography>
+              <Typography variant="body2">{t('settings.boundaryEvaluation')}</Typography>
             </Stack>
             <Alert severity="info" sx={{ mt: 1.5 }}>
-              模拟与真实能力在 UI
-              中分别标注；任何“完成”都对应服务端持久化记录，不由前端预设动画生成。
+              {t('settings.boundaryNote')}
             </Alert>
           </Box>
 
@@ -132,14 +135,18 @@ export default function SettingsPage() {
 
               sx={{ mb: 1, justifyContent: 'space-between', alignItems: 'center' }}
             >
-              <Typography sx={{ fontSize: 15, fontWeight: 500 }}>系统自检</Typography>
+              <Typography sx={{ fontSize: 15, fontWeight: 500 }}>
+                {t('settings.selfCheck')}
+              </Typography>
               <Button variant="outlined" loading={checking} onClick={runCheck}>
-                运行自检
+                {t('settings.runSelfCheck')}
               </Button>
             </Stack>
             {selfCheck ? (
               <Stack spacing={0.6}>
-                <Typography variant="body2">总体：{selfCheck.status}</Typography>
+                <Typography variant="body2">
+                  {t('settings.overall', { status: selfCheck.status })}
+                </Typography>
                 {(selfCheck.checks ?? []).map(check => (
                   <Typography key={check.name} variant="body2" color="text.secondary">
                     {check.status} · {check.name}
@@ -149,7 +156,7 @@ export default function SettingsPage() {
               </Stack>
             ) : (
               <Typography variant="body2" color="text.secondary">
-                检查本地数据库、目录与必要配置；只读操作，不修改数据。
+                {t('settings.selfCheckHint')}
               </Typography>
             )}
           </Box>
@@ -176,10 +183,10 @@ export default function SettingsPage() {
               >
                 <Box>
                   <Typography sx={{ fontSize: 14, fontWeight: 600 }}>
-                    高级：平台内置模型价格版本
+                    {t('settings.advancedPricing')}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    只影响平台内置模拟 / DeepSeek 模型的预算与估算；使用自带 Key 时无需维护这里。
+                    {t('settings.advancedPricingHint')}
                   </Typography>
                 </Box>
               </AccordionSummary>
@@ -188,10 +195,11 @@ export default function SettingsPage() {
               </AccordionDetails>
             </Accordion>
             <Divider sx={{ my: 1.5 }} />
-            <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.5 }}>关于前端重构</Typography>
+            <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.5 }}>
+              {t('settings.about')}
+            </Typography>
             <Typography variant="caption" color="text.secondary">
-              React 19 + Vite + MUI + React Flow + TanStack Query + React Router。全站使用 Google M3
-              设计令牌，已移除 Ant Design 与手写压缩样式。
+              {t('settings.aboutDescription')}
             </Typography>
           </Box>
         </Stack>

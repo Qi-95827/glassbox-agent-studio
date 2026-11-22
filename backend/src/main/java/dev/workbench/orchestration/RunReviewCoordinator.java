@@ -98,7 +98,8 @@ final class RunReviewCoordinator {
                 runtimeFor(state.runId, reviewerId, state),
                 reviewDefinition.reference(),
                 reviewDefinition.sha256())
-            .withModelConnection(state.task.modelConnectionId()));
+            .withModelConnection(state.task.modelConnectionId())
+            .withLocale(state.task.locale()));
     if (review.length() > 1900) review = review.substring(0, 1890) + "…（结果已截断）";
     Handoff reviewResult =
         handoffs.attachTestChecks(

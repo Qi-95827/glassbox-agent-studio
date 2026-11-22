@@ -22,6 +22,7 @@ import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined';
 import VisibilityOffOutlined from '@mui/icons-material/VisibilityOffOutlined';
 import WorkbenchDialog from '../../components/WorkbenchDialog';
 import { modelConnectionsApi } from '../../api/modelConnections';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const empty = {
   providerType: 'DEEPSEEK',
@@ -60,6 +61,7 @@ function fromConnection(connection) {
 
 /** 新建/编辑用户模型连接；密钥只在显式输入时提交，编辑时留空表示不修改。 */
 export default function ModelConnectionDialog({ open, connection, presets, onClose, onSaved }) {
+  const { t } = useI18n();
   const [form, setForm] = useState(empty);
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -158,8 +160,8 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
   return (
     <WorkbenchDialog
       open={open}
-      title={editing ? '编辑模型连接' : '添加模型连接'}
-      subtitle="使用你自己的 API Key。密钥经服务端 AES-256-GCM 加密后存储，页面只显示掩码。"
+      title={editing ? t('byok.editTitle') : t('byok.addTitle')}
+      subtitle={t('byok.dialogSubtitle')}
       width={640}
       onCancel={onClose}
       footer={null}
@@ -170,7 +172,7 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
             select
             fullWidth
             size="small"
-            label="服务商"
+            label={t('byok.provider')}
             value={form.providerType}
             onChange={event => changeProvider(event.target.value)}
           >
@@ -183,10 +185,10 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
           <TextField
             fullWidth
             size="small"
-            label="展示名"
+            label={t('byok.displayName')}
             value={form.displayName}
             onChange={event => update('displayName', event.target.value)}
-            placeholder="例如：我的 DeepSeek"
+            placeholder={t('byok.displayNamePlaceholder')}
             slotProps={{ htmlInput: { maxLength: 80 } }}
           />
         </Stack>
@@ -197,7 +199,7 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
           label="Base URL"
           value={form.baseUrl}
           onChange={event => update('baseUrl', event.target.value)}
-          helperText="只允许 https 公网地址；本机调试可使用 http://127.0.0.1。"
+          helperText={t('byok.baseUrlHint')}
           placeholder={preset?.defaultBaseUrl || 'https://your-provider.example/v1'}
         />
 
@@ -215,8 +217,8 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
               fullWidth
               size="small"
               label="Model ID"
-              placeholder="例如 deepseek-chat"
-              helperText={preset?.docsUrl ? `服务商文档：${preset.docsUrl}` : undefined}
+              placeholder="deepseek-chat"
+              helperText={preset?.docsUrl ? t('byok.docsUrl', { url: preset.docsUrl }) : undefined}
             />
           )}
         />
@@ -229,16 +231,20 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
           value={form.apiKey}
           onChange={event => update('apiKey', event.target.value)}
           placeholder={
-            editing ? `留空表示不修改（当前 ${connection?.keyMasked || '已保存'}）` : 'sk-...'
+            editing
+              ? t('byok.keyKeepPlaceholder', {
+                  key: connection?.keyMasked || t('byok.saved')
+                })
+              : 'sk-...'
           }
-          helperText={editing ? '编辑时留空不会覆盖已保存的密钥。' : '密钥只提交给本机服务端。'}
+          helperText={editing ? t('byok.keyKeepHint') : t('byok.keySubmitHint')}
           slotProps={{
             input: {
               endAdornment: (
                 <InputAdornment position="end">
                   <IconButton
                     size="small"
-                    aria-label={showKey ? '隐藏密钥' : '显示密钥'}
+                    aria-label={showKey ? t('byok.hideKey') : t('byok.showKey')}
                     onClick={() => setShowKey(value => !value)}
                   >
                     {showKey ? (
@@ -255,7 +261,7 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
 
         <Stack direction="row" spacing={2} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
           <FormControlLabel
-            label="启用"
+            label={t('common.enabled')}
             control={
               <Switch
                 size="small"
@@ -265,7 +271,7 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
             }
           />
           <FormControlLabel
-            label="设为默认模型"
+            label={t('byok.setDefaultModel')}
             control={
               <Checkbox
                 size="small"
@@ -276,13 +282,13 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
           />
           <Box sx={{ flex: 1 }} />
           <Button variant="outlined" loading={testing} onClick={test}>
-            测试连通性
+            {t('byok.test')}
           </Button>
         </Stack>
 
         {testResult && (
           <Alert severity={testResult.ok ? 'success' : 'error'}>
-            {testResult.ok ? '已连通' : '连接失败'}
+            {testResult.ok ? t('byok.connected') : t('byok.connectionFailed')}
             {testResult.latencyMs != null ? ` · ${testResult.latencyMs} ms` : ''}
             {testResult.message ? `：${testResult.message}` : ''}
           </Alert>
@@ -294,19 +300,19 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
             sx={{ px: 0, minHeight: 38, '& .MuiAccordionSummary-content': { my: 0.5 } }}
           >
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              可选：参考单价（仅用于本机预算上限估算）
+              {t('byok.optionalPricing')}
             </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ px: 0, pt: 0 }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-              填写后只用于工作台内的估算与预算提示；费用仍由你的服务商结算，不向平台充值。
+              {t('byok.pricingHint')}
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
               <TextField
                 fullWidth
                 size="small"
                 type="number"
-                label="输入单价 / 百万 Token"
+                label={t('byok.inputPrice')}
                 value={form.inputPricePer1m}
                 onChange={event => update('inputPricePer1m', event.target.value)}
                 slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
@@ -315,7 +321,7 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
                 fullWidth
                 size="small"
                 type="number"
-                label="输出单价 / 百万 Token"
+                label={t('byok.outputPrice')}
                 value={form.outputPricePer1m}
                 onChange={event => update('outputPricePer1m', event.target.value)}
                 slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
@@ -323,7 +329,7 @@ export default function ModelConnectionDialog({ open, connection, presets, onClo
               <TextField
                 select
                 size="small"
-                label="币种"
+                label={t('byok.currency')}
                 value={form.currency}
                 onChange={event => update('currency', event.target.value)}
                 sx={{ width: 120 }}

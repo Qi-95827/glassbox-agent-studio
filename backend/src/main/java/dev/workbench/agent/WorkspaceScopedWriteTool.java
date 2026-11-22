@@ -12,7 +12,13 @@ public final class WorkspaceScopedWriteTool {
 
   static ToolSpecification<WorkspaceWriteTool.WriteReceipt> specification(
       WorkspaceService service, String workspaceId, AuthorizedFileSet scope) {
-    var copy = PromptResourceLoader.tool("workspace_write_scoped");
+    return specification(service, workspaceId, scope, null);
+  }
+
+  static ToolSpecification<WorkspaceWriteTool.WriteReceipt> specification(
+      WorkspaceService service, String workspaceId, AuthorizedFileSet scope, String locale) {
+    var copy = PromptResourceLoader.tool(locale, "workspace_write_scoped");
+    boolean english = PromptResourceLoader.isEnglish(locale);
     return new ToolSpecification<>(
         "write_authorized_file",
         copy.description(),
@@ -21,7 +27,9 @@ public final class WorkspaceScopedWriteTool {
             new ToolSpecification.Parameter("expectedSha256", copy.parameter("expectedSha256")),
             new ToolSpecification.Parameter("content", copy.parameter("content"))),
         List.of(workspaceId),
-        "修改用户授权的工作区文件。",
+        english
+            ? "Modify a workspace file authorized by the user."
+            : "修改用户授权的工作区文件。",
         arguments -> {
           scope.require(arguments.get("path"));
           WorkspaceWriteTool.validateInput(
@@ -34,7 +42,12 @@ public final class WorkspaceScopedWriteTool {
                 scope.require(arguments.get("path")),
                 arguments.get("expectedSha256"),
                 arguments.get("content")),
-        (arguments, receipt) -> "已修改授权文件：" + scope.require(arguments.get("path")) + "；尚需审查和测试。",
+        (arguments, receipt) ->
+            english
+                ? "Authorized file modified: "
+                    + scope.require(arguments.get("path"))
+                    + "; review and tests are still required."
+                : "已修改授权文件：" + scope.require(arguments.get("path")) + "；尚需审查和测试。",
         (arguments, receipt) ->
             dev.workbench.framework.tool.ResourceVersion.encode(
                 java.util.Map.of(scope.require(arguments.get("path")), receipt.sha256())));
