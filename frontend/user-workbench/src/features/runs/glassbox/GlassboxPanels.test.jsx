@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import ToolGatewayPanel from './ToolGatewayPanel';
 import LlmTracePanel from './LlmTracePanel';
 import HandoffEnvelopePanel from './HandoffEnvelopePanel';
@@ -102,5 +102,40 @@ describe('Glassbox inspector panels', () => {
     expect(screen.getByText('确定采用模块化 sort.js 实现')).toBeInTheDocument();
     expect(screen.getByText('sort.js')).toBeInTheDocument();
     expect(screen.getByText(/直接上游依赖匹配 · PASS/)).toBeInTheDocument();
+    expect(screen.getByText(/命中当前节点「开发节点」的 DAG 计划依赖边/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '查看怎么算 PASS' }));
+    expect(screen.getByText(/交接记录携带有效的 dependencyNodeId/)).toBeInTheDocument();
+  });
+
+  it('自动过滤交接摘要中的纯 Markdown 标题并提取实质结论', () => {
+    render(
+      <HandoffEnvelopePanel
+        inbound={[
+          {
+            senderNodeLabel: '梳理核心流程',
+            receiverNodeLabel: '审查功能完整性',
+            senderAgentId: 'aaaa1111',
+            receiverAgentId: 'bbbb2222',
+            senderAttemptId: 'cccc3333',
+            receiverAttemptId: 'dddd4444',
+            dependencyNodeId: 'node-2',
+            acceptedAt: '2026-11-21T10:00:00Z',
+            sourceResult:
+              '## 一、已观察到的证据（本步实测）\n结论：本步无写入工具，先交付设计规格。',
+            toolEvidence: [],
+            structured: {
+              summary: '## 一、已观察到的证据（本步实测）',
+              decisions: ['### 2.2 计时实现要点'],
+              artifacts: ['index.html'],
+              openRisks: ['**结论**: 缺少写入权限'],
+              validationChecks: []
+            }
+          }
+        ]}
+      />
+    );
+    expect(screen.getAllByText('结论：本步无写入工具，先交付设计规格。').length).toBeGreaterThan(0);
+    expect(screen.getByText('2.2 计时实现要点')).toBeInTheDocument();
   });
 });

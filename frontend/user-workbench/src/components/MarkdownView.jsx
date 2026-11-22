@@ -53,6 +53,20 @@ function renderInline(text) {
   return parts;
 }
 
+function isTableSeparator(line) {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|') || !trimmed.includes('-')) return false;
+  const cells = splitTableRow(trimmed);
+  return cells.length > 0 && cells.every(cell => /^:?-{2,}:?$/.test(cell));
+}
+
+function splitTableRow(line) {
+  let trimmed = line.trim();
+  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1);
+  return trimmed.split('|').map(cell => cell.trim());
+}
+
 function parseBlocks(source) {
   const lines = String(source || '')
     .replace(/\r\n/g, '\n')
@@ -76,6 +90,17 @@ function parseBlocks(source) {
       }
       if (i < lines.length) i += 1;
       blocks.push({ type: 'code', lang, content: codeLines.join('\n') });
+      continue;
+    }
+    if (trimmed.includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const headers = splitTableRow(trimmed);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].trim().includes('|')) {
+        rows.push(splitTableRow(lines[i]));
+        i += 1;
+      }
+      blocks.push({ type: 'table', headers, rows });
       continue;
     }
     if (/^[-*_]{3,}$/.test(trimmed)) {
@@ -106,6 +131,7 @@ function parseBlocks(source) {
       i < lines.length &&
       lines[i].trim() &&
       !lines[i].trim().startsWith('```') &&
+      !(lines[i].trim().includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1])) &&
       !/^#{1,4}\s+/.test(lines[i].trim()) &&
       !/^[-*_]{3,}$/.test(lines[i].trim()) &&
       !/^([-*•]|\d+\.)\s+/.test(lines[i].trim())
@@ -192,6 +218,61 @@ export default function MarkdownView({ text, maxHeight, dense = false }) {
                 }}
               >
                 {block.content}
+              </Box>
+            </Box>
+          );
+        }
+        if (block.type === 'table') {
+          return (
+            <Box
+              key={`tbl:${index}`}
+              sx={{
+                overflowX: 'auto',
+                borderRadius: 2,
+                border: `1px solid ${googleTokens.outline}`,
+                bgcolor: '#FFFFFF'
+              }}
+            >
+              <Box
+                component="table"
+                sx={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontSize: dense ? 12.5 : 13,
+                  '& th, & td': {
+                    px: 1.25,
+                    py: 0.75,
+                    textAlign: 'left',
+                    borderBottom: `1px solid ${googleTokens.outline}`,
+                    verticalAlign: 'top',
+                    lineHeight: 1.55
+                  },
+                  '& thead th': {
+                    bgcolor: '#F8F9FA',
+                    fontWeight: 600,
+                    color: googleTokens.textSecondary
+                  },
+                  '& tbody tr:last-of-type td': {
+                    borderBottom: 'none'
+                  }
+                }}
+              >
+                <thead>
+                  <tr>
+                    {block.headers.map((head, hIdx) => (
+                      <th key={`th:${hIdx}`}>{renderInline(head)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rIdx) => (
+                    <tr key={`tr:${rIdx}`}>
+                      {block.headers.map((_, cIdx) => (
+                        <td key={`td:${rIdx}:${cIdx}`}>{renderInline(row[cIdx] || '')}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
               </Box>
             </Box>
           );

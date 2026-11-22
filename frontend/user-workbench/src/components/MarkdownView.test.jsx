@@ -23,4 +23,18 @@ describe('MarkdownView', () => {
     expect(screen.getByText('const count = 1;')).toBeInTheDocument();
     expect(container.querySelector('code')).not.toBeNull();
   });
+
+  it('安全渲染 Markdown 表格而非原始管道符', () => {
+    const tableSample = [
+      '| 检查项 | 结果 |',
+      '| --- | --- |',
+      '| `index.html` | **空文件** |'
+    ].join('\n');
+
+    const { container } = render(<MarkdownView text={tableSample} />);
+    expect(container.querySelector('table')).not.toBeNull();
+    expect(screen.getByText('检查项')).toBeInTheDocument();
+    expect(screen.getByText('index.html')).toBeInTheDocument();
+    expect(screen.getByText('空文件')).toBeInTheDocument();
+  });
 });
