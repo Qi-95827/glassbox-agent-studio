@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -9,7 +9,7 @@ import {
   Typography,
   useMediaQuery
 } from '@mui/material';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import RunHeader from './RunHeader';
 import RunFlowGraph from '../workflows/RunFlowGraph';
@@ -17,6 +17,7 @@ import RunReplayPanel from './RunReplayPanel';
 import RunOutputsPanel from './RunOutputsPanel';
 import RunListView from './RunListView';
 import NodeInspector from './NodeInspector';
+import RunDiagnosticsDrawer from './RunDiagnosticsDrawer';
 import EmptyState from '../../components/EmptyState';
 import { useToast } from '../../components/ToastProvider';
 import { useNodeDetail, useRunEvents, useRunExecution } from '../../hooks/useRunExecution';
@@ -41,6 +42,8 @@ const blockingNames = {
 export default function RunDetailPage() {
   const { runId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState('flow');
@@ -48,7 +51,12 @@ export default function RunDetailPage() {
   const [selectedEdge, setSelectedEdge] = useState(null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [busyAction, setBusyAction] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [glassboxRequest, setGlassboxRequest] = useState(null);
+  const consumedQueryRequest = useRef('');
   const inlineInspector = useMediaQuery('(min-width:1024px)');
+  const requestedNodeId = searchParams.get('nodeId');
+  const requestedGlassbox = searchParams.get('glassbox');
 
   const { detail, view, live, loading, error, refetch } = useRunExecution(runId);
   const eventsQuery = useRunEvents(runId, tab === 'replay', live);
@@ -72,10 +80,12 @@ export default function RunDetailPage() {
     setSelectedEdge(null);
     setInspectorOpen(false);
     setTab('flow');
+    setGlassboxRequest(null);
+    consumedQueryRequest.current = '';
   }, [runId]);
 
   useEffect(() => {
-    if (!view || selectedId) return;
+    if (!view || selectedId || requestedNodeId) return;
     const active = view.focus?.active?.[0]?.nodeId;
     const running = view.nodes?.find(item => item.status === 'RUNNING')?.id;
     const next = active || running || null;
@@ -83,7 +93,27 @@ export default function RunDetailPage() {
       setSelectedId(next);
       setInspectorOpen(true);
     }
-  }, [view, selectedId]);
+  }, [view, selectedId, requestedNodeId]);
+
+  // 支持诊断向导与慢节点排行通过 URL 直接定位节点并打开指定玻璃盒 Tab。
+  useEffect(() => {
+    if (!view || !requestedNodeId) return;
+    const requestKey = `${location.key}|${requestedNodeId}|${requestedGlassbox || ''}`;
+    if (consumedQueryRequest.current === requestKey) return;
+    const target = (view.nodes ?? []).find(item => item.id === requestedNodeId);
+    if (!target) return;
+    consumedQueryRequest.current = requestKey;
+    const allowed = ['result', 'handoff', 'gateway', 'llm', 'assembly'];
+    setSelectedId(target.id);
+    setSelectedEdge(null);
+    setInspectorOpen(true);
+    setTab('flow');
+    setGlassboxRequest({
+      nodeId: target.id,
+      section: allowed.includes(requestedGlassbox) ? requestedGlassbox : 'result',
+      nonce: Date.now()
+    });
+  }, [view, requestedNodeId, requestedGlassbox, location.key]);
 
   const goal = detail?.task?.GOAL || '运行详情';
   const goalTitle = oneLine(String(goal).split(/[。:：]/)[0], 18);
@@ -274,6 +304,7 @@ export default function RunDetailPage() {
       generatedAt={view.generatedAt}
       runModelMode={detail?.task?.MODEL_MODE}
       selectedEdge={selectedEdge}
+      glassboxRequest={glassboxRequest}
       hasBreakpoint={Boolean(node && breakpoints.has(node.id))}
       onToggleBreakpoint={() => node && toggleBreakpoint(node.id)}
       cancelAction={(view.availableActions ?? []).find(action => action.actionCode === 'CANCEL')}
@@ -303,6 +334,11 @@ export default function RunDetailPage() {
           const wsId = detail?.task?.WORKSPACE_ID;
           if (wsId) navigate(`/workspaces?id=${wsId}`);
         }}
+        diagnoseVisible={
+          ['FAILED', 'BLOCKED', 'LIMITED', 'INTERRUPTED'].includes(view.runStatus) ||
+          blocking.length > 0
+        }
+        onDiagnose={() => setDiagnosticsOpen(true)}
       />
 
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', bgcolor: googleTokens.canvas }}>
@@ -479,6 +515,12 @@ export default function RunDetailPage() {
       >
         {inspectorOpen && node ? inspector : null}
       </Drawer>
+
+      <RunDiagnosticsDrawer
+        open={diagnosticsOpen}
+        runId={runId}
+        onClose={() => setDiagnosticsOpen(false)}
+      />
     </Box>
   );
 }

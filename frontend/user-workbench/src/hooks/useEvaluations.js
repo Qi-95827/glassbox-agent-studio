@@ -33,6 +33,23 @@ export function useMonitoring(enabled = true) {
   });
 }
 
+export function useMonitoringDashboard({ range = '7d', status, model, autoRefresh = true } = {}) {
+  return useQuery({
+    queryKey: ['monitoring-dashboard', range, status ?? null, model ?? null],
+    queryFn: () => evaluationApi.monitoringDashboard({ range, status, model }),
+    refetchInterval: autoRefresh ? 30000 : false
+  });
+}
+
+export function useRunDiagnostics(runId, enabled = true) {
+  return useQuery({
+    queryKey: ['run-diagnostics', runId],
+    queryFn: () => evaluationApi.runDiagnostics(runId),
+    enabled: Boolean(runId) && enabled,
+    staleTime: 5000
+  });
+}
+
 export function useMonitoringAlerts(enabled = true) {
   return useQuery({
     queryKey: ['monitoring-alerts'],

@@ -28,6 +28,13 @@ export const evaluationApi = {
   datasetBatches: () => get('/evaluation-datasets/batches'),
   datasetBatch: id => get(`/evaluation-datasets/batches/${id}`),
   monitoring: () => get('/monitoring'),
+  monitoringDashboard: ({ range = '7d', status, model } = {}) => {
+    const params = new URLSearchParams({ range });
+    if (status) params.set('status', status);
+    if (model) params.set('model', model);
+    return get(`/monitoring/dashboard?${params.toString()}`);
+  },
+  runDiagnostics: runId => get(`/monitoring/runs/${encodeURIComponent(runId)}/diagnostics`),
   alerts: () => get('/monitoring/alerts'),
   audit: (limit = 20) => get(`/audit?limit=${limit}`),
   selfCheck: () => get('/system/self-check')

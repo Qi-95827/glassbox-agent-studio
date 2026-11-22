@@ -4,6 +4,7 @@ import PlayArrowRounded from '@mui/icons-material/PlayArrowRounded';
 import TaskAltRounded from '@mui/icons-material/TaskAltRounded';
 import ReplayRounded from '@mui/icons-material/ReplayRounded';
 import MoreVertRounded from '@mui/icons-material/MoreVertRounded';
+import HealthAndSafetyOutlined from '@mui/icons-material/HealthAndSafetyOutlined';
 import { useState } from 'react';
 import { IconButton, Menu, MenuItem } from '@mui/material';
 import { googleTokens } from '../../theme/googleTheme';
@@ -25,7 +26,9 @@ export default function RunHeader({
   onAction,
   busy,
   workspaceId,
-  onOpenWorkspace
+  onOpenWorkspace,
+  diagnoseVisible = false,
+  onDiagnose
 }) {
   const [moreAnchor, setMoreAnchor] = useState(null);
   const actions = (view?.availableActions ?? []).filter(
@@ -61,6 +64,18 @@ export default function RunHeader({
       </Tabs>
 
       <Stack direction="row" spacing={0.9} sx={{ flexShrink: 0, alignItems: 'center' }}>
+        {diagnoseVisible && onDiagnose && (
+          <Button
+            size="small"
+            variant="outlined"
+            color="warning"
+            startIcon={<HealthAndSafetyOutlined fontSize="small" />}
+            onClick={onDiagnose}
+            sx={{ whiteSpace: 'nowrap' }}
+          >
+            快速排查
+          </Button>
+        )}
         {inline.map(action => (
           <Button
             key={action.actionCode}

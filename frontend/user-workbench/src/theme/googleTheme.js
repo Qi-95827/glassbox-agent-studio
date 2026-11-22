@@ -166,6 +166,8 @@ const theme = createTheme({
     MuiMenu: {
       styleOverrides: {
         paper: {
+          backgroundColor: '#FFFFFF',
+          backgroundImage: 'none',
           borderRadius: 12,
           border: `1px solid ${googleTokens.outline}`,
           boxShadow: '0 6px 22px rgba(60,64,67,.16)',

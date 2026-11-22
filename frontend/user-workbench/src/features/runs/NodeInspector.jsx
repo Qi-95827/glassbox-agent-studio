@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Box,
@@ -133,6 +133,7 @@ export default function NodeInspector({
   generatedAt,
   runModelMode,
   selectedEdge,
+  glassboxRequest,
   hasBreakpoint = false,
   onToggleBreakpoint,
   cancelAction,
@@ -143,6 +144,16 @@ export default function NodeInspector({
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogSection, setDialogSection] = useState('result');
+
+  // 由运行详情页的 URL Query（nodeId + glassbox）驱动，自动展开目标节点的宽屏透视 Tab。
+  useEffect(() => {
+    if (!glassboxRequest || glassboxRequest.nodeId !== node?.id) return;
+    const allowed = ['result', 'handoff', 'gateway', 'llm', 'assembly'];
+    setDialogSection(
+      allowed.includes(glassboxRequest.section) ? glassboxRequest.section : 'result'
+    );
+    setDialogOpen(true);
+  }, [glassboxRequest, node?.id]);
 
   const attempts = detail?.attempts ?? [];
   const models = attempts.flatMap(attempt => attempt.models ?? []);

@@ -399,7 +399,7 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             navigate('/settings');
           }}
         >
-          <AddRounded fontSize="small" sx={{ mr: 1 }} /> + 配置我的 API Key
+          <AddRounded fontSize="small" sx={{ mr: 1 }} /> 配置我的 API Key
         </MenuItem>
       </Menu>
 
