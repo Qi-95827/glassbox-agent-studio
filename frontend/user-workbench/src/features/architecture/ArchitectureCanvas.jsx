@@ -1,9 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Box, Chip, Stack, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+import {
+  Box,
+  Button,
+  Chip,
+  Stack,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography
+} from '@mui/material';
+import ArrowBackRounded from '@mui/icons-material/ArrowBackRounded';
+import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded';
 import CodeRounded from '@mui/icons-material/CodeRounded';
+import SubdirectoryArrowRightRounded from '@mui/icons-material/SubdirectoryArrowRightRounded';
 import TouchAppOutlined from '@mui/icons-material/TouchAppOutlined';
 import ArchitectureDiagram from './ArchitectureDiagrams';
-import { getArchitectureTopic, pickText } from './architectureCatalog';
+import {
+  getArchitectureTopic,
+  getChildTopics,
+  getParentTopic,
+  pickText
+} from './architectureCatalog';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
 
@@ -16,11 +32,13 @@ const SPOTLIGHT_TONES = {
 };
 
 /**
- * 单张架构图聚焦画布：可同时嵌入「架构图谱页」与分散式「架构原理弹窗」。
+ * 单张架构图聚焦画布：支持 C4 渐进式下钻（主图 → 专题子图 → 返回主图）。
  */
-export default function ArchitectureCanvas({ topicId, compact = false }) {
+export default function ArchitectureCanvas({ topicId, compact = false, onNavigateTopic }) {
   const { locale, t } = useI18n();
   const topic = getArchitectureTopic(topicId);
+  const parentTopic = getParentTopic(topic);
+  const childTopics = getChildTopics(topic.id);
   const [subView, setSubView] = useState(topic.subViews?.[0]?.id ?? null);
   const [selectedNodeId, setSelectedNodeId] = useState(topic.defaultNode);
 
@@ -39,10 +57,37 @@ export default function ArchitectureCanvas({ topicId, compact = false }) {
   };
 
   const activeNode = topic.nodes?.[selectedNodeId] ?? Object.values(topic.nodes ?? {})[0] ?? null;
+  const drillTarget = activeNode?.drillTo ? getArchitectureTopic(activeNode.drillTo) : null;
   const spotlightTone = SPOTLIGHT_TONES[activeNode?.tone] ?? SPOTLIGHT_TONES.blue;
 
   return (
     <Stack spacing={compact ? 2 : 2.5}>
+      {/* 子图顶部的返航面包屑 */}
+      {parentTopic && onNavigateTopic && (
+        <Box>
+          <Button
+            size="small"
+            startIcon={<ArrowBackRounded sx={{ fontSize: 15 }} />}
+            onClick={() => onNavigateTopic(parentTopic.id)}
+            sx={{
+              px: 1.25,
+              py: 0.3,
+              borderRadius: 9999,
+              textTransform: 'none',
+              fontSize: 12.5,
+              color: '#1967D2',
+              bgcolor: '#EEF4FF',
+              '&:hover': { bgcolor: '#DCE8FE' }
+            }}
+          >
+            {t('architecture.backToParent', {
+              badge: parentTopic.badge,
+              title: pickText(parentTopic.shortTitle, locale)
+            })}
+          </Button>
+        </Box>
+      )}
+
       {/* 顶部：编号 + 标题 + 一句话定位 + 可选子视图切换 */}
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
@@ -62,8 +107,8 @@ export default function ArchitectureCanvas({ topicId, compact = false }) {
                 height: 22,
                 fontSize: 11.5,
                 fontWeight: 700,
-                bgcolor: '#E8F0FE',
-                color: '#1967D2'
+                bgcolor: parentTopic ? '#F3E8FD' : '#E8F0FE',
+                color: parentTopic ? '#681DA8' : '#1967D2'
               }}
             />
             <Typography
@@ -76,6 +121,43 @@ export default function ArchitectureCanvas({ topicId, compact = false }) {
           <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
             {pickText(topic.tagline, locale)}
           </Typography>
+
+          {/* 主图拥有的深潜子图快捷入口 */}
+          {childTopics.length > 0 && onNavigateTopic && (
+            <Stack
+              direction="row"
+              spacing={0.75}
+              useFlexGap
+              sx={{ mt: 1.25, flexWrap: 'wrap', alignItems: 'center' }}
+            >
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ fontWeight: 600, mr: 0.25 }}
+              >
+                {t('architecture.deepDivesLabel')}
+              </Typography>
+              {childTopics.map(sub => (
+                <Chip
+                  key={sub.id}
+                  size="small"
+                  clickable
+                  icon={<SubdirectoryArrowRightRounded sx={{ fontSize: 14 }} />}
+                  label={`${sub.badge} ${pickText(sub.shortTitle, locale)}`}
+                  onClick={() => onNavigateTopic(sub.id)}
+                  sx={{
+                    height: 26,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    bgcolor: '#FFFFFF',
+                    color: '#1967D2',
+                    border: '1px solid #D2E3FC',
+                    '&:hover': { bgcolor: '#E8F0FE', borderColor: '#AECBFA' }
+                  }}
+                />
+              ))}
+            </Stack>
+          )}
         </Box>
 
         {topic.subViews && topic.subViews.length > 0 && (
@@ -136,7 +218,7 @@ export default function ArchitectureCanvas({ topicId, compact = false }) {
         </Stack>
       </Box>
 
-      {/* 节点代码透视条（点击图上任意模块实时联动） */}
+      {/* 节点代码透视条（点击图上任意模块实时联动，支持一键下钻到专题子图） */}
       {activeNode && (
         <Box
           data-testid="architecture-node-spotlight"
@@ -191,9 +273,39 @@ export default function ArchitectureCanvas({ topicId, compact = false }) {
               </Stack>
             )}
           </Stack>
-          <Typography variant="body2" sx={{ color: '#3C4043', lineHeight: 1.65 }}>
-            {pickText(activeNode.intent, locale)}
-          </Typography>
+
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={1.25}
+            sx={{ justifyContent: 'space-between', alignItems: { sm: 'flex-end' } }}
+          >
+            <Typography variant="body2" sx={{ color: '#3C4043', lineHeight: 1.65, flex: 1 }}>
+              {pickText(activeNode.intent, locale)}
+            </Typography>
+            {drillTarget && onNavigateTopic && (
+              <Button
+                size="small"
+                variant="contained"
+                disableElevation
+                endIcon={<ArrowForwardRounded sx={{ fontSize: 15 }} />}
+                onClick={() => onNavigateTopic(drillTarget.id)}
+                sx={{
+                  flexShrink: 0,
+                  borderRadius: 9999,
+                  px: 1.75,
+                  py: 0.45,
+                  fontSize: 12.5,
+                  textTransform: 'none',
+                  fontWeight: 500
+                }}
+              >
+                {t('architecture.drillInto', {
+                  badge: drillTarget.badge,
+                  title: pickText(drillTarget.shortTitle, locale)
+                })}
+              </Button>
+            )}
+          </Stack>
         </Box>
       )}
 

@@ -55,8 +55,14 @@ function AtlasNavigateButton({ topicId, onClose, label }) {
 export default function ArchitectureLensButton({ topic, label, size = 'small' }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
+  const [currentTopic, setCurrentTopic] = useState(topic);
   const meta = getArchitectureTopic(topic);
   const buttonLabel = label || t('architecture.lensButton');
+
+  const handleOpen = () => {
+    setCurrentTopic(topic);
+    setOpen(true);
+  };
 
   return (
     <>
@@ -65,7 +71,7 @@ export default function ArchitectureLensButton({ topic, label, size = 'small' })
           size={size}
           variant="outlined"
           startIcon={<SchemaOutlined sx={{ fontSize: 16 }} />}
-          onClick={() => setOpen(true)}
+          onClick={handleOpen}
           sx={{
             borderRadius: 9999,
             px: 1.5,
@@ -138,7 +144,7 @@ export default function ArchitectureLensButton({ topic, label, size = 'small' })
         </Stack>
 
         <DialogContent sx={{ px: { xs: 2, sm: 3 }, py: 2.5, bgcolor: googleTokens.canvas }}>
-          <ArchitectureCanvas topicId={topic} compact />
+          <ArchitectureCanvas topicId={currentTopic} compact onNavigateTopic={setCurrentTopic} />
         </DialogContent>
 
         <DialogActions
@@ -150,7 +156,7 @@ export default function ArchitectureLensButton({ topic, label, size = 'small' })
             bgcolor: '#FFFFFF'
           }}
         >
-          <SafeAtlasLink topicId={topic} onClose={() => setOpen(false)} />
+          <SafeAtlasLink topicId={currentTopic} onClose={() => setOpen(false)} />
           <Button variant="outlined" size="small" onClick={() => setOpen(false)}>
             {t('common.close')}
           </Button>

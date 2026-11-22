@@ -2,6 +2,7 @@
  * 架构图谱目录与节点元数据（中英双语）。
  * 所有类名与路径均对应本仓库真实实现，供学习者从架构图直达源码。
  */
+import { ARCHITECTURE_SUB_TOPICS } from './architectureSubCatalog';
 
 export const ARCHITECTURE_GROUPS = [
   {
@@ -115,7 +116,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Claims disjoint-write nodes concurrently, runs bounded critic-revision loops, broadcasts via SSE, and supports checkpoint recovery.'
         },
-        codeRefs: ['WorkflowScheduler.java', 'ReflectionCoordinator.java', 'RunStreamBroker.java']
+        codeRefs: ['WorkflowScheduler.java', 'ReflectionCoordinator.java', 'RunStreamBroker.java'],
+        drillTo: 'run-lifecycle'
       },
       agent: {
         label: { 'zh-CN': 'AgentScope 执行器', 'en-US': 'AgentScope Executor' },
@@ -131,7 +133,8 @@ export const ARCHITECTURE_TOPICS = [
           'AgentAssemblyPlanner.java',
           'AgentScopeExecutor.java',
           'PromptResourceLoader.java'
-        ]
+        ],
+        drillTo: 'agent-assembly'
       },
       gateway: {
         label: { 'zh-CN': 'Tool Gateway + Gate 5.5 + MCP', 'en-US': 'Tool Gateway + HITL + MCP' },
@@ -143,7 +146,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Routes built-in and external MCP tools through 6 security gates plus Gate 5.5 dynamic HITL approval (approve, edit+recheck, or reject).'
         },
-        codeRefs: ['ToolGateway.java', 'ToolApprovalService.java', 'McpAgentTool.java']
+        codeRefs: ['ToolGateway.java', 'ToolApprovalService.java', 'McpAgentTool.java'],
+        drillTo: 'tool-gateway'
       },
       model: {
         label: {
@@ -158,7 +162,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Wraps demo and AES-256 BYOK models with L0–L3 multi-tier context compaction, row-locked cost ledgers, and SSE token deltas.'
         },
-        codeRefs: ['ControlledModel.java', 'MultiTierContextCompactor.java', 'SecretCipher.java']
+        codeRefs: ['ControlledModel.java', 'MultiTierContextCompactor.java', 'SecretCipher.java'],
+        drillTo: 'model-byok'
       },
       storage: {
         label: { 'zh-CN': 'H2 (V10) + Git / Docker', 'en-US': 'H2 (V10) + Git / Docker' },
@@ -302,7 +307,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Spring Data JPA repositories wrapped in fine-grained stores, with 82 tables strictly versioned via Flyway V1–V6.'
         },
-        codeRefs: ['ArchitectureGuardTest.java', 'V6__task_locale.sql']
+        codeRefs: ['ArchitectureGuardTest.java', 'V6__task_locale.sql'],
+        drillTo: 'security-persistence'
       },
       'fe-shell': {
         label: { 'zh-CN': 'WorkbenchShell & 路由', 'en-US': 'WorkbenchShell & Router' },
@@ -446,7 +452,8 @@ export const ARCHITECTURE_TOPICS = [
           'WorkflowScheduler.java',
           'ReflectionCoordinator.java',
           'WorkflowExecutionService.java'
-        ]
+        ],
+        drillTo: 'parallel-dag'
       },
       handoff: {
         label: { 'zh-CN': '5. 交接校验与结算', 'en-US': '5. Handoff & Settlement' },
@@ -458,7 +465,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Verifies required outputs and handoff contracts; blocks with OUTPUT_MISSING so downstream never runs on unverified claims.'
         },
-        codeRefs: ['HandoffValidator.java', 'StructuredHandoffExtractor.java']
+        codeRefs: ['HandoffValidator.java', 'StructuredHandoffExtractor.java'],
+        drillTo: 'reflection-loop'
       },
       checkpoint: {
         label: { 'zh-CN': '6. 检查点恢复与交付', 'en-US': '6. Checkpoint & Delivery' },
@@ -585,7 +593,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Re-checks file scope against path traversal, then suspends HIGH-risk writes or MCP calls for human approval (approve, edit+recheck, or reject).'
         },
-        codeRefs: ['ToolGateway.java', 'ToolApprovalService.java', 'McpAgentTool.java']
+        codeRefs: ['ToolGateway.java', 'ToolApprovalService.java', 'McpAgentTool.java'],
+        drillTo: 'hitl-approval'
       },
       gate6: {
         label: { 'zh-CN': '门 6 · 受控执行与写入回执', 'en-US': 'Gate 6 · Execute & Receipt' },
@@ -597,7 +606,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Executes only when prior gates pass, recording normalized output, SHA-256 write receipts, and full glass-box trace.'
         },
-        codeRefs: ['ToolGateway.java', 'WorkspaceService.java']
+        codeRefs: ['ToolGateway.java', 'WorkspaceService.java'],
+        drillTo: 'mcp-governance'
       }
     }
   },
@@ -697,7 +707,8 @@ export const ARCHITECTURE_TOPICS = [
           'MemoryRetrievalService.java',
           'EpisodicMemoryExtractor.java',
           'AgentAssemblyPlanner.java'
-        ]
+        ],
+        drillTo: 'layered-memory'
       },
       snapshot: {
         label: { 'zh-CN': '冻结装配快照 (Assembly Snapshot)', 'en-US': 'Frozen Assembly Snapshot' },
@@ -911,7 +922,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Runs L0 token breakdown, L1 tool offloading, L2 sliding summary, and L3 hard guard before calling, while streaming SSE token deltas.'
         },
-        codeRefs: ['ControlledModel.java', 'MultiTierContextCompactor.java', 'ContextMeterBar.jsx']
+        codeRefs: ['ControlledModel.java', 'MultiTierContextCompactor.java', 'ContextMeterBar.jsx'],
+        drillTo: 'context-compaction'
       },
       ledger: {
         label: { 'zh-CN': '行锁预留 & 独立事务结算', 'en-US': 'Row-Lock Reserve & Settle' },
@@ -934,7 +946,8 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Persists SYSTEM / USER / ASSISTANT / TOOL turns, latency, and tokens for transparent prompt debugging.'
         },
-        codeRefs: ['LlmTracePanel.jsx']
+        codeRefs: ['LlmTracePanel.jsx'],
+        drillTo: 'sse-streaming'
       }
     }
   },
@@ -1059,8 +1072,22 @@ export const ARCHITECTURE_TOPICS = [
   }
 ];
 
+export const ALL_ARCHITECTURE_TOPICS = ARCHITECTURE_TOPICS.flatMap(topic => [
+  topic,
+  ...ARCHITECTURE_SUB_TOPICS.filter(sub => sub.parentId === topic.id)
+]);
+
+export function getChildTopics(parentId) {
+  return ARCHITECTURE_SUB_TOPICS.filter(sub => sub.parentId === parentId);
+}
+
+export function getParentTopic(topic) {
+  if (!topic?.parentId) return null;
+  return ARCHITECTURE_TOPICS.find(item => item.id === topic.parentId) ?? null;
+}
+
 export function getArchitectureTopic(topicId) {
-  return ARCHITECTURE_TOPICS.find(item => item.id === topicId) ?? ARCHITECTURE_TOPICS[0];
+  return ALL_ARCHITECTURE_TOPICS.find(item => item.id === topicId) ?? ARCHITECTURE_TOPICS[0];
 }
 
 export function pickText(value, locale) {

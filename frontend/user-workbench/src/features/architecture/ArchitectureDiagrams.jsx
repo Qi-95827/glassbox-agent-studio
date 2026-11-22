@@ -1,4 +1,8 @@
 import { Box } from '@mui/material';
+import ArchitectureSubDiagram from './ArchitectureSubDiagrams';
+import { ARCHITECTURE_SUB_TOPICS } from './architectureSubCatalog';
+
+const SUB_TOPIC_IDS = new Set(ARCHITECTURE_SUB_TOPICS.map(item => item.id));
 
 /**
  * 架构图谱纯 SVG 交互渲染引擎。
@@ -1434,9 +1438,20 @@ export default function ArchitectureDiagram({
           onSelect={onSelectNode}
         />
       );
-    default:
+    default: {
+      if (SUB_TOPIC_IDS.has(topicId)) {
+        return (
+          <ArchitectureSubDiagram
+            topicId={topicId}
+            locale={locale}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={onSelectNode}
+          />
+        );
+      }
       return (
         <SystemOverviewDiagram isEn={isEn} selectedId={selectedNodeId} onSelect={onSelectNode} />
       );
+    }
   }
 }

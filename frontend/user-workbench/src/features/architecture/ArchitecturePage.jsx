@@ -1,36 +1,63 @@
-import { Box, Button, Chip, Divider, List, ListItemButton, Stack, Typography } from '@mui/material';
+import { useEffect, useState } from 'react';
+import {
+  Box,
+  Button,
+  Chip,
+  Collapse,
+  Divider,
+  List,
+  ListItemButton,
+  Stack,
+  Typography
+} from '@mui/material';
 import ArrowBackRounded from '@mui/icons-material/ArrowBackRounded';
 import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded';
+import KeyboardArrowDownRounded from '@mui/icons-material/KeyboardArrowDownRounded';
+import KeyboardArrowRightRounded from '@mui/icons-material/KeyboardArrowRightRounded';
 import { useSearchParams } from 'react-router-dom';
 import { usePageChrome } from '../../layout/pageChrome';
 import ArchitectureCanvas from './ArchitectureCanvas';
 import {
+  ALL_ARCHITECTURE_TOPICS,
   ARCHITECTURE_GROUPS,
   ARCHITECTURE_TOPICS,
   getArchitectureTopic,
+  getChildTopics,
+  getParentTopic,
   pickText
 } from './architectureCatalog';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
 
 /**
- * 架构图谱独立页面：左侧分组目录 + 右侧单图聚焦画布。
+ * 架构图谱独立页面：左侧可折叠二级树 + 右侧单图聚焦与 C4 渐进式下钻画布。
  */
 export default function ArchitecturePage() {
   const { t, locale } = useI18n();
   const [params, setParams] = useSearchParams();
   const activeTopic = getArchitectureTopic(params.get('topic'));
-  const activeIndex = ARCHITECTURE_TOPICS.findIndex(item => item.id === activeTopic.id);
-  const prevTopic = activeIndex > 0 ? ARCHITECTURE_TOPICS[activeIndex - 1] : null;
+  const parentTopic = getParentTopic(activeTopic);
+  const activeBranchId = parentTopic ? parentTopic.id : activeTopic.id;
+
+  // 默认只展开当前正在浏览的主图分支，其余收起，保持极简呼吸感
+  const [expandedId, setExpandedId] = useState(activeBranchId);
+
+  useEffect(() => {
+    setExpandedId(activeBranchId);
+  }, [activeBranchId]);
+
+  const activeIndex = ALL_ARCHITECTURE_TOPICS.findIndex(item => item.id === activeTopic.id);
+  const prevTopic = activeIndex > 0 ? ALL_ARCHITECTURE_TOPICS[activeIndex - 1] : null;
   const nextTopic =
-    activeIndex >= 0 && activeIndex < ARCHITECTURE_TOPICS.length - 1
-      ? ARCHITECTURE_TOPICS[activeIndex + 1]
+    activeIndex >= 0 && activeIndex < ALL_ARCHITECTURE_TOPICS.length - 1
+      ? ALL_ARCHITECTURE_TOPICS[activeIndex + 1]
       : null;
 
   usePageChrome({
     trail: [
       { label: t('nav.workspace') },
       { label: t('nav.architecture') },
+      ...(parentTopic ? [{ label: pickText(parentTopic.shortTitle, locale) }] : []),
       { label: pickText(activeTopic.shortTitle, locale) }
     ]
   });
@@ -43,12 +70,12 @@ export default function ArchitecturePage() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', minHeight: 0, bgcolor: googleTokens.canvas }}>
-      {/* 左侧分组目录（桌面端） */}
+      {/* 左侧可折叠二级目录树（桌面端） */}
       <Box
         sx={{
           display: { xs: 'none', md: 'flex' },
           flexDirection: 'column',
-          width: 268,
+          width: 276,
           flexShrink: 0,
           bgcolor: '#FFFFFF',
           borderRight: `1px solid ${googleTokens.outline}`,
@@ -85,51 +112,135 @@ export default function ArchitecturePage() {
                 </Typography>
                 <List dense disablePadding>
                   {items.map(item => {
+                    const children = getChildTopics(item.id);
                     const selected = item.id === activeTopic.id;
+                    const branchExpanded = expandedId === item.id;
                     return (
-                      <ListItemButton
-                        key={item.id}
-                        selected={selected}
-                        onClick={() => selectTopic(item.id)}
-                        sx={{
-                          borderRadius: 2.5,
-                          mb: 0.4,
-                          px: 1.1,
-                          py: 0.85,
-                          alignItems: 'center',
-                          gap: 1,
-                          '&.Mui-selected': {
-                            bgcolor: '#E8F0FE',
-                            color: '#1967D2',
-                            '&:hover': { bgcolor: '#D2E3FC' }
-                          }
-                        }}
-                      >
-                        <Box
+                      <Box key={item.id} sx={{ mb: 0.4 }}>
+                        <ListItemButton
+                          selected={selected}
+                          onClick={() => {
+                            selectTopic(item.id);
+                            if (children.length > 0) setExpandedId(item.id);
+                          }}
                           sx={{
-                            minWidth: 24,
-                            height: 20,
-                            borderRadius: 1.5,
-                            display: 'grid',
-                            placeItems: 'center',
-                            fontSize: 10.5,
-                            fontWeight: 700,
-                            bgcolor: selected ? '#FFFFFF' : '#F1F3F4',
-                            color: selected ? '#1967D2' : '#5F6368'
+                            borderRadius: 2.5,
+                            px: 1.1,
+                            py: 0.85,
+                            alignItems: 'center',
+                            gap: 1,
+                            '&.Mui-selected': {
+                              bgcolor: '#E8F0FE',
+                              color: '#1967D2',
+                              '&:hover': { bgcolor: '#D2E3FC' }
+                            }
                           }}
                         >
-                          {item.badge}
-                        </Box>
-                        <Typography
-                          sx={{
-                            fontSize: 13,
-                            fontWeight: selected ? 600 : 500,
-                            lineHeight: 1.35
-                          }}
-                        >
-                          {pickText(item.shortTitle, locale)}
-                        </Typography>
-                      </ListItemButton>
+                          <Box
+                            sx={{
+                              minWidth: 24,
+                              height: 20,
+                              borderRadius: 1.5,
+                              display: 'grid',
+                              placeItems: 'center',
+                              fontSize: 10.5,
+                              fontWeight: 700,
+                              bgcolor: selected ? '#FFFFFF' : '#F1F3F4',
+                              color: selected ? '#1967D2' : '#5F6368'
+                            }}
+                          >
+                            {item.badge}
+                          </Box>
+                          <Typography
+                            sx={{
+                              flex: 1,
+                              minWidth: 0,
+                              fontSize: 13,
+                              fontWeight: selected ? 600 : 500,
+                              lineHeight: 1.35
+                            }}
+                          >
+                            {pickText(item.shortTitle, locale)}
+                          </Typography>
+                          {children.length > 0 && (
+                            <Stack
+                              direction="row"
+                              spacing={0.25}
+                              sx={{ alignItems: 'center', color: 'text.secondary' }}
+                              onClick={event => {
+                                event.stopPropagation();
+                                setExpandedId(prev => (prev === item.id ? null : item.id));
+                              }}
+                            >
+                              <Typography sx={{ fontSize: 10.5, fontWeight: 600 }}>
+                                {children.length}
+                              </Typography>
+                              {branchExpanded ? (
+                                <KeyboardArrowDownRounded sx={{ fontSize: 16 }} />
+                              ) : (
+                                <KeyboardArrowRightRounded sx={{ fontSize: 16 }} />
+                              )}
+                            </Stack>
+                          )}
+                        </ListItemButton>
+
+                        {children.length > 0 && (
+                          <Collapse in={branchExpanded} timeout="auto" unmountOnExit>
+                            <Box
+                              sx={{
+                                ml: 2.25,
+                                pl: 1.25,
+                                mt: 0.35,
+                                mb: 0.4,
+                                borderLeft: `1.5px solid ${googleTokens.outline}`
+                              }}
+                            >
+                              {children.map(sub => {
+                                const subSelected = sub.id === activeTopic.id;
+                                return (
+                                  <ListItemButton
+                                    key={sub.id}
+                                    selected={subSelected}
+                                    onClick={() => selectTopic(sub.id)}
+                                    sx={{
+                                      borderRadius: 2,
+                                      mb: 0.3,
+                                      px: 1,
+                                      py: 0.6,
+                                      gap: 0.75,
+                                      '&.Mui-selected': {
+                                        bgcolor: '#F3E8FD',
+                                        color: '#681DA8',
+                                        '&:hover': { bgcolor: '#E9D5FB' }
+                                      }
+                                    }}
+                                  >
+                                    <Typography
+                                      sx={{
+                                        fontSize: 10.5,
+                                        fontWeight: 700,
+                                        color: subSelected ? '#681DA8' : '#80868B',
+                                        minWidth: 26
+                                      }}
+                                    >
+                                      {sub.badge}
+                                    </Typography>
+                                    <Typography
+                                      sx={{
+                                        fontSize: 12.25,
+                                        fontWeight: subSelected ? 600 : 500,
+                                        lineHeight: 1.35
+                                      }}
+                                    >
+                                      {pickText(sub.shortTitle, locale)}
+                                    </Typography>
+                                  </ListItemButton>
+                                );
+                              })}
+                            </Box>
+                          </Collapse>
+                        )}
+                      </Box>
                     );
                   })}
                 </List>
@@ -153,7 +264,7 @@ export default function ArchitecturePage() {
               mb: 1.5
             }}
           >
-            {ARCHITECTURE_TOPICS.map(item => {
+            {ALL_ARCHITECTURE_TOPICS.map(item => {
               const selected = item.id === activeTopic.id;
               return (
                 <Chip
@@ -173,7 +284,7 @@ export default function ArchitecturePage() {
             })}
           </Stack>
 
-          <ArchitectureCanvas topicId={activeTopic.id} />
+          <ArchitectureCanvas topicId={activeTopic.id} onNavigateTopic={selectTopic} />
 
           <Divider sx={{ my: 3 }} />
 
@@ -198,7 +309,7 @@ export default function ArchitecturePage() {
             )}
 
             <Typography variant="caption" color="text.secondary">
-              {activeIndex + 1} / {ARCHITECTURE_TOPICS.length}
+              {activeIndex + 1} / {ALL_ARCHITECTURE_TOPICS.length}
             </Typography>
 
             {nextTopic ? (
