@@ -9,7 +9,9 @@ public enum ToolKind {
   /** 在授权的文件集合内搜索字面文本。 */
   WORKSPACE_SEARCH("搜索授权文件"),
   /** 写入用户授权的单个工作区文件。 */
-  WORKSPACE_WRITE("修改授权文件");
+  WORKSPACE_WRITE("修改授权文件"),
+  /** 外部 MCP 工具；名称由适配层使用命名空间暴露，执行仍经过 Tool Gateway。 */
+  MCP("MCP 外部工具");
 
   private final String recordName;
 

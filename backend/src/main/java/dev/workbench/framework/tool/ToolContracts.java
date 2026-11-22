@@ -15,7 +15,7 @@ public final class ToolContracts {
   public static ToolEffect effectFor(ToolKind kind) {
     return switch (kind) {
       case SIMULATED_INSPECTION, WORKSPACE_READ, WORKSPACE_SEARCH -> ToolEffect.READ_ONLY;
-      case WORKSPACE_WRITE -> ToolEffect.WRITE;
+      case WORKSPACE_WRITE, MCP -> ToolEffect.WRITE;
     };
   }
 
@@ -33,6 +33,7 @@ public final class ToolContracts {
         if (fileCount == 0) throw new IllegalArgumentException("文件工具需要授权文件。");
         yield fileCount == 1 ? SINGLE_FILE_VERSION : MULTI_FILE_VERSION;
       }
+      case MCP -> 1;
     };
   }
 }

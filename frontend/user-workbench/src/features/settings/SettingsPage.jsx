@@ -18,6 +18,7 @@ import { usePageChrome } from '../../layout/pageChrome';
 import { evaluationApi } from '../../api/evaluations';
 import CostPricePanel from '../workflows/CostPricePanel';
 import ModelConnectionPanel from './ModelConnectionPanel';
+import McpServerPanel from './McpServerPanel';
 import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
@@ -109,6 +110,8 @@ export default function SettingsPage() {
           </Box>
 
           <ModelConnectionPanel />
+
+          <McpServerPanel />
 
           <Box
             sx={{

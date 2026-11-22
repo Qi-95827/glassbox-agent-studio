@@ -59,6 +59,17 @@ public class AsyncConfiguration {
   public ThreadPoolTaskExecutor evaluationTaskExecutor() {
     return buildExecutor(2, 100, "evaluation-");
   }
+
+  @Bean(name = "mcpTaskExecutor")
+  public ThreadPoolTaskExecutor mcpTaskExecutor() {
+    return buildExecutor(2, 100, "mcp-");
+  }
+
+  @Bean(name = "mcpExecutor", destroyMethod = "")
+  public ExecutorService mcpExecutor(
+      @Qualifier("mcpTaskExecutor") ThreadPoolTaskExecutor executor) {
+    return executor.getThreadPoolExecutor();
+  }
   @Bean(name = "evaluationExecutor", destroyMethod = "")
   public ExecutorService evaluationExecutor(
       @Qualifier("evaluationTaskExecutor") ThreadPoolTaskExecutor executor) {

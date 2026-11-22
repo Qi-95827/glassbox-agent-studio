@@ -40,6 +40,12 @@ public class AgentScopeExecutor implements AgentExecutor {
   private final org.springframework.beans.factory.ObjectProvider<
           dev.workbench.framework.agent.assembly.MemoryAssemblyPort>
       memoryPorts;
+  private final org.springframework.beans.factory.ObjectProvider<
+          dev.workbench.infrastructure.mcp.McpToolProvider>
+      mcpProviders;
+  private final org.springframework.beans.factory.ObjectProvider<
+          dev.workbench.infrastructure.mcp.McpClientManager>
+      mcpClients;
 
   @org.springframework.beans.factory.annotation.Autowired
   public AgentScopeExecutor(
@@ -53,7 +59,13 @@ public class AgentScopeExecutor implements AgentExecutor {
       dev.workbench.control.MultiTierContextCompactor contextCompactor,
       org.springframework.beans.factory.ObjectProvider<
               dev.workbench.framework.agent.assembly.MemoryAssemblyPort>
-          memoryPorts) {
+          memoryPorts,
+      org.springframework.beans.factory.ObjectProvider<
+              dev.workbench.infrastructure.mcp.McpToolProvider>
+          mcpProviders,
+      org.springframework.beans.factory.ObjectProvider<
+              dev.workbench.infrastructure.mcp.McpClientManager>
+          mcpClients) {
     this.json = json;
     this.stateStore = stateStore;
     this.assemblyPlanner = assemblyPlanner;
@@ -63,6 +75,8 @@ public class AgentScopeExecutor implements AgentExecutor {
     this.skills = skills;
     this.contextCompactor = contextCompactor;
     this.memoryPorts = memoryPorts;
+    this.mcpProviders = mcpProviders;
+    this.mcpClients = mcpClients;
   }
 
   /** 兼容只装配执行必需依赖的独立验证；语言资源使用内置中文默认。 */
@@ -81,6 +95,8 @@ public class AgentScopeExecutor implements AgentExecutor {
         new dev.workbench.framework.agent.definition.AgentRoleRegistry(),
         new dev.workbench.framework.skill.SkillRegistry(),
         new dev.workbench.control.MultiTierContextCompactor(),
+        null,
+        null,
         null);
   }
 
@@ -159,6 +175,15 @@ public class AgentScopeExecutor implements AgentExecutor {
         assembly.privateTools().isEmpty()
             ? tools.assemble(assembly.toolVersions(), toolContext)
             : tools.assemblePrivate(assembly.privateTools(), toolContext);
+    var mcpProvider = mcpProviders == null ? null : mcpProviders.getIfAvailable();
+    var mcpManager = mcpClients == null ? null : mcpClients.getIfAvailable();
+    if (mcpProvider != null && mcpManager != null && request.context().runId() != null) {
+      for (var binding : mcpProvider.bindingsForRun(request.context().runId())) {
+        String name = binding.exposedName();
+        if (toolkit.getTool(name) == null)
+          toolkit.registerAgentTool(new McpAgentTool(binding, mcpManager, toolContext));
+      }
+    }
     var selectedModel = models.select(effectiveRequest);
     if (!(selectedModel.client().nativeClient() instanceof Model nativeModel))
       throw new IllegalStateException(
