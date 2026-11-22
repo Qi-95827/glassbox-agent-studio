@@ -297,13 +297,47 @@ export function modelLabel(value, fallback, locale) {
   );
 }
 
+const BUILTIN_STEP_EN_LABELS = {
+  需求与验收分析: 'Requirements & Acceptance Analysis',
+  约束与风险分析: 'Constraints & Risk Analysis',
+  汇总两份分析: 'Synthesize Dual Analysis',
+  '目标、范围与约束': 'Goals, Scope & Constraints',
+  缺失信息与风险: 'Missing Information & Risks',
+  形成需求说明: 'Draft Requirements Specification',
+  模块边界与依赖: 'Module Boundaries & Dependencies',
+  失败路径与数据变化: 'Failure Paths & Data Changes',
+  形成概要设计: 'Draft High-Level Design',
+  分析授权文件: 'Analyze Authorized Files',
+  核对授权读取证据: 'Verify Authorized Read Evidence',
+  汇总发现与证据: 'Synthesize Findings & Evidence',
+  汇总发现与建议: 'Synthesize Findings & Recommendations',
+  形成测试计划与证据说明: 'Draft Test Plan & Evidence Notes',
+  按授权修改: 'Implement Authorized Changes',
+  独立审查修改证据: 'Independent Review of Change Evidence',
+  '复现检查（固定容器）': 'Reproduction Check (Pinned Container)',
+  定位失败原因: 'Locate Root Cause',
+  按授权修复: 'Implement Authorized Fix',
+  '回归检查（固定容器）': 'Regression Check (Pinned Container)',
+  独立审查修复证据: 'Independent Review of Fix Evidence'
+};
+
+/** 将内置工作流模板的默认中文节点名按当前界面语言本地化。 */
+export function localizeNodeLabel(label, locale = getCurrentLocale()) {
+  if (!label) return label;
+  const english = String(locale || '')
+    .toLowerCase()
+    .startsWith('en');
+  if (!english) return label;
+  return BUILTIN_STEP_EN_LABELS[label] || label;
+}
+
 /** 节点显示名：历史计划可能没有 label/key，至少用角色名避免“未命名步骤”。 */
-export function nodeTitle(node, fallback, locale) {
-  return (
+export function nodeTitle(node, fallback, locale = getCurrentLocale()) {
+  const raw =
     node?.label ||
     node?.key ||
     planRoleLabel(node?.role, locale) ||
     fallback ||
-    localized('common', 'unnamedStep', '未命名步骤', locale)
-  );
+    localized('common', 'unnamedStep', '未命名步骤', locale);
+  return localizeNodeLabel(raw, locale);
 }

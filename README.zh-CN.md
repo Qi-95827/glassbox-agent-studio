@@ -153,12 +153,27 @@
 
 ## 5 分钟快速启动
 
-### 环境要求
+### 方式一：交给 AI Coding Agent 一键部署（推荐）
+
+如果你正在使用 **Antigravity、Claude Code、Cursor、Codex 或 Windsurf**，直接把下面这段提示词复制给你的 AI 助手，即可全自动完成环境检测、克隆、前端构建与本地启动：
+
+```text
+请帮我在本地克隆并部署开源项目 https://github.com/Qi-95827/glassbox-agent-studio ：
+1. 先检查本机环境是否具备 Java 21、Maven 3.9+、Node.js 20+ 与 Git（Docker Desktop 为可选项，仅测试模拟 Bug 容器验证时需要）；如缺少环境请明确提示我安装。
+2. 将仓库克隆到本地干净目录。
+3. 进入 `frontend/user-workbench/` 执行 `npm ci && npm run build` 构建前端。
+4. 回到仓库根目录（注意 `pom.xml` 在仓库根目录，不要在 `backend/` 下运行 mvn）执行 `mvn spring-boot:run` 启动服务。
+5. 等待服务在 `http://127.0.0.1:8088` 启动就绪后告诉我访问地址。全程不要写入或提交任何真实 API Key。
+```
+
+### 方式二：手动命令行启动
+
+#### 环境要求
 - **Java 21**、**Maven 3.9+**
 - **Node.js 20+**
 - **Git**（Docker Desktop 为**可选**，仅在体验「模拟 Bug 容器复现与回归验证」时需要）
 
-### 1. 克隆项目并构建前端
+#### 1. 克隆项目并构建前端
 ```powershell
 git clone https://github.com/Qi-95827/glassbox-agent-studio.git
 cd glassbox-agent-studio

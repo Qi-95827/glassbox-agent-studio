@@ -150,12 +150,27 @@ Because **Glass-Box Agent Studio** is built for **visual transparency and hands-
 
 ## Quick Start (5 Minutes)
 
-### Prerequisites
+### Option A: One-Click Setup with an AI Coding Agent (Recommended)
+
+Using **Claude Code, Cursor, Antigravity, Codex, or Windsurf**? Just copy and paste the prompt below to let your AI agent check prerequisites, build, and launch the workbench automatically:
+
+```text
+Please clone and set up the open-source project https://github.com/Qi-95827/glassbox-agent-studio locally:
+1. Verify prerequisites: Java 21, Maven 3.9+, Node.js 20+, and Git (Docker Desktop is optional and only needed for Simulated Bug container verification). Tell me clearly if any tool is missing.
+2. Clone the repository into a clean local folder.
+3. Build the frontend from `frontend/user-workbench/` using `npm ci && npm run build`.
+4. Start the Spring Boot backend from the repository root (where `pom.xml` lives, NOT inside `backend/`) using `mvn spring-boot:run`.
+5. Wait until Tomcat is listening on `http://127.0.0.1:8088`, confirm it is up, and give me the link to open in my browser. Do NOT create or commit any real API keys.
+```
+
+### Option B: Manual Setup
+
+#### Prerequisites
 - **Java 21** & **Maven 3.9+**
 - **Node.js 20+**
 - **Git** (Docker Desktop is *optional*, only needed for Simulated Bug container verification)
 
-### 1. Clone & Build Frontend
+#### 1. Clone & Build Frontend
 ```bash
 git clone https://github.com/Qi-95827/glassbox-agent-studio.git
 cd glassbox-agent-studio

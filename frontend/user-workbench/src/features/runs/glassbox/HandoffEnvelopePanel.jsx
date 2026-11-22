@@ -8,7 +8,7 @@ import HelpOutlineRounded from '@mui/icons-material/HelpOutlineRounded';
 import { TraceSection, Readout } from '../../../components/WorkbenchDialog';
 import EmptyState from '../../../components/EmptyState';
 import MarkdownView from '../../../components/MarkdownView';
-import { toolNameLabel } from '../../../constants/labels';
+import { localizeNodeLabel, toolNameLabel } from '../../../constants/labels';
 import { clock, shortId } from '../../../utils/format';
 import { googleTokens } from '../../../theme/googleTheme';
 import { useI18n } from '../../../i18n/I18nProvider';
@@ -43,8 +43,11 @@ function checkTone(status) {
 function EnvelopeCard({ record, direction, defaultExpandBody = false }) {
   const { t, locale } = useI18n();
   const [showRules, setShowRules] = useState(false);
-  const sender = record.senderNodeLabel || record.dependencyNodeLabel || t('glassbox.sender');
-  const receiver = record.receiverNodeLabel || t('glassbox.receiver');
+  const sender = localizeNodeLabel(
+    record.senderNodeLabel || record.dependencyNodeLabel || t('glassbox.sender'),
+    locale
+  );
+  const receiver = localizeNodeLabel(record.receiverNodeLabel || t('glassbox.receiver'), locale);
   const rules = handoffCheckRules(locale);
   const structured = record.structured;
   const summaryText = structured
