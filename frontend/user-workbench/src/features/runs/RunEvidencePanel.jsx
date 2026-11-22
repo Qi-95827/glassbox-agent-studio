@@ -17,7 +17,7 @@ const categories = {
 
 /** 运行证据：Agent 统计、装配技能、工具授权、会话与结构化交接。 */
 export default function RunEvidencePanel({ runId, detail }) {
-  const { t, locale } = useI18n();
+  const { t, locale, isEnglish } = useI18n();
   const evidence = useQuery({
     queryKey: ['run-evidence', runId],
     queryFn: async () => {
@@ -294,7 +294,12 @@ export default function RunEvidencePanel({ runId, detail }) {
           </Stack>
         </TraceSection>
 
-        <TraceSection title="参与实例" subtitle={`${detail?.agents?.length ?? 0} 个`}>
+        <TraceSection
+          title={isEnglish ? 'Participating instances' : '参与实例'}
+          subtitle={
+            isEnglish ? `${detail?.agents?.length ?? 0} total` : `${detail?.agents?.length ?? 0} 个`
+          }
+        >
           {(detail?.agents ?? []).map(agent => (
             <Stack
               key={agent.ID}

@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Alert, Box, Button, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { TraceSection, Readout } from '../../components/WorkbenchDialog';
 import { runsApi } from '../../api/runs';
+import { useI18n } from '../../i18n/I18nProvider';
 import { dateTime, shortId } from '../../utils/format';
 
 /** 执行页上的来源、授权、快照、费用和外部动作证据。 */
 export default function RunExtensionsPanel({ detail }) {
+  const { isEnglish } = useI18n();
   const [actions, setActions] = useState(detail?.externalActions ?? []);
   const [sources, setSources] = useState(detail?.sourceArtifacts ?? []);
   const [scopeState, setScopeState] = useState(detail?.workspaceScope);
@@ -63,34 +65,47 @@ export default function RunExtensionsPanel({ detail }) {
 
   return (
     <Stack spacing={1.5}>
-      {error && <Alert severity="warning">操作未通过：{error}</Alert>}
+      {error && (
+        <Alert severity="warning">
+          {isEnglish ? `Action rejected: ${error}` : `操作未通过：${error}`}
+        </Alert>
+      )}
       {route && (
         <Box>
           <Typography sx={{ fontSize: 14, fontWeight: 600, mb: 0.5 }}>
-            入口路由 · {route.RULE_CODE}
+            {isEnglish ? `Entry routing · ${route.RULE_CODE}` : `入口路由 · ${route.RULE_CODE}`}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            实际模板：{route.TEMPLATE_ID || '兼容流程'}；入口：{route.ROUTED_KIND}
+            {isEnglish
+              ? `Template: ${route.TEMPLATE_ID || 'Compatible flow'}; Entry: ${route.ROUTED_KIND}`
+              : `实际模板：${route.TEMPLATE_ID || '兼容流程'}；入口：${route.ROUTED_KIND}`}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            决策摘要：{route.DECISION_SHA256?.slice(0, 16)}…；路由只解释选择，不授予权限。
+            {isEnglish
+              ? `Decision digest: ${route.DECISION_SHA256?.slice(0, 16)}…; routing explains selection only and does not grant permissions.`
+              : `决策摘要：${route.DECISION_SHA256?.slice(0, 16)}…；路由只解释选择，不授予权限。`}
           </Typography>
         </Box>
       )}
 
       {(sources.length > 0 || scope) && (
-        <TraceSection title="授权范围与既有成果" defaultExpanded>
+        <TraceSection
+          title={isEnglish ? 'Authorized scope & upstream artifacts' : '授权范围与既有成果'}
+          defaultExpanded
+        >
           <Stack spacing={1}>
             {scope && (
               <>
                 <Typography variant="body2">
-                  目录：
-                  {(scopeState?.DIRECTORY_SCOPES || scope.DIRECTORY_SCOPES || []).join('、') ||
-                    '无'}
+                  {isEnglish ? 'Directories: ' : '目录：'}
+                  {(scopeState?.DIRECTORY_SCOPES || scope.DIRECTORY_SCOPES || []).join(
+                    isEnglish ? ', ' : '、'
+                  ) || (isEnglish ? 'None' : '无')}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  有效文件 {(scopeState?.EFFECTIVE_FILES || scope.EFFECTIVE_FILES)?.length ?? 0}{' '}
-                  个； 范围摘要 {scope.SCOPE_SHA256?.slice(0, 16)}…
+                  {isEnglish
+                    ? `${(scopeState?.EFFECTIVE_FILES || scope.EFFECTIVE_FILES)?.length ?? 0} effective files; scope digest ${scope.SCOPE_SHA256?.slice(0, 16)}…`
+                    : `有效文件 ${(scopeState?.EFFECTIVE_FILES || scope.EFFECTIVE_FILES)?.length ?? 0} 个；范围摘要 ${scope.SCOPE_SHA256?.slice(0, 16)}…`}
                 </Typography>
                 <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
                   {(scopeState?.DIRECTORY_SCOPES || []).map(directory => (
@@ -100,7 +115,7 @@ export default function RunExtensionsPanel({ detail }) {
                       variant="outlined"
                       onClick={() => revoke(directory)}
                     >
-                      撤销 {directory}
+                      {isEnglish ? `Revoke ${directory}` : `撤销 ${directory}`}
                     </Button>
                   ))}
                 </Stack>
@@ -113,18 +128,20 @@ export default function RunExtensionsPanel({ detail }) {
             ))}
             {sources.length === 0 && (
               <Typography variant="body2" color="text.secondary">
-                尚未接入既有成果。
+                {isEnglish ? 'No upstream artifacts attached yet.' : '尚未接入既有成果。'}
               </Typography>
             )}
             {detail.run.STATUS === 'PENDING' && (
               <Stack spacing={1} sx={{ pt: 0.5 }}>
                 <Typography variant="caption" color="text.secondary">
-                  接入既有成果（来源运行须已结算）
+                  {isEnglish
+                    ? 'Attach upstream artifact (source run must be settled)'
+                    : '接入既有成果（来源运行须已结算）'}
                 </Typography>
                 <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
                   <TextField
                     size="small"
-                    label="来源 runId"
+                    label={isEnglish ? 'Source runId' : '来源 runId'}
                     value={sourceRun}
                     onChange={event => setSourceRun(event.target.value)}
                     sx={{ width: 210 }}
@@ -133,31 +150,33 @@ export default function RunExtensionsPanel({ detail }) {
                   <TextField
                     select
                     size="small"
-                    label="成果类型"
+                    label={isEnglish ? 'Artifact kind' : '成果类型'}
                     value={sourceKind}
                     onChange={event => setSourceKind(event.target.value)}
                     sx={{ width: 140 }}
                   >
-                    <MenuItem value="DOCUMENT">文档</MenuItem>
-                    <MenuItem value="CODE_DIFF">代码差异</MenuItem>
-                    <MenuItem value="TEST_EVIDENCE">测试成果</MenuItem>
+                    <MenuItem value="DOCUMENT">{isEnglish ? 'Document' : '文档'}</MenuItem>
+                    <MenuItem value="CODE_DIFF">{isEnglish ? 'Code diff' : '代码差异'}</MenuItem>
+                    <MenuItem value="TEST_EVIDENCE">
+                      {isEnglish ? 'Test evidence' : '测试成果'}
+                    </MenuItem>
                   </TextField>
                   <TextField
                     size="small"
                     type="number"
-                    label="来源版本"
+                    label={isEnglish ? 'Source version' : '来源版本'}
                     value={sourceVersion}
                     onChange={event => setSourceVersion(event.target.value)}
-                    sx={{ width: 110 }}
+                    sx={{ width: 120 }}
                   />
 
                   <TextField
                     size="small"
                     type="number"
-                    label="目标版本"
+                    label={isEnglish ? 'Target version' : '目标版本'}
                     value={targetVersion}
                     onChange={event => setTargetVersion(event.target.value)}
-                    sx={{ width: 110 }}
+                    sx={{ width: 120 }}
                   />
 
                   <Button
@@ -165,7 +184,7 @@ export default function RunExtensionsPanel({ detail }) {
                     onClick={attachSource}
                     disabled={!sourceRun.trim() || sourceVersion === '' || targetVersion === ''}
                   >
-                    接入
+                    {isEnglish ? 'Attach' : '接入'}
                   </Button>
                 </Stack>
               </Stack>
@@ -174,54 +193,68 @@ export default function RunExtensionsPanel({ detail }) {
         </TraceSection>
       )}
 
-      <TraceSection title="周期快照与恢复租约">
+      <TraceSection
+        title={isEnglish ? 'Periodic snapshots & recovery lease' : '周期快照与恢复租约'}
+      >
         {snapshots.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            尚无周期快照。
+            {isEnglish ? 'No periodic snapshots recorded.' : '尚无周期快照。'}
           </Typography>
         ) : (
           snapshots.map(snapshot => (
             <Typography key={snapshot.ID} variant="body2">
-              事件位置 {snapshot.EVENT_SEQ} · 已完成 {snapshot.COMPLETED_NODES} 步 · 轮次{' '}
-              {snapshot.ROUNDS} · 工具 {snapshot.TOOLS}
+              {isEnglish
+                ? `Event seq ${snapshot.EVENT_SEQ} · ${snapshot.COMPLETED_NODES} steps done · ${snapshot.ROUNDS} rounds · ${snapshot.TOOLS} tools`
+                : `事件位置 ${snapshot.EVENT_SEQ} · 已完成 ${snapshot.COMPLETED_NODES} 步 · 轮次 ${snapshot.ROUNDS} · 工具 ${snapshot.TOOLS}`}
             </Typography>
           ))
         )}
         {lease && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-            恢复租约：{lease.STATUS} · {lease.OWNER} · 到期 {dateTime(lease.EXPIRES_AT)}
+            {isEnglish
+              ? `Recovery lease: ${lease.STATUS} · ${lease.OWNER} · expires ${dateTime(lease.EXPIRES_AT)}`
+              : `恢复租约：${lease.STATUS} · ${lease.OWNER} · 到期 ${dateTime(lease.EXPIRES_AT)}`}
           </Typography>
         )}
       </TraceSection>
 
-      <TraceSection title="费用估算与硬预算">
+      <TraceSection title={isEnglish ? 'Cost estimate & hard budget' : '费用估算与硬预算'}>
         {cost ? (
           <Stack spacing={0.5}>
             <Typography variant="body2">
-              上限 {cost.MAX_COST_MICROS} {cost.CURRENCY} · 已预留 {cost.RESERVED_MICROS} · 已结算{' '}
-              {cost.SETTLED_MICROS} · 未知调用 {cost.UNKNOWN_CALLS}
+              {isEnglish
+                ? `Cap ${cost.MAX_COST_MICROS} ${cost.CURRENCY} · Reserved ${cost.RESERVED_MICROS} · Settled ${cost.SETTLED_MICROS} · Unknown calls ${cost.UNKNOWN_CALLS}`
+                : `上限 ${cost.MAX_COST_MICROS} ${cost.CURRENCY} · 已预留 ${cost.RESERVED_MICROS} · 已结算 ${cost.SETTLED_MICROS} · 未知调用 ${cost.UNKNOWN_CALLS}`}
             </Typography>
             {cost.OVER_BUDGET && (
               <Typography variant="body2" color="warning.dark">
-                已超支 {cost.OVERAGE_MICROS}；账本保留实际结算，后续调用已停止。
+                {isEnglish
+                  ? `Over budget by ${cost.OVERAGE_MICROS}; ledger keeps actual settlements and stopped further calls.`
+                  : `已超支 ${cost.OVERAGE_MICROS}；账本保留实际结算，后续调用已停止。`}
               </Typography>
             )}
             <Typography variant="caption" color="text.secondary">
-              价格版本 {cost.PRICE_PROVIDER}/{cost.PRICE_MODEL} v{cost.PRICE_VERSION}
-              ；单次可计价上界 {cost.PER_CALL_UPPER_BOUND_MICROS}。未知用量不会被当作零。
+              {isEnglish
+                ? `Price version ${cost.PRICE_PROVIDER}/${cost.PRICE_MODEL} v${cost.PRICE_VERSION}; per-call upper bound ${cost.PER_CALL_UPPER_BOUND_MICROS}. Unknown usage is never treated as zero.`
+                : `价格版本 ${cost.PRICE_PROVIDER}/${cost.PRICE_MODEL} v${cost.PRICE_VERSION}；单次可计价上界 ${cost.PER_CALL_UPPER_BOUND_MICROS}。未知用量不会被当作零。`}
             </Typography>
           </Stack>
         ) : (
           <Typography variant="body2" color="text.secondary">
-            该运行没有绑定费用硬预算；当前只有 Token 和耗时统计。
+            {isEnglish
+              ? 'No hard cost budget bound to this run; token and latency metrics are still recorded.'
+              : '该运行没有绑定费用硬预算；当前只有 Token 和耗时统计。'}
           </Typography>
         )}
       </TraceSection>
 
-      <TraceSection title="外部动作对账" subtitle={`${actions.length} 条`}>
+      <TraceSection
+        title={isEnglish ? 'External action reconciliation' : '外部动作对账'}
+        subtitle={isEnglish ? `${actions.length} records` : `${actions.length} 条`}
+      >
         {actions.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            没有登记外部动作。
+            {isEnglish ? 'No external actions registered.' : '没有登记外部动作。'}
           </Typography>
         ) : (
           <Stack spacing={1.2}>
@@ -237,11 +270,16 @@ export default function RunExtensionsPanel({ detail }) {
                   </Typography>
                   <Chip size="small" label={action.status} variant="outlined" />
                   <Typography variant="caption" color="text.secondary">
-                    {action.target} · 目标版本 {action.targetVersion || '未记录'}
+                    {action.target} ·{' '}
+                    {isEnglish
+                      ? `Target version ${action.targetVersion || 'unrecorded'}`
+                      : `目标版本 ${action.targetVersion || '未记录'}`}
                   </Typography>
                 </Stack>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                  尝试 {action.attempts} 次；{action.resultEvidence || '尚无查询证据'}
+                  {isEnglish
+                    ? `${action.attempts} attempts; ${action.resultEvidence || 'no verification evidence yet'}`
+                    : `尝试 ${action.attempts} 次；${action.resultEvidence || '尚无查询证据'}`}
                 </Typography>
                 {(action.checks || []).map(check => (
                   <Typography
@@ -250,13 +288,14 @@ export default function RunExtensionsPanel({ detail }) {
                     color="text.secondary"
                     sx={{ display: 'block' }}
                   >
-                    核对 {check.outcome} · {check.evidence || '无证据'} ·{' '}
+                    {isEnglish ? 'Check' : '核对'} {check.outcome} ·{' '}
+                    {check.evidence || (isEnglish ? 'no evidence' : '无证据')} ·{' '}
                     {dateTime(check.checkedAt)}
                   </Typography>
                 ))}
                 {action.needsManualReview && action.status !== 'SUCCEEDED' && (
                   <Button size="small" onClick={() => reconcile(action.id)}>
-                    查询对账
+                    {isEnglish ? 'Reconcile' : '查询对账'}
                   </Button>
                 )}
               </Box>
@@ -264,15 +303,17 @@ export default function RunExtensionsPanel({ detail }) {
           </Stack>
         )}
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-          对账只查询并补记证据，不重放外部写入；未知结果保持待人工核对。
+          {isEnglish
+            ? 'Reconciliation only queries and appends evidence without replaying writes; unknown outcomes remain pending manual review.'
+            : '对账只查询并补记证据，不重放外部写入；未知结果保持待人工核对。'}
         </Typography>
       </TraceSection>
 
       {detail.externalActions?.length > 0 && (
-        <TraceSection title="外部动作原始记录" dense>
+        <TraceSection title={isEnglish ? 'Raw external action records' : '外部动作原始记录'} dense>
           <Readout mono>{JSON.stringify(detail.externalActions, null, 2)}</Readout>
           <Typography variant="caption" color="text.secondary">
-            运行 {shortId(detail.run.ID)}
+            {isEnglish ? `Run ${shortId(detail.run.ID)}` : `运行 ${shortId(detail.run.ID)}`}
           </Typography>
         </TraceSection>
       )}

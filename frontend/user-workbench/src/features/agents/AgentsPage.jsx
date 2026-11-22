@@ -42,7 +42,7 @@ function PanelHeading({ title, description, actions }) {
 }
 
 export default function AgentsPage() {
-  const { t } = useI18n();
+  const { t, isEnglish } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
   const { skills, tools, agents } = useMyAgents();
@@ -172,38 +172,66 @@ export default function AgentsPage() {
                       mb: 0.75
                     }}
                   >
-                    {row.responsibility || '未填写职责'}
+                    {row.responsibility ||
+                      (isEnglish ? 'No responsibility specified' : '未填写职责')}
                   </Typography>
                   <Stack direction="row" spacing={0.6} useFlexGap sx={{ flexWrap: 'wrap' }}>
                     <Chip
                       size="small"
-                      label={row.permissionRole === 'REVIEWER' ? '审查（无工具）' : '分析（只读）'}
+                      label={
+                        row.permissionRole === 'REVIEWER'
+                          ? isEnglish
+                            ? 'Review (no tools)'
+                            : '审查（无工具）'
+                          : isEnglish
+                            ? 'Analysis (read-only)'
+                            : '分析（只读）'
+                      }
                     />
 
                     <Chip
                       size="small"
                       label={
-                        row.modelStrategy === 'FIXED' ? `固定模型 ${row.modelMode}` : '继承任务模型'
+                        row.modelStrategy === 'FIXED'
+                          ? isEnglish
+                            ? `Fixed model ${row.modelMode}`
+                            : `固定模型 ${row.modelMode}`
+                          : isEnglish
+                            ? 'Inherit task model'
+                            : '继承任务模型'
                       }
                     />
 
                     {row.recommendable && (
                       <Chip
                         size="small"
-                        label="可推荐"
+                        label={isEnglish ? 'Recommendable' : '可推荐'}
                         sx={{ bgcolor: '#E6F4EA', color: '#137333' }}
                       />
                     )}
                     <Chip size="small" label={`Skill ${row.skills?.length ?? 0}`} />
-                    <Chip size="small" label={`工具 ${row.tools?.length ?? 0}`} />
+                    <Chip
+                      size="small"
+                      label={
+                        isEnglish
+                          ? `Tools ${row.tools?.length ?? 0}`
+                          : `工具 ${row.tools?.length ?? 0}`
+                      }
+                    />
                   </Stack>
                   <Typography
                     variant="caption"
                     color="text.secondary"
                     sx={{ display: 'block', mt: 0.9, fontFamily: googleTokens.mono }}
                   >
-                    定义引用：{row.definitionRef || '未发布'} · 摘要{' '}
-                    {row.specSha256 ? `${row.specSha256.slice(0, 12)}…` : '未发布'}
+                    {isEnglish ? 'Definition ref: ' : '定义引用：'}
+                    {row.definitionRef || (isEnglish ? 'Unpublished' : '未发布')} ·{' '}
+                    {isEnglish ? 'Digest ' : '摘要 '}
+                    {row.specSha256
+                      ? `${row.specSha256.slice(0, 12)}…`
+                      : isEnglish
+                        ? 'Unpublished'
+                        : '未发布'}
                   </Typography>
                 </ComponentCard>
               ))}
@@ -218,9 +246,13 @@ export default function AgentsPage() {
               >
                 <EmptyState
                   icon={<SmartToyOutlined />}
-                  title="还没有私有 Agent"
-                  description="可以先从设计思路生成草稿，再手动检查 Skill、工具与权限角色。"
-                  action={{ label: '新建 Agent', onClick: openNew }}
+                  title={isEnglish ? 'No private Agents yet' : '还没有私有 Agent'}
+                  description={
+                    isEnglish
+                      ? 'Generate a draft from your design idea first, then inspect skills, tools, and permission roles.'
+                      : '可以先从设计思路生成草稿，再手动检查 Skill、工具与权限角色。'
+                  }
+                  action={{ label: isEnglish ? 'New Agent' : '新建 Agent', onClick: openNew }}
                 />
               </Box>
             )}
@@ -230,8 +262,12 @@ export default function AgentsPage() {
         {tab === 'skills' && (
           <>
             <PanelHeading
-              title="私有 Skill"
-              description="Skill 是可复用的方法指导；发布后版本固定，只对当前账号可见。"
+              title={isEnglish ? 'Private Skills' : '私有 Skill'}
+              description={
+                isEnglish
+                  ? 'Skills are reusable method guidelines; versions are frozen after publishing and visible only to your account.'
+                  : 'Skill 是可复用的方法指导；发布后版本固定，只对当前账号可见。'
+              }
             />
 
             <Stack spacing={1.5}>
@@ -240,16 +276,27 @@ export default function AgentsPage() {
                   key={row.id}
                   row={row}
                   onEdit={() => setEditor({ type: 'skill', initial: row })}
-                  onPublish={() => act('skill', row.id, 'publish', 'Skill 已发布新版本')}
-                  onArchive={() => act('skill', row.id, 'archive', 'Skill 已归档')}
+                  onPublish={() =>
+                    act(
+                      'skill',
+                      row.id,
+                      'publish',
+                      isEnglish ? 'New Skill version published' : 'Skill 已发布新版本'
+                    )
+                  }
+                  onArchive={() =>
+                    act('skill', row.id, 'archive', isEnglish ? 'Skill archived' : 'Skill 已归档')
+                  }
                   onVersions={() => setVersions({ type: 'skill', id: row.id })}
                 >
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 0.75 }}>
-                    {row.summary || '未填写用途摘要'}
+                    {row.summary || (isEnglish ? 'No purpose summary' : '未填写用途摘要')}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                    输入约定：{row.inputContract || '未设置'}；预期输出：
-                    {row.outputContract || '未设置'}
+                    {isEnglish ? 'Input contract: ' : '输入约定：'}
+                    {row.inputContract || (isEnglish ? 'Not set' : '未设置')}
+                    {isEnglish ? '; Expected output: ' : '；预期输出：'}
+                    {row.outputContract || (isEnglish ? 'Not set' : '未设置')}
                   </Typography>
                   {row.contentMd && (
                     <Box
@@ -290,9 +337,13 @@ export default function AgentsPage() {
               >
                 <EmptyState
                   icon={<MenuBookOutlined />}
-                  title="还没有私有 Skill"
-                  description="把稳定的方法、检查清单或领域约定固化成可复用 Skill。"
-                  action={{ label: '新建 Skill', onClick: openNew }}
+                  title={isEnglish ? 'No private Skills yet' : '还没有私有 Skill'}
+                  description={
+                    isEnglish
+                      ? 'Codify repeatable methods, checklists, or domain conventions into reusable Skills.'
+                      : '把稳定的方法、检查清单或领域约定固化成可复用 Skill。'
+                  }
+                  action={{ label: isEnglish ? 'New Skill' : '新建 Skill', onClick: openNew }}
                 />
               </Box>
             )}
@@ -302,12 +353,18 @@ export default function AgentsPage() {
         {tab === 'tools' && (
           <>
             <PanelHeading
-              title="私有只读工具"
-              description="工具不能扩大文件权限；扩展名过滤会在任务授权范围内再次收窄。"
+              title={isEnglish ? 'Private read-only tools' : '私有只读工具'}
+              description={
+                isEnglish
+                  ? 'Tools cannot expand file permissions; extension filters narrow further within task authorization scopes.'
+                  : '工具不能扩大文件权限；扩展名过滤会在任务授权范围内再次收窄。'
+              }
             />
 
             <Alert severity="info" sx={{ mb: 2 }}>
-              首批私有工具只使用受信只读执行器（搜索 / 读取）；写入能力仍由系统受控工具完成。
+              {isEnglish
+                ? 'Initial private tools use trusted read-only executors (search / read); write capabilities remain managed by system-controlled tools.'
+                : '首批私有工具只使用受信只读执行器（搜索 / 读取）；写入能力仍由系统受控工具完成。'}
             </Alert>
             <Stack spacing={1.5}>
               {toolRows.map(row => (
@@ -315,12 +372,21 @@ export default function AgentsPage() {
                   key={row.id}
                   row={row}
                   onEdit={() => setEditor({ type: 'tool', initial: row })}
-                  onPublish={() => act('tool', row.id, 'publish', '工具已发布新版本')}
-                  onArchive={() => act('tool', row.id, 'archive', '工具已归档')}
+                  onPublish={() =>
+                    act(
+                      'tool',
+                      row.id,
+                      'publish',
+                      isEnglish ? 'New tool version published' : '工具已发布新版本'
+                    )
+                  }
+                  onArchive={() =>
+                    act('tool', row.id, 'archive', isEnglish ? 'Tool archived' : '工具已归档')
+                  }
                   onVersions={() => setVersions({ type: 'tool', id: row.id })}
                 >
                   <Typography variant="body2" color="text.secondary">
-                    {row.description || '未填写说明'}
+                    {row.description || (isEnglish ? 'No description' : '未填写说明')}
                   </Typography>
                   <Stack
                     direction="row"
@@ -338,7 +404,7 @@ export default function AgentsPage() {
                       />
                     ))}
                     {(row.fileExtensions ?? []).length === 0 && (
-                      <Chip size="small" label="扩展名未设置" />
+                      <Chip size="small" label={isEnglish ? 'No extensions set' : '扩展名未设置'} />
                     )}
                   </Stack>
                 </ComponentCard>
@@ -354,9 +420,13 @@ export default function AgentsPage() {
               >
                 <EmptyState
                   icon={<BuildOutlined />}
-                  title="还没有私有工具"
-                  description="创建只读搜索或读取工具，并在发布后绑定到私有 Agent。"
-                  action={{ label: '新建工具', onClick: openNew }}
+                  title={isEnglish ? 'No private tools yet' : '还没有私有工具'}
+                  description={
+                    isEnglish
+                      ? 'Create read-only search or read tools and bind them to private Agents after publishing.'
+                      : '创建只读搜索或读取工具，并在发布后绑定到私有 Agent。'
+                  }
+                  action={{ label: isEnglish ? 'New tool' : '新建工具', onClick: openNew }}
                 />
               </Box>
             )}
