@@ -18,6 +18,7 @@ import { usePageChrome } from '../../layout/pageChrome';
 import { evaluationApi } from '../../api/evaluations';
 import CostPricePanel from '../workflows/CostPricePanel';
 import ModelConnectionPanel from './ModelConnectionPanel';
+import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
 
@@ -48,12 +49,21 @@ export default function SettingsPage() {
   return (
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ maxWidth: 840, mx: 'auto', px: { xs: 2, sm: 3 }, py: { xs: 3, md: 4 } }}>
-        <Typography component="h1" sx={{ fontSize: 22, fontWeight: 500, mb: 0.5 }}>
-          {t('settings.title')}
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          {t('settings.description')}
-        </Typography>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1.5}
+          sx={{ mb: 3, justifyContent: 'space-between', alignItems: { sm: 'flex-start' } }}
+        >
+          <Box>
+            <Typography component="h1" sx={{ fontSize: 22, fontWeight: 500, mb: 0.5 }}>
+              {t('settings.title')}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {t('settings.description')}
+            </Typography>
+          </Box>
+          <ArchitectureLensButton topic="model-byok" />
+        </Stack>
 
         <Stack spacing={2}>
           <Box

@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Box, Tab, Tabs, Typography } from '@mui/material';
+import { Box, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { usePageChrome } from '../../layout/pageChrome';
 import EvaluationBatchesPanel from './EvaluationBatchesPanel';
 import DatasetManager from './DatasetManager';
 import MonitoringPanel from './MonitoringPanel';
+import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
 
@@ -18,14 +19,21 @@ export default function EvaluationsPage() {
   return (
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ maxWidth: 1180, mx: 'auto', px: { xs: 2, sm: 3 }, py: { xs: 3, md: 4 } }}>
-        <Box sx={{ mb: 2 }}>
-          <Typography component="h1" sx={{ fontSize: 22, fontWeight: 500 }}>
-            {t('evaluation.title')}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {t('evaluation.description')}
-          </Typography>
-        </Box>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1.5}
+          sx={{ mb: 2, justifyContent: 'space-between', alignItems: { sm: 'flex-start' } }}
+        >
+          <Box>
+            <Typography component="h1" sx={{ fontSize: 22, fontWeight: 500 }}>
+              {t('evaluation.title')}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {t('evaluation.description')}
+            </Typography>
+          </Box>
+          <ArchitectureLensButton topic="delivery-monitoring" />
+        </Stack>
 
         <Tabs
           value={tab}

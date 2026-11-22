@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { IconButton, Menu, MenuItem } from '@mui/material';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
+import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 
 const actionIcons = {
   PAUSE: <PauseRounded fontSize="small" />,
@@ -72,6 +73,7 @@ export default function RunHeader({
       </Tabs>
 
       <Stack direction="row" spacing={0.9} sx={{ flexShrink: 0, alignItems: 'center' }}>
+        <ArchitectureLensButton topic="run-lifecycle" />
         {diagnoseVisible && onDiagnose && (
           <Button
             size="small"

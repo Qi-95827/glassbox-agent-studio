@@ -15,6 +15,7 @@ import WorkspaceGitPanel from './WorkspaceGitPanel';
 import { googleTokens } from '../../theme/googleTheme';
 import { dateTime, shortId } from '../../utils/format';
 import { useI18n } from '../../i18n/I18nProvider';
+import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 
 export default function WorkspacesPage() {
   const { t, locale } = useI18n();
@@ -67,13 +68,16 @@ export default function WorkspacesPage() {
               {t('workspace.description')}
             </Typography>
           </Box>
-          <Button
-            variant="contained"
-            startIcon={<AddRounded />}
-            onClick={() => setCreateOpen(true)}
-          >
-            {t('workspace.new')}
-          </Button>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexShrink: 0 }}>
+            <ArchitectureLensButton topic="delivery-monitoring" />
+            <Button
+              variant="contained"
+              startIcon={<AddRounded />}
+              onClick={() => setCreateOpen(true)}
+            >
+              {t('workspace.new')}
+            </Button>
+          </Stack>
         </Stack>
 
         <Box

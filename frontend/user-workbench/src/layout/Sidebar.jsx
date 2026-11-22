@@ -14,6 +14,7 @@ import TimelineOutlined from '@mui/icons-material/TimelineOutlined';
 import SmartToyOutlined from '@mui/icons-material/SmartToyOutlined';
 import FolderOpenOutlined from '@mui/icons-material/FolderOpenOutlined';
 import FactCheckOutlined from '@mui/icons-material/FactCheckOutlined';
+import SchemaOutlined from '@mui/icons-material/SchemaOutlined';
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined';
 import MenuBookOutlined from '@mui/icons-material/MenuBookOutlined';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -46,6 +47,12 @@ const navigation = [
     path: '/evaluations',
     icon: FactCheckOutlined,
     match: value => value.startsWith('/evaluations')
+  },
+  {
+    key: 'nav.architecture',
+    path: '/architecture',
+    icon: SchemaOutlined,
+    match: value => value.startsWith('/architecture')
   }
 ];
 

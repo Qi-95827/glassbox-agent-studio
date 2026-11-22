@@ -30,6 +30,7 @@ import AssemblyBlueprintPanel from './glassbox/AssemblyBlueprintPanel';
 import LlmTracePanel from './glassbox/LlmTracePanel';
 import ToolGatewayPanel from './glassbox/ToolGatewayPanel';
 import HandoffEnvelopePanel from './glassbox/HandoffEnvelopePanel';
+import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 import { nodeTitle, planRoleLabel } from '../../constants/labels';
 import { clock, duration } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
@@ -278,11 +279,26 @@ export default function NodeGlassboxDialog({
               : ''}
           </Typography>
         </Box>
-        <Tooltip title={t('glassboxDialog.closeHint')}>
-          <IconButton onClick={onClose} size="small" aria-label={t('glassboxDialog.closeHint')}>
-            <CloseRounded fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexShrink: 0 }}>
+          <ArchitectureLensButton
+            topic={
+              current === 'gateway'
+                ? 'tool-gateway'
+                : current === 'handoff'
+                  ? 'handoff-envelope'
+                  : current === 'assembly'
+                    ? 'agent-assembly'
+                    : current === 'llm'
+                      ? 'model-byok'
+                      : 'run-lifecycle'
+            }
+          />
+          <Tooltip title={t('glassboxDialog.closeHint')}>
+            <IconButton onClick={onClose} size="small" aria-label={t('glassboxDialog.closeHint')}>
+              <CloseRounded fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
       </Stack>
 
       {/* 窄屏顶部 Tabs */}

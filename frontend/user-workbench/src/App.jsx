@@ -9,6 +9,7 @@ import RunDetailPage from './features/runs/RunDetailPage';
 import AgentsPage from './features/agents/AgentsPage';
 import WorkspacesPage from './features/workspaces/WorkspacesPage';
 import EvaluationsPage from './features/evaluation/EvaluationsPage';
+import ArchitecturePage from './features/architecture/ArchitecturePage';
 import SettingsPage from './features/settings/SettingsPage';
 import DocsPage from './features/docs/DocsPage';
 import { useI18n } from './i18n/I18nProvider';
@@ -45,6 +46,7 @@ export default function App() {
               <Route path="agents" element={<AgentsPage />} />
               <Route path="workspaces" element={<WorkspacesPage />} />
               <Route path="evaluations" element={<EvaluationsPage />} />
+              <Route path="architecture" element={<ArchitecturePage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="docs" element={<DocsPage />} />
               <Route path="workspace" element={<Navigate to="/" replace />} />
