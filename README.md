@@ -1,45 +1,176 @@
-# Agent Studio（可视化代码开发 Agent 工作台）
+<div align="center">
 
-> 一个面向开发者与 AI Agent 学习者的**“玻璃盒（Glass-Box）”多 Agent 可视化协作工作台**。
-> 不仅帮你完成需求整理、代码修改、测试验证与 Git 交付，更把多 Agent 如何被组装、如何规划、如何受控调用工具、如何交接证据与恢复的全过程透明呈现出来。
+# Glass-Box Agent Studio
+
+**An Open-Source Visual Multi-Agent Software Engineering Workbench & Learning Platform**
+
+**English** | [简体中文](./README.zh-CN.md)
+
+[![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/)
+[![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
+[![AgentScope](https://img.shields.io/badge/AgentScope-Java%202.0-blue.svg)](https://github.com/agentscope-ai/agentscope-java)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
+*Turn black-box AI agents into a transparent **Glass-Box**: watch how multi-agent DAGs are planned, assembled, sandboxed, handed off, verified, monitored, and delivered to Git.*
+
+</div>
 
 ---
 
-## 项目亮点
+## Why This Project Exists
 
-- **全流程可视化与可追溯**：通过 React Flow 执行流程图、逐步回放、节点详情抽屉与交付说明，查看每个节点的 Agent 装配快照、模型调用、工具调用、交接正文与检查证据。
-- **可控的多 Agent 协作**：支持通用、需求、设计、代码、测试与模拟 Bug 多入口；规划阶段先生成结构化候选 DAG，由人工确认节点、模型、读写范围与必需产物后再落库执行。
-- **严格的安全与权限边界**：工具调用统一经过 `ToolGateway` 鉴权、文件白名单校验、预算/重复调用限制与取消检查；代码修改在独立 Git worktree 中运行，提交/推送/合并需人工审批并绑定代码版本。
-- **私有组件与混合模型计价**：支持本地多账号隔离，用户可创建并发布私有 Skill、只读工具配置与私有 Agent（固定版本）；费用账本支持同一运行内混合模型按调用级价格版本冻结与硬预算结算。
-- **清晰的分层架构与架构守卫**：后端采用 Spring Boot 3.5 / Java 21 / Spring Data JPA / Flyway，由 ArchUnit 自动守卫零顶层包循环依赖与 AgentScope SDK 隔离；前端采用 React 19 + MUI（Google Material Design 3 风格）+ React Query + React Router。
+Most AI coding agent frameworks run as a **black box**: you type a prompt, text streams by, and you have no clear visibility into:
+- How each agent was assembled (role, skills, model, and which tools were **explicitly stripped away** by permission boundaries);
+- What exact `SYSTEM / USER / TOOL` messages and tool schemas were sent to the LLM;
+- Why a tool call was **allowed (`PASS`)** or **blocked (`DENY`)** by security gates;
+- How upstream agents pass evidence to downstream agents without hallucinating or leaking stale retries;
+- Why a run failed, slowed down, or spent unexpected tokens.
+
+**Glass-Box Agent Studio** solves this both as a **usable local engineering workbench** (with isolated Git worktrees, human-in-the-loop review, and Bring-Your-Own-Key LLM support) and as a **hands-on learning platform** where every internal mechanism of a production multi-agent system is exposed visually — and even runnable **without an API key** via built-in teaching playbooks.
 
 ---
 
-## 快速启动
+## Visual Tour & What Is Visualized
 
-环境要求：**Java 21**、**Maven 3.9+**、**Node.js 20+**、**Git**（运行模拟 Bug 容器验证时需本机 Docker Desktop）。
+| Module | What Is Visualized | Key Learning Value |
+| :--- | :--- | :--- |
+| **1. Workbench Home & Playbooks** | Multi-entry task composer, built-in key-free teaching playbooks, dual-layer status (`TaskStatus` × `RunStatus`) | Understand task routing, planning vs. execution, and human delivery lifecycle |
+| **2. Interactive DAG Execution Graph** | Live React Flow DAG, node status & duration, node breakpoints, lightweight inspector + full-screen Glass-Box modal | Learn DAG dependency scheduling, step-by-step breakpoints, and state projection |
+| **3. Structured Handoff Envelope** | Upstream conclusion, artifacts, decisions, open risks, **transparent `PASS/SKIP/DENY` validation rules** | Learn how to make multi-agent handoffs verifiable and audit-safe |
+| **4. Full LLM I/O Inspector** | Role-colored `SYSTEM / USER / ASSISTANT / TOOL` messages, injected tool JSON schemas, raw responses & `tool_calls` | Master real-world prompt assembly, context management, and tool-calling loops |
+| **5. Agent Assembly & ToolGateway** | Tool permission funnel (granted vs. stripped tools with lock reasons) + 6-gate `ToolGateway` inspection | Learn least-privilege sandboxing, path whitelisting, loop guards, and optimistic locks |
+| **6. Grafana-Style Monitoring & Diagnostics** | KPI gauges, time-series charts, status/model/tool donut charts, slow-node rankings, **5-step auto-diagnostics** | Learn LLM observability, latency/token attribution, and structured incident triage |
+| **7. BYOK Model & Key Manager** | Multi-provider OpenAI-compatible presets, AES-256-GCM encrypted key storage, masked display, connectivity probe | Learn secure credential management, SSRF protection, and multi-provider model routing |
 
-### 1. 构建前端
-```powershell
+---
+
+### 1. Workbench Home & Key-Free Teaching Playbooks
+
+Launch tasks across General, Requirements, Design, Code, Test, and Simulated Bug entries — or click one of the **3 key-free teaching playbooks** to explore multi-agent collaboration, breakpoint debugging, and `ToolGateway` security boundaries immediately.
+
+![Workbench Home](docs/images/readme/01-workbench-home.png)
+
+**What you can learn here:**
+- **Dual-Layer Status Modeling (`TaskStatus` vs. `RunStatus`)**: Why an immutable agent execution status (`RunStatus`, e.g., `BLOCKED` awaiting review) should be separated from the user-facing delivery lifecycle (`TaskStatus`, e.g., `DELIVERED` once committed in Git).
+- **Candidate Plan Review**: How to generate a structured DAG candidate first and let humans adjust nodes, models, file scopes, and budgets before execution.
+
+---
+
+### 2. Multi-Agent DAG Execution Flow & Breakpoint Debugging
+
+Every task executes as a live React Flow DAG. Clicking any node opens a clean right-side overview drawer with 4 direct entry cards into the wide-screen Glass-Box inspector modal, plus one-click **node breakpoints** to pause execution before a node starts.
+
+![DAG Execution Flow](docs/images/readme/02-dag-flow.png)
+
+**What you can learn here:**
+- **Event-Driven Projection**: How backend execution events (`ExecutionGraphProjector`) are projected into a deterministic frontend DAG without coupling UI state to raw engine internals.
+- **Controlled Execution**: How breakpoints, cancellation signals, and bounded waits work safely across concurrent workflow threads.
+
+---
+
+### 3. Structured Handoff Envelope & Transparent "Why PASS?" Rules
+
+Instead of opaque free-text relays between agents, every handoff is inspected as a structured envelope showing the upstream conclusion, involved files, key decisions, open risks, and platform verification checks — with an expandable **"How PASS is determined"** rule guide explaining **why** each check passed or skipped.
+
+![Glass-Box Handoff Envelope](docs/images/readme/03-glassbox-handoff.png)
+
+**What you can learn here:**
+- **Anti-Hallucination Handoffs**: How the platform enforces `DEPENDENCY_MATCH`, `ATTEMPT_IDENTITY`, `TOOL_EVIDENCE`, and `ACCEPTED_RECEIPT` so downstream agents only receive verified outputs from direct upstream DAG dependencies.
+- **Deterministic Extraction**: Inspect `StructuredHandoffExtractor.java` to see how structured summaries and evidence pointers are extracted from agent outputs.
+
+---
+
+### 4. Full LLM I/O Trace (Messages, Tool Schemas & `tool_calls`)
+
+See the exact masked payload sent to the LLM (`SYSTEM`, `USER`, `ASSISTANT`, `TOOL`), every injected tool JSON schema, token counts, latency, and the model's raw response or `tool_calls` decisions.
+
+![Glass-Box LLM I/O](docs/images/readme/04-glassbox-llm.png)
+
+**What you can learn here:**
+- **Externalized Prompt Engineering**: All agent personas, skills, planning prompts, and tool descriptions live as clean external resources under `backend/src/main/resources/prompts/`.
+- **Data Masking at Capture Time**: Inspect `ControlledModel.java` and `SensitiveDataMasker.java` to see how 64 KB truncation and secret redaction happen before payloads hit the database.
+
+---
+
+### 5. Agent Assembly Blueprint & Tool Permission Funnel
+
+Understand **how an agent is born** for each node: its role definition, bound skills, model, context sources, and the **Tool Permission Funnel** showing both granted tools and tools explicitly stripped by platform security boundaries (e.g., removing `WORKSPACE_WRITE` from read-only review nodes).
+
+![Glass-Box Assembly Blueprint](docs/images/readme/05-glassbox-assembly.png)
+
+**What you can learn here:**
+- **Least-Privilege Agent Sandboxing**: Even if a prompt tries to trick a reviewer agent into editing files, the write tool is never even injected into its runtime — and `ToolGateway` enforces 6 runtime security gates (`OWNERSHIP_AND_SCOPE`, `TOOL_REGISTRY_GRANT`, `BUDGET_AND_LOOP`, `PATH_WHITELIST`, `ARGUMENT_SCHEMA`, `CANCEL_STATE`).
+
+---
+
+### 6. Grafana-Style Fine-Grained Monitoring Dashboard
+
+Monitor every run, node, model, and tool across `24h / 7d / 30d / All` time windows with zero heavy charting dependencies (pure React SVG): KPI cards with success-rate gauge, stacked/line/area time-series charts, status/model/tool donut charts, slow-node rankings, and `ToolGateway` interception analytics.
+
+![Monitoring Dashboard](docs/images/readme/06-monitoring-dashboard.png)
+
+**What you can learn here:**
+- **Practical Agent Observability**: How to aggregate run latency (Avg / P95), token consumption, failure rates, and security gate denials from relational audit tables (`MonitoringDashboardService.java`).
+
+---
+
+### 7. 5-Step Automated Fault Diagnostics & Deep-Link Triage
+
+When a run fails, blocks, triggers security gates, or hits slow LLM calls, click **"One-Click Triage"** to open a guided 5-step diagnostics drawer (`Terminal Status → ToolGateway → LLM I/O → Handoff & Assembly → Workspace Git`). Every finding includes a direct action link that jumps straight to the target node and auto-opens the exact Glass-Box modal tab.
+
+![Run Diagnostics Drawer](docs/images/readme/07-diagnostics.png)
+
+**What you can learn here:**
+- **Root-Cause Triage Automation**: Inspect `RunDiagnosticsService.java` to learn how to synthesize multi-table execution evidence into actionable engineering diagnostics.
+
+---
+
+### 8. BYOK (Bring Your Own Key) Model & Encrypted Credential Management
+
+Configure your own API keys directly in **Settings → Models & API Keys (BYOK)** with built-in presets for **DeepSeek, OpenAI, Qwen (DashScope), Zhipu GLM, SiliconFlow, and any OpenAI-compatible endpoint**. Test connectivity in one click and optionally set reference pricing for local budget estimation.
+
+![BYOK Settings](docs/images/readme/08-byok-settings.png)
+
+**What you can learn here:**
+- **Production-Grade Secret Hygiene**: `SecretCipher.java` encrypts API keys with **AES-256-GCM** (random 12-byte IV), never returns plaintext keys to the frontend (masked as `sk-****xxxx`), validates Base URLs against SSRF, and enforces per-user ownership isolation.
+
+---
+
+## Quick Start (5 Minutes)
+
+### Prerequisites
+- **Java 21** & **Maven 3.9+**
+- **Node.js 20+**
+- **Git** (Docker Desktop is *optional*, only needed for Simulated Bug container verification)
+
+### 1. Clone & Build Frontend
+```bash
+git clone https://github.com/Qi-95827/glassbox-agent-studio.git
+cd glassbox-agent-studio
+
 cd frontend/user-workbench
 npm ci
 npm run build
 cd ../..
 ```
 
-### 2. 启动后端服务
-```powershell
+### 2. Start the Backend Server
+```bash
 mvn spring-boot:run
 ```
 
-启动后访问：`http://127.0.0.1:8088`（首次打开时按页面引导初始化本地管理员账号；默认内置模拟模型，无需配置 API Key 即可体验完整多 Agent 协作与交接流程）。
+Open **http://127.0.0.1:8088** in your browser:
+1. Follow the on-screen prompt to initialize your local administrator account.
+2. Try any of the **3 key-free teaching playbooks** immediately with the built-in `mock` model.
+3. To use real LLMs, open **Settings → Models & API Keys (BYOK)**, choose a provider (e.g. DeepSeek / OpenAI / Qwen), paste your own API key, and click **Test Connectivity**.
 
-### 3. 运行测试
-```powershell
-# 后端全量测试（含 ArchUnit 架构守卫）
+### 3. Run Full Verification Suite
+```bash
+# Backend unit, integration, Flyway migration & ArchUnit architecture guard tests
 mvn test
 
-# 前端代码规范、单元测试与构建
+# Frontend format, lint, unit tests & production build
 cd frontend/user-workbench
 npm run format:check
 npm run lint
@@ -49,42 +180,42 @@ npm run build
 
 ---
 
-## 接入真实模型（DeepSeek Flash）
+## Architecture Overview
 
-将 API Key 粘贴到 `config/deepseek-api-key.txt`（仅一行密钥，无需引号，文件已加入 `.gitignore`），无需重启即可在工作台选择「DeepSeek Flash（真实调用）」。
-
-> 提示：使用真实模型时，任务目标、工具描述、授权文件内容与相关测试输出会发送给模型提供方并产生费用；可结合「费用价格与硬预算」功能控制上限。
-
----
-
-## 技术架构概览
+Strict layered architecture automatically enforced by **ArchUnit** (`ArchitectureGuardTest`): zero top-level package cycles, pure `domain` & `framework` layers, and strict isolation of `io.agentscope` SDK calls to `infrastructure` / `app`.
 
 ```text
-frontend/user-workbench/   React 19 · Vite · MUI (Google M3) · React Flow · React Query · React Router
+frontend/user-workbench/   React 19 · Vite · MUI (M3) · React Flow · React Query · React Router
 backend/src/main/java/
-  dev.workbench.domain          纯领域枚举、值对象与反序列化器（零持久化/Web 依赖）
-  dev.workbench.framework       纯契约与无状态引擎内核（零业务/SDK 依赖）
-  dev.workbench.infrastructure  AgentScope Java 2.0.4 与外部模型适配层
-  dev.workbench.persistence     JPA Entity、Repository 与数据迁移
-  dev.workbench.store           细粒度任务、运行状态、装配与证据存储服务
-  dev.workbench.planning        想法整理、路由、候选计划生成与校验
-  dev.workbench.orchestration   运行生命周期、DAG 调度、控制命令与交接协调
-  dev.workbench.delivery        执行图投影、节点详情投影与交付聚合
-  dev.workbench.workspace       授权文件读写搜索与 Git worktree 交付
-  dev.workbench.privateagent    私有 Agent / Skill / Tool 配置与版本管理
-  dev.workbench.bug             模拟 Bug 分诊、Docker 容器复现与回归闭环
-  dev.workbench.evaluation      版本化评测套件、数据集与批次对照
-  dev.workbench.observability   游标事件流、指标与监控告警
-backend/src/main/resources/db/migration/
-  V1__baseline.sql ~ V3__*.sql  Flyway 版本化数据库迁移（默认本机 H2 文件库）
+  dev.workbench.domain          Pure domain enums & value objects (zero persistence/web deps)
+  dev.workbench.framework       Pure contracts, ToolGateway, SecretCipher & trace extractors
+  dev.workbench.infrastructure  AgentScope Java 2.0.4 & OpenAI-compatible model adapters
+  dev.workbench.modelconnection BYOK encrypted model connections, probing & usage estimation
+  dev.workbench.persistence     JPA entities, repositories & Flyway V1~V5 migrations (H2)
+  dev.workbench.planning        Idea drafting, entry routing, candidate DAG generation & validation
+  dev.workbench.orchestration   Run lifecycle, DAG scheduler, breakpoints & handoff coordination
+  dev.workbench.delivery        Execution graph projector, node detail & delivery aggregation
+  dev.workbench.workspace       Authorized file sandbox & Git worktree review/commit/merge
+  dev.workbench.privateagent    Versioned private Agents, Skills & read-only Tool configs
+  dev.workbench.bug             Simulated Bug triage & Docker container regression verification
+  dev.workbench.evaluation      Versioned evaluation suites, datasets & batch comparison
+  dev.workbench.observability   Cursor event stream, Grafana-style dashboard & 5-step diagnostics
+backend/src/main/resources/
+  prompts/                      Externalized agent, skill, planning prompts & tool contracts
+  db/migration/                 Flyway versioned migrations (V1 ~ V5)
 ```
 
 ---
 
-## 文档导航
+## Documentation
 
-- **[docs/README.md](docs/README.md)**：完整文档目录与归档索引
-- **[项目总览：产品需求与技术架构](docs/项目总览_产品需求与技术架构.md)**：当前版本能力范围、数据模型与验收基线
-- **[玻璃盒多 Agent 全链路可视化概要设计](docs/概要设计/玻璃盒多Agent全链路可视化_概要设计.md)**：面向开源教学的全链路透明展示设计（含 UI 原型图与网关透视）
-- **[代码开发规范](docs/开发规范/代码开发规范.md)**：工程分层、JPA 持久化与安全约定
-- **[迭代计划与扩展方向](docs/迭代计划/1.1及以后_扩展方向.md)**：DAG 并行调度、通用测试沙箱、MySQL 适配等后续路线
+- [Documentation Index (Chinese)](docs/README.md)
+- [Product Requirements & Technical Architecture](docs/项目总览_产品需求与技术架构.md)
+- [Glass-Box Multi-Agent Full-Link Visualization Design](docs/概要设计/玻璃盒多Agent全链路可视化_概要设计.md)
+- [Engineering & Security Coding Standards](docs/开发规范/代码开发规范.md)
+
+---
+
+## License
+
+This project is licensed under the [MIT License](./LICENSE).
