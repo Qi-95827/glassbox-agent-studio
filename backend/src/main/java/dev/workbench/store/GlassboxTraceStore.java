@@ -3,6 +3,7 @@ package dev.workbench.store;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.framework.context.ContextBreakdown;
 import dev.workbench.framework.trace.GlassboxModels.GatewayCheck;
 import dev.workbench.framework.trace.GlassboxModels.ModelCallPayload;
 import dev.workbench.framework.trace.GlassboxModels.PromptMessage;
@@ -77,6 +78,8 @@ public class GlassboxTraceStore {
             respContent.text(),
             respTools.text(),
             truncated,
+            payload.context() == null ? null : writeJson(payload.context()),
+            payload.context() == null ? null : payload.context().appliedTier().name(),
             Instant.now().toString()));
   }
 
@@ -92,7 +95,8 @@ public class GlassboxTraceStore {
               row.getResponseContent(),
               readList(
                   row.getResponseToolCallsJson(), new TypeReference<List<ToolCallDecision>>() {}),
-              row.isTruncated()));
+              row.isTruncated(),
+              readContext(row.getContextBreakdownJson())));
     }
     return result;
   }
@@ -196,6 +200,15 @@ public class GlassboxTraceStore {
       return parsed == null ? List.of() : parsed;
     } catch (JsonProcessingException e) {
       return List.of();
+    }
+  }
+
+  private ContextBreakdown readContext(String raw) {
+    if (raw == null || raw.isBlank()) return null;
+    try {
+      return json.readValue(raw, ContextBreakdown.class);
+    } catch (JsonProcessingException e) {
+      return null;
     }
   }
 }

@@ -350,6 +350,7 @@ export default function RunDetailPage() {
               <RunFlowGraph
                 nodes={view.nodes ?? []}
                 edges={view.edges ?? []}
+                revisionEdges={view.revisionEdges ?? []}
                 runId={runId}
                 selectedId={selectedId}
                 selectedEdgeId={

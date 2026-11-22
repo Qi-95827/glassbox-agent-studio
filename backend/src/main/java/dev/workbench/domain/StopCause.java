@@ -30,6 +30,8 @@ public enum StopCause {
   VALIDATION_MISSING(RunStatus.BLOCKED),
   /** 执行已完成，正常等待用户核对交付物或验收条件。 */
   USER_REVIEW(RunStatus.BLOCKED),
+  /** 有界反思达到上限，自动循环停止并等待人工审核。 */
+  HUMAN_REVIEW_REQUIRED(RunStatus.BLOCKED),
   RECOVERY_PRECONDITION_FAILED(RunStatus.FAILED),
   UNCLASSIFIED_FAILURE(RunStatus.FAILED);
 

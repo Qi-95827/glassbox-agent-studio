@@ -196,6 +196,32 @@ private static final String NO_BLOCKING_EDGE =
     settleStatus(runId, PlanNodeStatus.PENDING, PlanNodeStatus.SKIPPED, time);
   }
 
+  /**
+   * 反思触发：同一事务把目标与审查节点退回待执行，保留历史尝试与证据。
+   *
+   * <p>只允许两个节点都处于已完成状态时重置，避免迟到线程覆盖新状态。
+   */
+  @Transactional
+  public boolean resetPairForRevision(
+      String runId, String reviewerNodeId, String targetNodeId, String time) {
+    int changed =
+        sessions
+            .createQuery(
+                """
+                update PlanNodeEntity n set n.status = :pending, n.agentId = null,
+                  n.startedAt = null, n.finishedAt = null
+                where n.runId = :runId and n.id in (:reviewer, :target)
+                  and n.status = :completed
+                """)
+            .setParameter("runId", runId)
+            .setParameter("reviewer", reviewerNodeId)
+            .setParameter("target", targetNodeId)
+            .setParameter("pending", PlanNodeStatus.PENDING)
+            .setParameter("completed", PlanNodeStatus.COMPLETED)
+            .executeUpdate();
+    return changed == 2;
+  }
+
   private void settleStatus(
       String runId, PlanNodeStatus current, PlanNodeStatus next, String time) {
     sessions

@@ -17,9 +17,11 @@ import dev.workbench.framework.workflow.plan.*;
 import dev.workbench.persistence.entity.PlanNodeAgentBindingEntity;
 import dev.workbench.persistence.entity.PlanNodeEntity;
 import dev.workbench.persistence.entity.PlanNodeSpecEntity;
+import dev.workbench.persistence.entity.PlanRevisionEdgeEntity;
 import dev.workbench.persistence.repository.PlanGraphRepository;
 import dev.workbench.persistence.repository.PlanNodeAgentBindingRepository;
 import dev.workbench.persistence.repository.PlanNodeSpecRepository;
+import dev.workbench.persistence.repository.PlanRevisionEdgeRepository;
 import dev.workbench.persistence.repository.PlanStateRepository;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -44,6 +46,7 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
   private final PlanGraphRepository graphStore;
   private final PlanNodeSpecRepository specStore;
   private final PlanNodeAgentBindingRepository bindings;
+  private final PlanRevisionEdgeRepository revisionEdgeStore;
   private final ObjectMapper json;
 
   @Autowired
@@ -55,6 +58,7 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
       PlanGraphRepository graphStore,
       PlanNodeSpecRepository specStore,
       PlanNodeAgentBindingRepository bindings,
+      PlanRevisionEdgeRepository revisionEdgeStore,
       ObjectMapper json) {
     this.states = states;
     this.factory = factory;
@@ -63,10 +67,11 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
     this.graphStore = java.util.Objects.requireNonNull(graphStore, "计划存储不能为空");
     this.specStore = java.util.Objects.requireNonNull(specStore, "节点规格存储不能为空");
     this.bindings = bindings;
+    this.revisionEdgeStore = revisionEdgeStore;
     this.json = java.util.Objects.requireNonNull(json, "计划 JSON 处理器不能为空");
   }
 
-  /** 兼容旧单元验证：只有内置定义，没有节点 Agent 绑定存储。 */
+  /** 兼容旧单元验证：只有内置定义，没有节点 Agent 绑定与反思回边存储。 */
   public PlanService(
       PlanStateRepository states,
       PlanFactory factory,
@@ -82,6 +87,7 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
         checks,
         graphStore,
         specStore,
+        null,
         null,
         json);
   }
@@ -280,13 +286,20 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
     for (var node : candidatePlan.nodes())
       for (String dependency : node.dependsOn())
         graphStore.saveEdge(runId, ids.get(node.key()), ids.get(dependency));
+    persistedRevisionEdges(runId, ids, candidatePlan.revisionEdges(), time);
     graphStore.flush();
     var nodes = find(runId);
     if (scope.allowsWrite()) requireIndependentReview(nodes);
     graphStore.updateGraphSha256(
         versionId,
         graphFingerprint(
-            nodes, scope, authorization, 2, specsByNode(runId), bindingsByNode(runId)));
+            nodes,
+            scope,
+            authorization,
+            2,
+            specsByNode(runId),
+            bindingsByNode(runId),
+            revisionEdges(runId)));
     graphStore.flush();
   }
 
@@ -320,6 +333,106 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
             components,
             time));
   }
+
+  /** 把候选声明的反思回边落库；节点键通过同一物化映射转成持久化节点标识。 */
+  private void persistedRevisionEdges(
+      String runId,
+      Map<String, String> ids,
+      List<RevisionEdge> edges,
+      String time) {
+    if (revisionEdgeStore == null || edges.isEmpty()) return;
+    for (var edge : edges) {
+      String reviewerId = ids.get(edge.fromReviewerNodeKey());
+      String targetId = ids.get(edge.toTargetNodeKey());
+      if (reviewerId == null || targetId == null)
+        throw new IllegalArgumentException("反思回边引用了未物化的计划节点。");
+      revisionEdgeStore.save(
+          new PlanRevisionEdgeEntity(
+              UUID.randomUUID().toString(),
+              runId,
+              reviewerId,
+              targetId,
+              edge.maxRevisions(),
+              0,
+              null,
+              time,
+              time));
+    }
+  }
+
+  /** 运行中持久化的反思回边；历史计划没有记录时返回空。 */
+  public List<RevisionEdgeState> revisionEdges(String runId) {
+    if (revisionEdgeStore == null) return List.of();
+    return revisionEdgeStore.findByRunIdOrderByReviewerNodeIdAsc(runId).stream()
+        .map(
+            row ->
+                new RevisionEdgeState(
+                    UUID.fromString(row.getReviewerNodeId()),
+                    UUID.fromString(row.getTargetNodeId()),
+                    row.getMaxRevisions(),
+                    row.getRevisionCount(),
+                    row.getLastVerdictJson()))
+        .toList();
+  }
+
+  public RevisionEdgeState revisionEdgeForReviewer(String runId, UUID reviewerNodeId) {
+    return revisionEdges(runId).stream()
+        .filter(edge -> edge.reviewerNodeId().equals(reviewerNodeId))
+        .findFirst()
+        .orElse(null);
+  }
+
+  /** 反思重试不扩大常规尝试上限，但为目标与审查节点各自额外开放 maxRevisions 次。 */
+  public boolean allowsReflectionAttempt(String runId, UUID nodeId, int attemptNumber) {
+    var plan = workflowPlan(runId);
+    if (plan == null || attemptNumber <= plan.maxAttempts()) return true;
+    int extra =
+        revisionEdges(runId).stream()
+            .filter(edge -> edge.reviewerNodeId().equals(nodeId) || edge.targetNodeId().equals(nodeId))
+            .mapToInt(RevisionEdgeState::maxRevisions)
+            .sum();
+    return attemptNumber <= plan.maxAttempts() + extra;
+  }
+
+  /** 节点当前反思轮次：目标与审查节点都取关联回边的已触发次数。 */
+  public int revisionIndexFor(String runId, UUID nodeId) {
+    return revisionEdges(runId).stream()
+        .filter(edge -> edge.reviewerNodeId().equals(nodeId) || edge.targetNodeId().equals(nodeId))
+        .mapToInt(RevisionEdgeState::revisionCount)
+        .max()
+        .orElse(0);
+  }
+
+  /**
+   * 触发一次反思：目标与审查节点回到待执行，回边计数加一并保存本轮评审结论。
+   *
+   * <p>调用方必须与审查节点结算处于同一事务；下游节点永远不会在反思完成前看到审查完成状态。
+   */
+  public void triggerRevision(
+      String runId, UUID reviewerNodeId, UUID targetNodeId, String verdictJson, String time) {
+    if (revisionEdgeStore == null) throw new IllegalStateException("反思回边存储不可用。");
+    var edge =
+        revisionEdgeStore
+            .findByRunIdAndReviewerNodeId(runId, reviewerNodeId.toString())
+            .orElseThrow(() -> new IllegalStateException("审查节点没有声明反思回边。"));
+    if (!edge.getTargetNodeId().equals(targetNodeId.toString()))
+      throw new IllegalStateException("反思回边目标与当前审查节点不一致。");
+    if (edge.getRevisionCount() >= edge.getMaxRevisions())
+      throw new IllegalStateException("反思次数已经达到上限。");
+    if (!states.resetPairForRevision(
+        runId, reviewerNodeId.toString(), targetNodeId.toString(), time))
+      throw new IllegalStateException("反思节点没有可重置的已完成状态。");
+    edge.trigger(verdictJson, time);
+    revisionEdgeStore.save(edge);
+  }
+
+  /** 回边状态：节点标识、上限与最近一次结构化评审。 */
+  public record RevisionEdgeState(
+      UUID reviewerNodeId,
+      UUID targetNodeId,
+      int maxRevisions,
+      int revisionCount,
+      String lastVerdictJson) {}
 
   private Map<UUID, String> bindingsByNode(String runId) {
     if (bindings == null) return Map.of();
@@ -417,8 +530,14 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
 
   /** 服务端重新计算调整后的图摘要，并继续执行写作节点的独立审查约束。 */
   public String adjustedGraphFingerprint(WorkflowPlan plan, List<PlanNode> nodes) {
+    return adjustedGraphFingerprint(plan, nodes, List.of());
+  }
+
+  public String adjustedGraphFingerprint(
+      WorkflowPlan plan, List<PlanNode> nodes, List<RevisionEdgeState> edges) {
     if (plan.scope().allowsWrite()) requireIndependentReview(nodes);
-    return graphFingerprint(nodes, plan.scope(), plan.authorizationSha256(), plan.maxAttempts());
+    return graphFingerprint(
+        nodes, plan.scope(), plan.authorizationSha256(), plan.maxAttempts(), Map.of(), Map.of(), edges);
   }
 
   /** 固定计划的摘要不含状态与时间，用于发现图、规格或装配引用发生意外变化。 */
@@ -426,11 +545,13 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
     var nodes = find(runId);
     var specs = specsByNode(runId);
     var nodeBindings = bindingsByNode(runId);
+    var edges = revisionEdges(runId);
     long agentNodes = nodes.stream().filter(node -> !node.systemCheck()).count();
     if (bindings != null && !nodeBindings.isEmpty() && nodeBindings.size() != agentNodes)
       throw new IllegalStateException("计划节点的 Agent 选择记录不完整，不能执行。");
     if (!specs.isEmpty() && specs.size() != agentNodes)
       throw new IllegalStateException("计划节点规格不完整，不能执行。");
+    validateRevisionEdges(nodes, edges);
     if (nodes.isEmpty()
         || nodes.stream().anyMatch(node -> !plan.id().equals(node.planVersionId()))
         || !graphFingerprint(
@@ -439,7 +560,8 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
                 plan.authorizationSha256(),
                 plan.maxAttempts(),
                 specs,
-                nodeBindings)
+                nodeBindings,
+                edges)
             .equals(plan.graphSha256())) throw new IllegalStateException("保存的工作流图与计划版本摘要不一致。");
     for (var node : nodes) {
       if (node.systemCheck()) {
@@ -514,6 +636,30 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
     }
   }
 
+  private static void validateRevisionEdges(List<PlanNode> nodes, List<RevisionEdgeState> edges) {
+    var byId = new java.util.LinkedHashMap<UUID, PlanNode>();
+    for (var node : nodes) byId.put(node.id(), node);
+    var reviewers = new java.util.HashSet<UUID>();
+    for (var edge : edges) {
+      var reviewer = byId.get(edge.reviewerNodeId());
+      var target = byId.get(edge.targetNodeId());
+      if (reviewer == null || target == null)
+        throw new IllegalStateException("反思回边引用了不属于当前计划的节点。");
+      if (!reviewers.add(edge.reviewerNodeId()))
+        throw new IllegalStateException("同一审查节点存在多条反思回边。");
+      if (reviewer.role() != AgentRole.REVIEWER)
+        throw new IllegalStateException("只有审查节点可以声明反思回边。");
+      if (target.role() != AgentRole.CODER && target.role() != AgentRole.ANALYST)
+        throw new IllegalStateException("反思回边只能指向开发或分析节点。");
+      if (!reviewer.dependencyIds().contains(target.id()))
+        throw new IllegalStateException("反思回边目标不是审查节点的直接上游。");
+      if (edge.maxRevisions() < 1 || edge.maxRevisions() > RevisionEdge.HARD_MAX_REVISIONS)
+        throw new IllegalStateException("反思次数超出允许范围。");
+      if (edge.revisionCount() < 0 || edge.revisionCount() > edge.maxRevisions())
+        throw new IllegalStateException("反思回边计数无效。");
+    }
+  }
+
   private static String graphFingerprint(
       List<PlanNode> nodes, WorkflowTemplate.Scope scope, String authorization, int maxAttempts) {
     return graphFingerprint(nodes, scope, authorization, maxAttempts, java.util.Map.of());
@@ -545,6 +691,22 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
       int maxAttempts,
       Map<UUID, PlanNodeSpec> specs,
       Map<UUID, String> bindings) {
+    return graphFingerprint(nodes, scope, authorization, maxAttempts, specs, bindings, List.of());
+  }
+
+  /**
+   * 有反思回边的计划使用 v8：在 v7 的节点、规格与装配绑定之后追加回边摘要。
+   *
+   * <p>没有回边的历史计划继续使用原降级链，摘要逐字节保持不变。
+   */
+  private static String graphFingerprint(
+      List<PlanNode> nodes,
+      WorkflowTemplate.Scope scope,
+      String authorization,
+      int maxAttempts,
+      Map<UUID, PlanNodeSpec> specs,
+      Map<UUID, String> bindings,
+      List<RevisionEdgeState> revisionEdges) {
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       boolean workspaceGraph = scope.hasWorkspace();
@@ -552,19 +714,22 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
       boolean hasChecks = nodes.stream().anyMatch(PlanNode::systemCheck);
       boolean hasSpecs = !specs.isEmpty();
       boolean hasBindings = !bindings.isEmpty();
+      boolean hasRevisionEdges = !revisionEdges.isEmpty();
       addFingerprintField(
           digest,
-          hasBindings
-              ? "workflow-graph-v7"
-              : hasSpecs
-                  ? "workflow-graph-v6"
-                  : hasChecks
-                      ? "workflow-graph-v5"
-                      : hasBudgets
-                          ? "workflow-graph-v4"
-                          : scope.allowsWrite()
-                              ? "workflow-graph-v3"
-                              : workspaceGraph ? "workflow-graph-v2" : "workflow-graph-v1");
+          hasRevisionEdges
+              ? "workflow-graph-v8"
+              : hasBindings
+                  ? "workflow-graph-v7"
+                  : hasSpecs
+                      ? "workflow-graph-v6"
+                      : hasChecks
+                          ? "workflow-graph-v5"
+                          : hasBudgets
+                              ? "workflow-graph-v4"
+                              : scope.allowsWrite()
+                                  ? "workflow-graph-v3"
+                                  : workspaceGraph ? "workflow-graph-v2" : "workflow-graph-v1");
       if (workspaceGraph) {
         addFingerprintField(digest, scope.name());
         addFingerprintField(digest, authorization);
@@ -624,6 +789,17 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
         if (hasBindings) addFingerprintField(digest, bindings.getOrDefault(node.id(), ""));
         for (UUID prerequisite : node.dependencyIds().stream().sorted().toList())
           addFingerprintField(digest, prerequisite.toString());
+      }
+      if (hasRevisionEdges) {
+        addFingerprintField(digest, "revision-edges-v1");
+        addFingerprintField(digest, Integer.toString(revisionEdges.size()));
+        for (var edge : revisionEdges.stream()
+            .sorted(java.util.Comparator.comparing(item -> item.reviewerNodeId().toString()))
+            .toList()) {
+          addFingerprintField(digest, edge.reviewerNodeId().toString());
+          addFingerprintField(digest, edge.targetNodeId().toString());
+          addFingerprintField(digest, Integer.toString(edge.maxRevisions()));
+        }
       }
       String graphSha256 = HexFormat.of().formatHex(digest.digest());
       return maxAttempts == 1
@@ -718,13 +894,17 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
       throw new IllegalStateException("步骤不存在、已启动或前置步骤尚未完成。");
   }
 
-  /** 从保存的图和节点状态取得第一个就绪节点；调用方仍需事务认领。 */
-  public PlanNode nextReady(List<PlanNode> nodes) {
+  /** 从保存的图和节点状态取得全部就绪节点；调用方仍需事务认领并校验写集互斥。 */
+  public List<PlanNode> readyNodes(List<PlanNode> nodes) {
     var ready = ready(nodes);
     return nodes.stream()
         .filter(node -> ready.contains(node.id().toString()))
-        .findFirst()
-        .orElse(null);
+        .toList();
+  }
+
+  /** 从保存的图和节点状态取得第一个就绪节点；调用方仍需事务认领。 */
+  public PlanNode nextReady(List<PlanNode> nodes) {
+    return readyNodes(nodes).stream().findFirst().orElse(null);
   }
 
   private static List<String> ready(List<PlanNode> nodes) {

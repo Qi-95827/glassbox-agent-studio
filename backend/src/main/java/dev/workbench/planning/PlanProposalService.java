@@ -115,7 +115,7 @@ public class PlanProposalService {
         toolBudgets,
         dependencies,
         ids);
-    String graphSha = plans.adjustedGraphFingerprint(plan, plans.find(runId));
+    String graphSha = plans.adjustedGraphFingerprint(plan, plans.find(runId), plans.revisionEdges(runId));
     graphStore.updateGraphSha256(plan.id().toString(), graphSha);
     row.apply(Instant.now().toString());
     adjustments.save(row);
@@ -202,7 +202,7 @@ public class PlanProposalService {
                   return withChange(node, change, byKey);
                 })
             .toList();
-    plans.adjustedGraphFingerprint(plan, adjusted);
+    plans.adjustedGraphFingerprint(plan, adjusted, plans.revisionEdges(runId));
     return List.copyOf(changes);
   }
 

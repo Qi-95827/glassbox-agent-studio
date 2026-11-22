@@ -31,12 +31,32 @@ public class WorkflowAttemptEntity {
   @Column(name = "stop_cause", length = 40)
   private StopCause stopCause;
 
+  @Column(name = "revision_index", nullable = false)
+  private int revisionIndex;
+
+  @Column(name = "critic_verdict_json", columnDefinition = "CLOB")
+  private String criticVerdictJson;
+
   protected WorkflowAttemptEntity() {}
 
   public WorkflowAttemptEntity(String id, String nodeId, Integer attemptNo, String agentId) {
+    this(id, nodeId, attemptNo, agentId, 0);
+  }
+
+  public WorkflowAttemptEntity(
+      String id, String nodeId, Integer attemptNo, String agentId, int revisionIndex) {
     this.id = id;
     this.nodeId = nodeId;
     this.attemptNo = attemptNo;
     this.agentId = agentId;
+    this.revisionIndex = revisionIndex;
+  }
+
+  public int getRevisionIndex() {
+    return revisionIndex;
+  }
+
+  public String getCriticVerdictJson() {
+    return criticVerdictJson;
   }
 }

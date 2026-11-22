@@ -93,25 +93,43 @@ public class WorkflowExecutionService {
 
   /** 固定图上的认领、尝试、实例和多来源交接一起提交。 */
   public ClaimedNode claimWorkflowNode(String runId, UUID version, UUID nodeId, String goal) {
+    return claimWorkflowNode(runId, version, nodeId, goal, 3);
+  }
+
+  /**
+   * 在写集互斥前提下认领一个就绪节点。
+   *
+   * <p>同一运行允许最多 {@code maxParallelNodes} 个在途节点；候选计划使用节点规格的写入集合判断互斥，
+   * 历史模板没有规格时对两个写节点保守地视为冲突。认领仍使用数据库条件更新，重复派发会被拒绝。
+   */
+  public ClaimedNode claimWorkflowNode(
+      String runId, UUID version, UUID nodeId, String goal, int maxParallelNodes) {
     CheckEvidencePreflight preflight = prepareCheckEvidence(runId, nodeId);
     return tx.execute(
         ignored -> {
           var nodes = lockWorkflowRun(runId, version);
-          if (nodes.stream().anyMatch(node -> node.status() == PlanNodeStatus.RUNNING))
-            throw new IllegalStateException("运行已有在途步骤。");
-          var node = plans.nextReady(nodes);
-          if (node == null || !nodeId.equals(node.id()))
-            throw new IllegalStateException("节点不再是计划中的下一个就绪步骤。");
+          long running =
+              nodes.stream().filter(node -> node.status() == PlanNodeStatus.RUNNING).count();
+          if (running >= Math.max(1, maxParallelNodes))
+            throw new IllegalStateException("并行节点数量已经达到上限。");
+          var node =
+              plans.readyNodes(nodes).stream()
+                  .filter(candidate -> candidate.id().equals(nodeId))
+                  .findFirst()
+                  .orElseThrow(() -> new IllegalStateException("节点不再是计划中的就绪步骤。"));
           if (node.systemCheck()) throw new IllegalStateException("系统检查节点必须由检查执行器认领。");
+          requireDisjointWriteSet(runId, nodes, node);
           String time = dev.workbench.domain.WorkbenchTime.now();
           String agentId = dev.workbench.domain.WorkbenchIds.newId();
           String attemptId = dev.workbench.domain.WorkbenchIds.newId();
           int number = records.nextAttemptNumber(nodeId.toString());
-          if (number > plans.workflowPlan(runId).maxAttempts())
+          var plan = plans.workflowPlan(runId);
+          if (number > plan.maxAttempts() && !plans.allowsReflectionAttempt(runId, nodeId, number))
             throw new IllegalStateException("节点尝试次数已经达到计划上限。");
+          int revisionIndex = plans.revisionIndexFor(runId, nodeId);
           plans.startNode(runId, nodeId, agentId, time);
           agents.insertAgent(agentId, runId, goal, node.role(), time);
-          records.insertAttempt(attemptId, nodeId.toString(), number, agentId);
+          records.insertAttempt(attemptId, nodeId.toString(), number, agentId, revisionIndex);
           var upstream = results(runId, nodeId);
           if (upstream.size() != node.dependencyIds().size()
               || upstream.stream().anyMatch(input -> input.result().isBlank()))
@@ -149,7 +167,9 @@ public class WorkflowExecutionService {
               node,
               agentId,
               List.copyOf(upstream),
-              preflight == null ? null : preflight.guard);
+              preflight == null ? null : preflight.guard,
+              number,
+              revisionIndex);
         });
   }
 
@@ -157,7 +177,36 @@ public class WorkflowExecutionService {
       PlanNode node,
       String agentId,
       List<WorkflowInput> dependencies,
-      WorkspaceGuard workspaceGuard) {}
+      WorkspaceGuard workspaceGuard,
+      int attemptNumber,
+      int revisionIndex) {}
+
+  /** 写集互斥：与任一在途节点共享写入路径时拒绝认领，读节点不受写集限制。 */
+  private void requireDisjointWriteSet(String runId, List<PlanNode> nodes, PlanNode candidate) {
+    var specs = plans.specsByNode(runId);
+    var task = tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString());
+    var candidateWrites = writeSet(candidate, specs, task);
+    if (candidateWrites.isEmpty()) return;
+    for (var running : nodes) {
+      if (running.status() != PlanNodeStatus.RUNNING) continue;
+      var writes = writeSet(running, specs, task);
+      if (writes.stream().anyMatch(candidateWrites::contains))
+        throw new IllegalStateException(
+            "并行节点写入范围冲突：" + candidate.label() + " 与 " + running.label() + "。");
+    }
+  }
+
+  private static java.util.Set<String> writeSet(
+      PlanNode node,
+      java.util.Map<UUID, dev.workbench.framework.workflow.plan.PlanNodeSpec> specs,
+      dev.workbench.domain.TaskDefinition task) {
+    if (!node.workspaceWrite()) return java.util.Set.of();
+    var spec = specs.get(node.id());
+    if (spec != null) return java.util.Set.copyOf(spec.writeFiles());
+    return task.fileScopes() == null
+        ? java.util.Set.of()
+        : java.util.Set.copyOf(task.fileScopes());
+  }
 
   /** 认领时的工作区指纹；执行前必须仍一致。 */
   public record WorkspaceGuard(String workspaceId, String fingerprint) {}
@@ -580,57 +629,130 @@ public class WorkflowExecutionService {
       int rounds,
       int tools,
       long elapsed) {
-    return Boolean.TRUE.equals(
-        tx.execute(
-            ignored -> {
-              var nodes = lockWorkflowRun(runId, version);
-              if (nodes.stream()
-                  .noneMatch(
-                      node ->
-                          node.status() == PlanNodeStatus.RUNNING
-                              && UUID.fromString(agentId).equals(node.agentId())))
-                throw new IllegalStateException("运行中没有可结算的该节点实例。");
-              var running =
-                  nodes.stream()
-                      .filter(node -> UUID.fromString(agentId).equals(node.agentId()))
-                      .findFirst()
-                      .orElseThrow();
-              // P07：开发节点没有写出全部必需文件时不能把节点算作完成，也不能放行依赖它的审查。
-              var missing = missingRequiredFiles(runId, running.id(), agentId);
-              if (!missing.isEmpty()) {
-                agents.finishAgent(agentId, InvocationStatus.FAILED, result);
-                recordAttemptStop(agentId, StopCause.OUTPUT_MISSING);
-                String reason =
-                    running.label()
-                        + " 缺少必需产出："
-                        + String.join("、", missing)
-                        + "；已保存的变更和证据保留，等待人工核对。";
-                runs.update(
-                    runId,
-                    RunStatus.BLOCKED,
-                    reason,
-                    result,
-                    rounds,
-                    tools,
-                    elapsed,
-                    StopCause.OUTPUT_MISSING);
-                evidence.event(runId, EventType.BLOCKED, reason);
-                return true;
-              }
-              agents.finishAgent(agentId, InvocationStatus.COMPLETED, result);
-              var updated = plans.find(runId);
-              if (updated.stream()
-                  .allMatch(
-                      node ->
-                          node.status() == PlanNodeStatus.COMPLETED
-                              || node.status() == PlanNodeStatus.REUSED)) {
-                completeRun(runId, updated.size(), rounds, tools, elapsed);
-                return true;
-              }
-              recovery.saveBoundary(runId, plans.workflowPlan(runId), updated, elapsed);
-              return false;
-            }));
+    return settleWorkflowNode(runId, version, agentId, result, rounds, tools, elapsed, null)
+        .runEnded();
   }
+
+  /**
+   * 结算节点并处理有界反思。
+   *
+   * <p>{@code criticVerdictJson} 非空且审查判定需要修改时，在同一事务内把目标与审查节点退回待执行；
+   * 超过回边上限则阻塞运行并等待人工审核，绝不继续无界循环。返回的 {@code runEnded} 表示运行已经终止。
+   */
+  public NodeSettlement settleWorkflowNode(
+      String runId,
+      UUID version,
+      String agentId,
+      String result,
+      int rounds,
+      int tools,
+      long elapsed,
+      String criticVerdictJson) {
+    return tx.execute(
+        ignored -> {
+          var nodes = lockWorkflowRun(runId, version);
+          if (nodes.stream()
+              .noneMatch(
+                  node ->
+                      node.status() == PlanNodeStatus.RUNNING
+                          && UUID.fromString(agentId).equals(node.agentId())))
+            throw new IllegalStateException("运行中没有可结算的该节点实例。");
+          var running =
+              nodes.stream()
+                  .filter(node -> UUID.fromString(agentId).equals(node.agentId()))
+                  .findFirst()
+                  .orElseThrow();
+          // P07：开发节点没有写出全部必需文件时不能把节点算作完成，也不能放行依赖它的审查。
+          var missing = missingRequiredFiles(runId, running.id(), agentId);
+          if (!missing.isEmpty()) {
+            agents.finishAgent(agentId, InvocationStatus.FAILED, result);
+            recordAttemptStop(agentId, StopCause.OUTPUT_MISSING);
+            String reason =
+                running.label()
+                    + " 缺少必需产出："
+                    + String.join("、", missing)
+                    + "；已保存的变更和证据保留，等待人工核对。";
+            runs.update(
+                runId,
+                RunStatus.BLOCKED,
+                reason,
+                result,
+                rounds,
+                tools,
+                elapsed,
+                StopCause.OUTPUT_MISSING);
+            evidence.event(runId, EventType.BLOCKED, reason);
+            return new NodeSettlement(true, false, reason);
+          }
+          agents.finishAgent(agentId, InvocationStatus.COMPLETED, result);
+          if (criticVerdictJson != null && !criticVerdictJson.isBlank())
+            records.recordCriticVerdict(agentId, criticVerdictJson);
+          var verdict =
+              criticVerdictJson == null || criticVerdictJson.isBlank()
+                  ? null
+                  : dev.workbench.framework.workflow.plan.ReviewVerdictParser.parse(result);
+          if (verdict != null && verdict.reviseRequired()) {
+            var edge = plans.revisionEdgeForReviewer(runId, running.id());
+            if (edge != null) {
+              if (edge.revisionCount() < edge.maxRevisions()) {
+                plans.triggerRevision(
+                    runId,
+                    running.id(),
+                    edge.targetNodeId(),
+                    criticVerdictJson,
+                    dev.workbench.domain.WorkbenchTime.now());
+                String message =
+                    running.label()
+                        + " 要求修订第 "
+                        + (edge.revisionCount() + 1)
+                        + "/"
+                        + edge.maxRevisions()
+                        + " 轮：已重新排队目标节点并注入批评反馈。";
+                evidence.event(
+                    runId,
+                    EventType.REVISION_TRIGGERED,
+                    message,
+                    evidence.eventRefForAgent(runId, agentId));
+                return new NodeSettlement(false, true, message);
+              }
+              String reason =
+                  running.label()
+                      + " 已达到 "
+                      + edge.maxRevisions()
+                      + " 次修订上限，自动反思停止，等待人工审核。";
+              runs.update(
+                  runId,
+                  RunStatus.BLOCKED,
+                  reason,
+                  result,
+                  rounds,
+                  tools,
+                  elapsed,
+                  StopCause.HUMAN_REVIEW_REQUIRED);
+              evidence.event(
+                  runId,
+                  EventType.WAITING_HUMAN_REVIEW,
+                  reason,
+                  evidence.eventRefForAgent(runId, agentId));
+              return new NodeSettlement(true, false, reason);
+            }
+          }
+          var updated = plans.find(runId);
+          if (updated.stream()
+              .allMatch(
+                  node ->
+                      node.status() == PlanNodeStatus.COMPLETED
+                          || node.status() == PlanNodeStatus.REUSED)) {
+            completeRun(runId, updated.size(), rounds, tools, elapsed);
+            return new NodeSettlement(true, false, null);
+          }
+          recovery.saveBoundary(runId, plans.workflowPlan(runId), updated, elapsed);
+          return new NodeSettlement(false, false, null);
+        });
+  }
+
+  /** 节点结算结果：运行是否终止、是否触发反思，以及可审计的安全说明。 */
+  public record NodeSettlement(boolean runEnded, boolean revisionTriggered, String message) {}
 
   /**
    * 对比节点规格的必需文件与该实例成功写入回执的路径。
@@ -889,11 +1011,30 @@ public class WorkflowExecutionService {
       int rounds,
       int tools,
       long elapsed) {
+    finishParallelStoppedRun(
+        runId,
+        agentId == null ? List.of() : List.of(agentId),
+        cause,
+        reason,
+        rounds,
+        tools,
+        elapsed);
+  }
+
+  /** 并行调度停止时逐个结算所有在途实例，再统一结算运行。 */
+  public void finishParallelStoppedRun(
+      String runId,
+      List<UUID> agentIds,
+      StopCause cause,
+      String reason,
+      int rounds,
+      int tools,
+      long elapsed) {
     tx.executeWithoutResult(
         ignored -> {
-          if (agentId != null) {
-            if (!records.isRunningAttempt(runId, agentId.toString()))
-              throw new IllegalStateException("工作流没有可结算的该尝试。");
+          for (UUID agentId : agentIds == null ? List.<UUID>of() : agentIds) {
+            if (agentId == null) continue;
+            if (!records.isRunningAttempt(runId, agentId.toString())) continue;
 
             // 检查失败等阻塞原因没有对应的调用终态；已认领但尚未发起模型/工具调用的实例按失败结束。
             InvocationStatus status =

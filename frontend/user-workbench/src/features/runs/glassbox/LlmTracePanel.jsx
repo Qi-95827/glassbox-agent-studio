@@ -5,6 +5,7 @@ import MarkdownView from '../../../components/MarkdownView';
 import { duration } from '../../../utils/format';
 import { googleTokens } from '../../../theme/googleTheme';
 import { useI18n } from '../../../i18n/I18nProvider';
+import ContextMeterBar from './ContextMeterBar';
 
 const roleStyle = role => {
   const upper = String(role || '').toUpperCase();
@@ -71,6 +72,8 @@ export default function LlmTracePanel({ models }) {
               </Typography>
             ) : (
               <Stack spacing={1}>
+                <ContextMeterBar context={payload.context} />
+
                 {payload.truncated && (
                   <Alert severity="info" sx={{ py: 0 }}>
                     {t('llm.truncated')}

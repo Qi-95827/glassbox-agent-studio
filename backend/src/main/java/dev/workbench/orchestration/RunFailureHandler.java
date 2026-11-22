@@ -39,8 +39,13 @@ final class RunFailureHandler {
       String reason) {
     RunStatus status = stopCause.status();
     InvocationStatus invocationStatus = InvocationStatus.fromRunStatus(status);
-    control.finishModel(invocationStatus, null, null, reason);
-    control.finishTool(invocationStatus, null, reason);
+    if (agentId != null && agentStarted) {
+      control.finishModel(agentId, invocationStatus, null, null, reason);
+      control.finishTool(agentId, invocationStatus, null, reason, null);
+    } else {
+      control.finishModel(invocationStatus, null, null, reason);
+      control.finishTool(invocationStatus, null, reason);
+    }
     Handoff systemHandoff = null;
     if (agentStarted) {
       HandoffParty sender =

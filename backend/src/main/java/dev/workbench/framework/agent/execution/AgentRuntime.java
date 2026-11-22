@@ -4,6 +4,7 @@ import dev.workbench.domain.EventType;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
+import dev.workbench.framework.context.ContextBreakdown;
 import dev.workbench.framework.trace.GlassboxModels;
 import java.util.UUID;
 
@@ -15,6 +16,9 @@ public interface AgentRuntime {
 
   /** 记录单次模型调用的完整请求与响应透视快照（脱敏后存储）。 */
   default void modelTrace(GlassboxModels.ModelCallPayload payload) {}
+
+  /** 四级上下文压缩已执行；记录分桶、等级与节省比例，不写消息正文。 */
+  default void contextCompacted(ContextBreakdown breakdown) {}
 
   /** 价格版本允许的单次输出上限；没有硬费用预算时为空。 */
   default Integer maxOutputTokens() {

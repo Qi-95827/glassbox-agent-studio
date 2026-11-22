@@ -152,7 +152,16 @@ final class ExecutionGraphProjector {
         recoverySupport,
         operations.lastEventSeq(runId),
         planControl.executionMode(),
-        List.copyOf(planControl.breakpoints()));
+        List.copyOf(planControl.breakpoints()),
+        plans.revisionEdges(runId).stream()
+            .map(
+                edge ->
+                    new ExecutionViewService.RevisionEdgeView(
+                        edge.reviewerNodeId().toString(),
+                        edge.targetNodeId().toString(),
+                        edge.maxRevisions(),
+                        edge.revisionCount()))
+            .toList());
   }
 
   private PlanView planView(WorkflowPlan plan) {

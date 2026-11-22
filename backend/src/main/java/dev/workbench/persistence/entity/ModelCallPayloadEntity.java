@@ -36,6 +36,13 @@ public class ModelCallPayloadEntity {
   @Column(name = "truncated", nullable = false)
   private boolean truncated;
 
+  @Lob
+  @Column(name = "context_breakdown_json")
+  private String contextBreakdownJson;
+
+  @Column(name = "compaction_tier", length = 30)
+  private String compactionTier;
+
   @Column(name = "created_at", length = 40, nullable = false)
   private String createdAt;
 
@@ -50,6 +57,30 @@ public class ModelCallPayloadEntity {
       String responseToolCallsJson,
       boolean truncated,
       String createdAt) {
+    this(
+        modelCallId,
+        runId,
+        requestMessagesJson,
+        requestToolsJson,
+        responseContent,
+        responseToolCallsJson,
+        truncated,
+        null,
+        null,
+        createdAt);
+  }
+
+  public ModelCallPayloadEntity(
+      String modelCallId,
+      String runId,
+      String requestMessagesJson,
+      String requestToolsJson,
+      String responseContent,
+      String responseToolCallsJson,
+      boolean truncated,
+      String contextBreakdownJson,
+      String compactionTier,
+      String createdAt) {
     this.modelCallId = modelCallId;
     this.runId = runId;
     this.requestMessagesJson = requestMessagesJson;
@@ -57,6 +88,8 @@ public class ModelCallPayloadEntity {
     this.responseContent = responseContent;
     this.responseToolCallsJson = responseToolCallsJson;
     this.truncated = truncated;
+    this.contextBreakdownJson = contextBreakdownJson;
+    this.compactionTier = compactionTier;
     this.createdAt = createdAt;
   }
 
@@ -86,6 +119,14 @@ public class ModelCallPayloadEntity {
 
   public boolean isTruncated() {
     return truncated;
+  }
+
+  public String getContextBreakdownJson() {
+    return contextBreakdownJson;
+  }
+
+  public String getCompactionTier() {
+    return compactionTier;
   }
 
   public String getCreatedAt() {

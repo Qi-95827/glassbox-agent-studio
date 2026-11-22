@@ -109,6 +109,7 @@ export const STOP_CAUSES = {
   TOOL_EFFECT_UNKNOWN: '工具写入结果未知',
   CHECK_FAILED: '系统检查未通过',
   OUTPUT_MISSING: '缺少必需产出',
+  HUMAN_REVIEW_REQUIRED: '反思达到上限，等待人工审核',
   RECOVERY_PRECONDITION_FAILED: '恢复前置条件不满足',
   UNCLASSIFIED_FAILURE: '未分类执行失败'
 };
@@ -176,7 +177,10 @@ export const EVENT_NAMES = {
   MEMORY_LOADED: '装配项目背景',
   TEST_STARTED: '开始测试',
   TEST_FINISHED: '测试结果',
-  BLOCKED: '等待处理'
+  BLOCKED: '等待处理',
+  REVISION_TRIGGERED: '触发有界反思',
+  WAITING_HUMAN_REVIEW: '等待人工审核',
+  CONTEXT_COMPACTED: '上下文压缩'
 };
 
 export const EVALUATION_SUITES = {

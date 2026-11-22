@@ -35,7 +35,8 @@ final class CandidateRunPlanFactory {
               node.acceptanceCriteria(),
               item.binding()));
     }
-    return new CandidateRunPlan(candidate.schemaVersion(), candidateSha256, nodes);
+    return new CandidateRunPlan(
+        candidate.schemaVersion(), candidateSha256, nodes, candidate.revisionEdges());
   }
 
   private static String phase(PlanCandidateDraft.Role role) {

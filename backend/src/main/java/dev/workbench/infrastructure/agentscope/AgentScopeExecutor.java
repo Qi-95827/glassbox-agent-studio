@@ -36,6 +36,7 @@ public class AgentScopeExecutor implements AgentExecutor {
   private final AgentToolRegistry tools;
   private final dev.workbench.framework.agent.definition.AgentRoleRegistry roles;
   private final dev.workbench.framework.skill.SkillRegistry skills;
+  private final dev.workbench.control.MultiTierContextCompactor contextCompactor;
 
   @org.springframework.beans.factory.annotation.Autowired
   public AgentScopeExecutor(
@@ -45,7 +46,8 @@ public class AgentScopeExecutor implements AgentExecutor {
       AgentModelRegistry models,
       AgentToolRegistry tools,
       dev.workbench.framework.agent.definition.AgentRoleRegistry roles,
-      dev.workbench.framework.skill.SkillRegistry skills) {
+      dev.workbench.framework.skill.SkillRegistry skills,
+      dev.workbench.control.MultiTierContextCompactor contextCompactor) {
     this.json = json;
     this.stateStore = stateStore;
     this.assemblyPlanner = assemblyPlanner;
@@ -53,6 +55,7 @@ public class AgentScopeExecutor implements AgentExecutor {
     this.tools = tools;
     this.roles = roles;
     this.skills = skills;
+    this.contextCompactor = contextCompactor;
   }
 
   /** 兼容只装配执行必需依赖的独立验证；语言资源使用内置中文默认。 */
@@ -69,7 +72,8 @@ public class AgentScopeExecutor implements AgentExecutor {
         models,
         tools,
         new dev.workbench.framework.agent.definition.AgentRoleRegistry(),
-        new dev.workbench.framework.skill.SkillRegistry());
+        new dev.workbench.framework.skill.SkillRegistry(),
+        new dev.workbench.control.MultiTierContextCompactor());
   }
 
   /** 创建每次运行独立的框架 Agent；工具按角色及用户授权注册。 */
@@ -159,7 +163,8 @@ public class AgentScopeExecutor implements AgentExecutor {
             effectiveMode,
             runtime,
             failure,
-            selectedModel.rateLimitRejection());
+            selectedModel.rateLimitRejection(),
+            contextCompactor::evaluateAndCompact);
     var authorization =
         new AgentAssemblySnapshot.Authorization(
             1,

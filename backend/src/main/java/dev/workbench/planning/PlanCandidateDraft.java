@@ -1,20 +1,32 @@
 package dev.workbench.planning;
 
+import dev.workbench.framework.workflow.plan.RevisionEdge;
 import java.util.List;
 
 /**
  * 模型提出的候选计划结构（协议版本 1）。
  *
- * <p>模型只能提出角色别名、节点目标、依赖、文件子集、产出和验收条件。工具、根目录、 模型凭据、检查命令和审批结果都不在这里，由执行侧按注册表和当前授权决定。
+ * <p>模型只能提出角色别名、节点目标、依赖、文件子集、产出、验收条件与有界反思回边。工具、根目录、 模型凭据、检查命令和审批结果都不在这里，由执行侧按注册表和当前授权决定。
  */
 public record PlanCandidateDraft(
-    int schemaVersion, List<Node> nodes, List<String> assumptions, List<String> openQuestions) {
+    int schemaVersion,
+    List<Node> nodes,
+    List<String> assumptions,
+    List<String> openQuestions,
+    List<RevisionEdge> revisionEdges) {
   public static final int PROTOCOL_VERSION = 1;
 
   public PlanCandidateDraft {
     nodes = nodes == null ? List.of() : List.copyOf(nodes);
     assumptions = assumptions == null ? List.of() : List.copyOf(assumptions);
     openQuestions = openQuestions == null ? List.of() : List.copyOf(openQuestions);
+    revisionEdges = revisionEdges == null ? List.of() : List.copyOf(revisionEdges);
+  }
+
+  /** 兼容没有反思回边的旧协议输出。 */
+  public PlanCandidateDraft(
+      int schemaVersion, List<Node> nodes, List<String> assumptions, List<String> openQuestions) {
+    this(schemaVersion, nodes, assumptions, openQuestions, List.of());
   }
 
   /** 首期只接受三个受信角色别名，重复使用同一角色会装配成不同实例。 */

@@ -82,39 +82,67 @@ public final class DemoModel implements Model {
       List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
     if (textOnly) {
       if (!tools.isEmpty()) return Flux.error(new IllegalStateException("纯文本 Agent 不应获得工具。"));
+      if (role == AgentRole.REVIEWER) {
+        String allText = textOf(messages);
+        boolean reflectionTeaching =
+            allText.contains("反思")
+                || allText.toLowerCase(java.util.Locale.ROOT).contains("reflection");
+        if (reflectionTeaching) {
+          boolean revised = allText.contains("REVISION_APPLIED") || allText.contains("修订已应用");
+          String verdict =
+              revised
+                  ? english()
+                      ? "DECISION: APPROVED\n```json\n{\"decision\":\"APPROVED\",\"summary\":\"Revision accepted.\",\"defects\":[]}\n```\nReview complete."
+                      : "DECISION: APPROVED\n```json\n{\"decision\":\"APPROVED\",\"summary\":\"修订通过。\",\"defects\":[]}\n```\n审查完成。"
+                  : english()
+                      ? "DECISION: REVISE_REQUIRED\n```json\n{\"decision\":\"REVISE_REQUIRED\",\"summary\":\"The analysis needs one revision.\",\"defects\":[{\"severity\":\"MAJOR\",\"filePath\":null,\"summary\":\"Missing concrete revision marker.\",\"suggestedFix\":\"Apply the critic feedback and mark REVISION_APPLIED.\"}]}\n```\nReview complete."
+                      : "DECISION: REVISE_REQUIRED\n```json\n{\"decision\":\"REVISE_REQUIRED\",\"summary\":\"分析需要修订一轮。\",\"defects\":[{\"severity\":\"MAJOR\",\"filePath\":null,\"summary\":\"缺少明确的修订标记。\",\"suggestedFix\":\"应用批评反馈并标记 REVISION_APPLIED。\"}]}\n```\n审查完成。";
+          return Flux.just(
+              ChatResponse.builder()
+                  .content(List.of(TextBlock.builder().text(verdict).build()))
+                  .build());
+        }
+      }
       return Flux.just(
           ChatResponse.builder()
               .content(
                   List.of(
                       TextBlock.builder()
                           .text(
-                              english()
-                                  ? "Demo text analysis returned. Example: verify the task goal, applicable constraints and checkable acceptance criteria."
-                                  : "模拟文本分析已返回。示例：核对任务目标、适用约束和可验证的验收条件。")
+                              (english()
+                                      ? "Demo text analysis returned. Example: verify the task goal, applicable constraints and checkable acceptance criteria."
+                                      : "模拟文本分析已返回。示例：核对任务目标、适用约束和可验证的验收条件。")
+                                  + (textOf(messages).contains("criticFeedback")
+                                          && textOf(messages).contains("REVISE_REQUIRED")
+                                      ? english()
+                                          ? "\nREVISION_APPLIED: addressed the critic feedback."
+                                          : "\n修订已应用（REVISION_APPLIED）：已按批评反馈修订。"
+                                      : ""))
                           .build()))
               .build());
     }
     if (role == AgentRole.REVIEWER) {
+      String allText = textOf(messages);
       boolean received =
-          messages.stream()
-              .anyMatch(
-                  message ->
-                      message.getTextContent() != null
-                          && (message.getTextContent().contains("analysis-agent")
-                              || message.getTextContent().contains("coding-agent"))
-                          && message.getTextContent().contains("evidenceEventIds"));
+          allText.contains("analysis-agent")
+              || allText.contains("coding-agent")
+              || allText.contains("evidenceEventIds");
       if (!received) return Flux.error(new IllegalStateException("审查 Agent 未收到结构化交接。"));
       if (!tools.isEmpty()) return Flux.error(new IllegalStateException("审查 Agent 不应获得工具。"));
+      boolean reflectionTeaching =
+          allText.contains("反思") || allText.toLowerCase(java.util.Locale.ROOT).contains("reflection");
+      boolean revised = allText.contains("REVISION_APPLIED") || allText.contains("修订已应用");
+      String verdict =
+          reflectionTeaching && !revised
+              ? english()
+                  ? "DECISION: REVISE_REQUIRED\n```json\n{\"decision\":\"REVISE_REQUIRED\",\"summary\":\"The implementation is not ready for acceptance.\",\"defects\":[{\"severity\":\"MAJOR\",\"filePath\":null,\"summary\":\"Acceptance evidence is missing.\",\"suggestedFix\":\"Add a concrete verification result and mark REVISION_APPLIED.\"}]}\n```\nReview complete: provide concrete verification evidence before acceptance."
+                  : "DECISION: REVISE_REQUIRED\n```json\n{\"decision\":\"REVISE_REQUIRED\",\"summary\":\"当前实现还不能验收。\",\"defects\":[{\"severity\":\"MAJOR\",\"filePath\":null,\"summary\":\"缺少可核对的验收证据。\",\"suggestedFix\":\"补充具体验证结果，并在交接正文标记 REVISION_APPLIED。\"}]}\n```\n审查完成：请先补充可核对证据再验收。"
+              : english()
+                  ? "DECISION: APPROVED\n```json\n{\"decision\":\"APPROVED\",\"summary\":\"Review passed with the provided evidence.\",\"defects\":[]}\n```\nReview complete: upstream tool output is simulated data and does not prove real code changes or passing tests. Obtain real evidence and verify further."
+                  : "DECISION: APPROVED\n```json\n{\"decision\":\"APPROVED\",\"summary\":\"基于现有证据通过审查。\",\"defects\":[]}\n```\n审查完成：上游工具结果为模拟数据，不证明真实代码已修改或测试通过；应进一步获取真实证据并验证。";
       return Flux.just(
           ChatResponse.builder()
-              .content(
-                  List.of(
-                      TextBlock.builder()
-                          .text(
-                              english()
-                                  ? "Review complete: upstream tool output is simulated data and does not prove real code changes or passing tests. Obtain real evidence and verify further."
-                                  : "审查完成：上游工具结果为模拟数据，不证明真实代码已修改或测试通过；应进一步获取真实证据并验证。")
-                          .build()))
+              .content(List.of(TextBlock.builder().text(verdict).build()))
               .build());
     }
     if (role == AgentRole.CODER) {
@@ -176,6 +204,8 @@ public final class DemoModel implements Model {
             .toList();
     if (results.isEmpty() || !isSuccessfulToolResult(results.getLast()))
       return Flux.error(new IllegalStateException("模拟模型未收到成功的工具结果。"));
+    String allText = textOf(messages);
+    boolean revision = allText.contains("REVISE_REQUIRED") && allText.contains("criticFeedback");
     return Flux.just(
         ChatResponse.builder()
             .content(
@@ -185,12 +215,32 @@ public final class DemoModel implements Model {
                             english()
                                 ? role == AgentRole.CODER
                                     ? "Summary: the demo coding agent read authorized files and made no real code change. Decision: keep the implementation and verification steps separate. Risk: no real test result yet."
+                                        + (revision
+                                            ? "\nREVISION_APPLIED: addressed the critic feedback and added a concrete verification note."
+                                            : "")
                                     : "Summary: demo analysis complete. Decision: verify inputs, expected behavior and regression coverage. Risk: no real test evidence has been produced."
+                                        + (revision
+                                            ? "\nREVISION_APPLIED: addressed the critic feedback in the revised analysis."
+                                            : "")
                                 : role == AgentRole.CODER
                                     ? "模拟开发 Agent 已读取授权文件，本次未执行代码修改；仍需真实实现与验证。"
-                                    : "模拟分析完成：建议核对输入、预期行为并准备回归验证。尚无真实测试结果。")
+                                        + (revision
+                                            ? "\n修订已应用（REVISION_APPLIED）：已处理批评反馈并补充可核对说明。"
+                                            : "")
+                                    : "模拟分析完成：建议核对输入、预期行为并准备回归验证。尚无真实测试结果。"
+                                        + (revision
+                                            ? "\n修订已应用（REVISION_APPLIED）：已按批评反馈补充分析。"
+                                            : ""))
                         .build()))
             .build());
+  }
+
+  private static String textOf(List<Msg> messages) {
+    StringBuilder text = new StringBuilder();
+    for (var message : messages) {
+      if (message.getTextContent() != null) text.append(message.getTextContent()).append('\n');
+    }
+    return text.toString();
   }
 
   private static boolean containsWorkflowDependency(String text) {

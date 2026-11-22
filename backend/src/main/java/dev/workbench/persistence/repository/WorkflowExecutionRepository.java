@@ -70,6 +70,23 @@ public class WorkflowExecutionRepository {
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
+  public void insertAttempt(
+      String id, String nodeId, int number, String agentId, int revisionIndex) {
+    sessions.persist(new WorkflowAttemptEntity(id, nodeId, number, agentId, revisionIndex));
+  }
+
+  /** 把审查结论写入产生它的尝试；后续目标重试从回边读取同一结论作为批评反馈。 */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void recordCriticVerdict(String agentId, String verdictJson) {
+    sessions
+        .createQuery(
+            "update WorkflowAttemptEntity a set a.criticVerdictJson = :verdict where a.agentId = :agentId")
+        .setParameter("verdict", verdictJson)
+        .setParameter("agentId", agentId)
+        .executeUpdate();
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
   public void insertCheck(
       String id,
       String nodeId,

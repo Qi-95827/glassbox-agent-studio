@@ -15,7 +15,9 @@ import dev.workbench.domain.RunLimits;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 /** 单次运行的计数器与调用状态；执行时长仅计算进程运行期间。 */
@@ -34,9 +36,11 @@ public final class RunControl {
   private final Integer maxAgentRounds, maxAgentTools;
   private final Map<AgentRole, RoleBudget> roleBudgets;
   private final Map<ToolKind, Integer> toolBudgets;
-  private int rounds, tools;
-  private String toolId, modelId, lastModelId;
-  private long toolStartedNanos, modelStartedNanos;
+  private final AtomicInteger rounds = new AtomicInteger();
+  private final AtomicInteger tools = new AtomicInteger();
+  /** 并行节点各自持有模型/工具调用槽，避免共享单个 callId 互相覆盖。 */
+  private final Map<String, CallSlot> modelSlots = new ConcurrentHashMap<>();
+  private final Map<String, CallSlot> toolSlots = new ConcurrentHashMap<>();
 
   public RunControl(
       String runId,
@@ -52,8 +56,8 @@ public final class RunControl {
     this.pauseMonitor = pauseMonitor;
     this.paused = paused;
     this.cancelled = cancelled;
-    this.rounds = run.rounds();
-    this.tools = run.tools();
+    this.rounds.set(run.rounds());
+    this.tools.set(run.tools());
     this.previousMs = run.elapsedMs();
     this.maxRounds = run.maxRounds();
     this.maxTools = run.maxTools();
@@ -69,7 +73,7 @@ public final class RunControl {
 
   /** 本运行已累计的模型轮次，包含恢复时继承的消耗。 */
   public int rounds() {
-    return rounds;
+    return rounds.get();
   }
 
   /** 在节点断点处主动挂起运行，复用协作式暂停与恢复机制等待用户人工放行。 */
@@ -107,7 +111,7 @@ public final class RunControl {
 
   /** 本运行已累计的工具次数，包含恢复时继承的消耗。 */
   public int tools() {
-    return tools;
+    return tools.get();
   }
 
   /** 使用单调时钟计算运行期间的累计时长，暂停时间不计入。 */
@@ -120,12 +124,12 @@ public final class RunControl {
   }
 
   public void save(RunStatus status, String reason, String result) {
-    repository.update(runId, status, reason, result, rounds, tools, elapsed());
+    repository.update(runId, status, reason, result, rounds.get(), tools.get(), elapsed());
   }
 
   /** 保存终态时同时写入机器可读停止原因，供阻塞分类使用。 */
   public void save(RunStatus status, String reason, String result, StopCause cause) {
-    repository.update(runId, status, reason, result, rounds, tools, elapsed(), cause);
+    repository.update(runId, status, reason, result, rounds.get(), tools.get(), elapsed(), cause);
   }
 
   /** 合作式检查暂停、取消与时间限额；不强制撤销已发出的外部请求。 */
@@ -183,13 +187,13 @@ public final class RunControl {
       if (roleLimit != null && used >= roleLimit)
         throw new StopExecution(StopCause.ROLE_MODEL_LIMIT, "当前角色的单实例模型调用次数达到上限。");
     }
-    rounds++;
+    rounds.incrementAndGet();
     save(RunStatus.RUNNING, null, null);
   }
 
   private void checkModelBudget(NodePolicy node) {
     checkTokenBudget();
-    if (maxRounds != null && rounds >= maxRounds)
+    if (maxRounds != null && rounds.get() >= maxRounds)
       throw new StopExecution(StopCause.MODEL_ROUND_LIMIT, "Agent 轮次达到上限。");
     if (node != null
         && node.budget().maxModelCalls() != null
@@ -242,7 +246,7 @@ public final class RunControl {
 
   private void toolCall(String agentId, ToolKind kind, String fingerprint, NodePolicy node) {
     check();
-    if (maxTools != null && tools >= maxTools)
+    if (maxTools != null && tools.get() >= maxTools)
       throw new StopExecution(StopCause.TOOL_CALL_LIMIT, "工具调用次数达到上限。");
     if (node != null
         && node.budget().maxToolCalls() != null
@@ -270,7 +274,7 @@ public final class RunControl {
         && repository.consecutiveToolAttempts(runId, kind, fingerprint, maxIdenticalTools)
             >= maxIdenticalTools)
       throw new StopExecution(StopCause.REPEATED_TOOL_LIMIT, "连续相同工具调用达到上限：" + kind.recordName());
-    tools++;
+    tools.incrementAndGet();
     save(RunStatus.RUNNING, null, null);
   }
 
@@ -279,68 +283,124 @@ public final class RunControl {
     return roleBudgets.isEmpty() ? null : roleBudgets.get(repository.agentRole(runId, agentId));
   }
 
-  private synchronized UUID startTool(
+  private UUID startTool(
       String agentId, ToolKind kind, int version, String fingerprint) {
-    toolId = UUID.randomUUID().toString();
-    toolStartedNanos = System.nanoTime();
+    var slot = new CallSlot(UUID.randomUUID().toString(), System.nanoTime());
+    toolSlots.put(slotKey(agentId), slot);
     if (maxIdenticalTools == null)
-      repository.startTool(toolId, runId, agentId, kind.recordName(), version);
-    else repository.startTool(toolId, runId, agentId, kind, version, fingerprint);
-    return UUID.fromString(toolId);
+      repository.startTool(slot.id, runId, agentId, kind.recordName(), version);
+    else repository.startTool(slot.id, runId, agentId, kind, version, fingerprint);
+    return UUID.fromString(slot.id);
   }
 
-  public synchronized void finishTool(InvocationStatus status, String result, String error) {
-    finishTool(status, result, error, null);
+  public void finishTool(InvocationStatus status, String result, String error) {
+    finishTool((String) null, status, result, error, null);
+  }
+
+  /** 完成指定 Agent 的工具调用，避免并行节点结算彼此的 callId。 */
+  public void finishTool(
+      String agentId, InvocationStatus status, String result, String error) {
+    finishTool(agentId, status, result, error, null);
   }
 
   /** 完成工具调用时一并保存只读工具观察到的资源版本。 */
-  public synchronized void finishTool(
+  public void finishTool(
       InvocationStatus status, String result, String error, String resourceVersion) {
-    if (toolId != null) {
-      repository.finishTool(
-          toolId,
-          status,
-          result,
-          error,
-          TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - toolStartedNanos),
-          resourceVersion);
-      toolId = null;
-    }
+    finishTool((String) null, status, result, error, resourceVersion);
   }
 
-  private synchronized void startModel(String agentId, ModelKind model) {
-    modelId = UUID.randomUUID().toString();
-    lastModelId = modelId;
-    modelStartedNanos = System.nanoTime();
-    repository.startModel(modelId, runId, agentId, model);
+  public void finishTool(
+      String agentId,
+      InvocationStatus status,
+      String result,
+      String error,
+      String resourceVersion) {
+    var slot = toolSlots.get(slotKey(agentId));
+    if (slot == null || slot.id == null) return;
+    repository.finishTool(
+        slot.id,
+        status,
+        result,
+        error,
+        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - slot.startedNanos),
+        resourceVersion);
+    slot.id = null;
+  }
+
+  private void startModel(String agentId, ModelKind model) {
+    var slot = new CallSlot(UUID.randomUUID().toString(), System.nanoTime());
+    modelSlots.put(slotKey(agentId), slot);
+    repository.startModel(slot.id, runId, agentId, model);
   }
 
   /** 当前在途模型调用；事件写入时用于结构化关联，没有则为空。 */
-  public synchronized UUID currentModelCallId() {
-    return modelId == null ? null : UUID.fromString(modelId);
+  public UUID currentModelCallId() {
+    return currentModelCallId(null);
+  }
+
+  public UUID currentModelCallId(String agentId) {
+    var slot = modelSlots.get(slotKey(agentId));
+    return slot == null || slot.id == null ? null : UUID.fromString(slot.id);
   }
 
   /** 最近一次模型调用；用于调用已结算后到达的返回事件。 */
-  public synchronized UUID lastModelCallId() {
-    return lastModelId == null ? null : UUID.fromString(lastModelId);
+  public UUID lastModelCallId() {
+    return lastModelCallId(null);
+  }
+
+  public UUID lastModelCallId(String agentId) {
+    var slot = modelSlots.get(slotKey(agentId));
+    String id = slot == null ? null : slot.lastId != null ? slot.lastId : slot.id;
+    return id == null ? null : UUID.fromString(id);
   }
 
   /** 当前在途工具调用；事件写入时用于结构化关联，没有则为空。 */
-  public synchronized UUID currentToolCallId() {
-    return toolId == null ? null : UUID.fromString(toolId);
+  public UUID currentToolCallId() {
+    return currentToolCallId(null);
   }
 
-  public synchronized void finishModel(
+  public UUID currentToolCallId(String agentId) {
+    var slot = toolSlots.get(slotKey(agentId));
+    return slot == null || slot.id == null ? null : UUID.fromString(slot.id);
+  }
+
+  public void finishModel(
       InvocationStatus status, Integer input, Integer output, String error) {
-    if (modelId != null) {
-      repository.finishModel(
-          modelId,
-          status,
-          input,
-          output,
-          error,
-          TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - modelStartedNanos));
-      modelId = null;
+    finishModel(null, status, input, output, error);
+  }
+
+  public void finishModel(
+      String agentId, InvocationStatus status, Integer input, Integer output, String error) {
+    var slot = modelSlots.get(slotKey(agentId));
+    if (slot == null || slot.id == null) return;
+    repository.finishModel(
+        slot.id,
+        status,
+        input,
+        output,
+        error,
+        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - slot.startedNanos));
+    slot.id = null;
+  }
+
+  private static String slotKey(String agentId) {
+    return agentId == null ? "" : agentId;
+  }
+
+  /** 单个 Agent 的调用槽；同一 Agent 的模型/工具调用仍按 ReAct 顺序串行。 */
+  private static final class CallSlot {
+    private String id;
+    private final long startedNanos;
+    private final String lastId;
+
+    private CallSlot(String id, long startedNanos) {
+      this(id, startedNanos, id);
+    }
+
+    private CallSlot(String id, long startedNanos, String lastId) {
+      this.id = id;
+      this.startedNanos = startedNanos;
+      this.lastId = lastId;
     }
   }
 }

@@ -23,6 +23,20 @@ public class AsyncConfiguration {
     return buildExecutor(4, 200, "workflow-run-");
   }
 
+  /** 节点级并行执行器；单运行并发数由调度器按配置再次限制。 */
+  @Bean(name = "workflowNodeTaskExecutor")
+  public ThreadPoolTaskExecutor workflowNodeTaskExecutor(
+      @org.springframework.beans.factory.annotation.Value("${workbench.orchestration.max-parallel-nodes:3}")
+          int maxParallelPerRun) {
+    return buildExecutor(Math.max(1, maxParallelPerRun) * 4, 200, "workflow-node-");
+  }
+
+  @Bean(name = "workflowNodeExecutor", destroyMethod = "")
+  public ExecutorService workflowNodeExecutor(
+      @Qualifier("workflowNodeTaskExecutor") ThreadPoolTaskExecutor executor) {
+    return executor.getThreadPoolExecutor();
+  }
+
   @Bean(name = "workflowRunExecutor", destroyMethod = "")
   public ExecutorService workflowRunExecutor(
       @Qualifier("workflowRunTaskExecutor") ThreadPoolTaskExecutor executor) {

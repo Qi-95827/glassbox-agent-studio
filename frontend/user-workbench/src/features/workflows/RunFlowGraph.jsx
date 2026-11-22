@@ -15,6 +15,7 @@ import StatusChip from '../../components/StatusChip';
 import { statusTone, nodeTitle } from '../../constants/labels';
 import { nodeDuration } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const handleStyle = { opacity: 0, pointerEvents: 'none' };
 
@@ -170,6 +171,7 @@ function layout(nodes, edges, width, height, gap) {
 function FlowCanvas({
   nodes = [],
   edges = [],
+  revisionEdges = [],
   runId,
   selectedId,
   selectedEdgeId,
@@ -180,6 +182,7 @@ function FlowCanvas({
   onSelectNode,
   onSelectEdge
 }) {
+  const { t } = useI18n();
   const theme = useTheme();
   const compact = useMediaQuery(theme.breakpoints.down('lg'));
   const width = compact ? 150 : 224;
@@ -215,7 +218,7 @@ function FlowCanvas({
   }));
 
   const hasFocus = Boolean(focusIds?.size);
-  const graphEdges = edges
+  const dependencyEdges = edges
     .filter(edge => byId.has(edge.fromNodeId) && byId.has(edge.toNodeId))
     .map(edge => {
       const id = `${edge.fromNodeId}:${edge.toNodeId}`;
@@ -248,6 +251,35 @@ function FlowCanvas({
         ariaLabel: '流程依赖'
       };
     });
+
+  const reflectionEdges = (revisionEdges ?? [])
+    .filter(edge => byId.has(edge.reviewerNodeId) && byId.has(edge.targetNodeId))
+    .map(edge => {
+      const id = `revision:${edge.reviewerNodeId}:${edge.targetNodeId}`;
+      return {
+        id,
+        source: edge.reviewerNodeId,
+        target: edge.targetNodeId,
+        type: 'default',
+        interactionWidth: 20,
+        label: t('run.revisionEdge', {
+          count: edge.revisionCount ?? 0,
+          max: edge.maxRevisions ?? 0
+        }),
+        labelStyle: { fill: '#B06000', fontSize: 10.5, fontWeight: 600 },
+        labelBgStyle: { fill: '#FEF7E0', fillOpacity: 0.95 },
+        labelBgPadding: [4, 2],
+        labelBgBorderRadius: 4,
+        style: { stroke: '#B06000', strokeWidth: 1.5, strokeDasharray: '6 4' },
+        data: { revisionEdge: edge },
+        ariaLabel: t('run.revisionEdge', {
+          count: edge.revisionCount ?? 0,
+          max: edge.maxRevisions ?? 0
+        })
+      };
+    });
+
+  const graphEdges = [...dependencyEdges, ...reflectionEdges];
 
   return (
     <Box sx={{ width: '100%', height: '100%', minHeight: 280, bgcolor: googleTokens.canvas }}>

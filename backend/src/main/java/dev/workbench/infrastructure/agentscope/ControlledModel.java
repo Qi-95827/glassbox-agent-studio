@@ -1,6 +1,11 @@
 package dev.workbench.infrastructure.agentscope;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.framework.context.CompactionRequest;
+import dev.workbench.framework.context.CompactionResult;
+import dev.workbench.framework.context.ContextBreakdown;
+import dev.workbench.framework.context.ContextCompactionHook;
+import dev.workbench.framework.context.ContextMessage;
 import dev.workbench.framework.model.ModelRateLimitException;
 import dev.workbench.framework.trace.GlassboxModels;
 import dev.workbench.framework.trace.SensitiveDataMasker;
@@ -10,7 +15,9 @@ import dev.workbench.domain.ModelMode;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.model.ChatResponse;
 import io.agentscope.core.model.ChatUsage;
@@ -18,25 +25,36 @@ import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolSchema;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import reactor.core.publisher.Flux;
 
-/** AgentScope Model 包装器：每次真实请求前执行预算检查并记录用量。 */
+/** AgentScope Model 包装器：每次真实请求前执行预算检查、四级上下文压缩并记录用量。 */
 public record ControlledModel(
     Model delegate,
     ModelMode mode,
     AgentRuntime runtime,
     AtomicReference<RuntimeException> failure,
-    Predicate<Throwable> rateLimitRejection)
+    Predicate<Throwable> rateLimitRejection,
+    ContextCompactionHook compactionHook)
     implements Model {
   public ControlledModel(
       Model delegate,
       ModelMode mode,
       AgentRuntime runtime,
       AtomicReference<RuntimeException> failure) {
-    this(delegate, mode, runtime, failure, error -> false);
+    this(delegate, mode, runtime, failure, error -> false, null);
+  }
+
+  public ControlledModel(
+      Model delegate,
+      ModelMode mode,
+      AgentRuntime runtime,
+      AtomicReference<RuntimeException> failure,
+      Predicate<Throwable> rateLimitRejection) {
+    this(delegate, mode, runtime, failure, rateLimitRejection, null);
   }
 
   public String getModelName() {
@@ -67,8 +85,18 @@ public record ControlledModel(
           if (stopped != null) return Flux.error(stopped);
           try {
             runtime.beforeModel(ModelKind.forMode(mode));
+            List<Msg> effective = messages;
+            ContextBreakdown context = null;
+            if (compactionHook != null && delegate.getContextWindowSize() > 0) {
+              var compacted = compact(messages);
+              if (compacted != null) {
+                effective = compacted.messages();
+                context = compacted.breakdown();
+                if (context.compacted()) runtime.contextCompacted(context);
+              }
+            }
             StringBuilder inputText = new StringBuilder();
-            for (Msg message : messages) {
+            for (Msg message : effective) {
               if (message.getTextContent() != null) inputText.append(message.getTextContent()).append('\n');
             }
             inputText.append(tools);
@@ -77,7 +105,9 @@ public record ControlledModel(
             runtime.event(EventType.MODEL_STARTED, "AgentScope 开始模型调用：" + delegate.getModelName());
             AtomicReference<ChatResponse> latest = new AtomicReference<>();
             AtomicReference<ChatUsage> latestUsage = new AtomicReference<>();
-            return Flux.defer(() -> delegate.stream(messages, tools, constrained))
+            ContextBreakdown breakdown = context;
+            List<Msg> request = effective;
+            return Flux.defer(() -> delegate.stream(request, tools, constrained))
                 .doOnNext(
                     response -> {
                       latest.set(response);
@@ -91,7 +121,7 @@ public record ControlledModel(
                         runtime.modelResult(
                             usage == null ? null : usage.getInputTokens(),
                             usage == null ? null : usage.getOutputTokens());
-                        runtime.modelTrace(buildPayload(messages, tools, latest.get()));
+                        runtime.modelTrace(buildPayload(request, tools, latest.get(), breakdown));
                         runtime.event(EventType.MODEL_FINISHED, "AgentScope 模型已返回。");
                       } catch (RuntimeException e) {
                         failure.set(e);
@@ -114,6 +144,87 @@ public record ControlledModel(
   }
 
   /**
+   * 调用四级压缩并把结果映射回 AgentScope 消息。
+   *
+   * <p>未修改的消息复用原对象，保留 think/tool_use 等结构化块；被压缩的工具结果重建为带原 callId 的
+   * ToolResultBlock，确保工具调用与结果仍然成对。
+   */
+  private Compacted compact(List<Msg> messages) {
+    try {
+      var result =
+          compactionHook.compact(
+              CompactionRequest.of(toContextMessages(messages), delegate.getContextWindowSize()));
+      return new Compacted(rebuild(messages, result.messages()), result.breakdown());
+    } catch (RuntimeException ignored) {
+      // 压缩适配失败时保留原请求；预算检查仍会阻止超限输入。
+      return null;
+    }
+  }
+
+  private static List<ContextMessage> toContextMessages(List<Msg> messages) {
+    var result = new ArrayList<ContextMessage>(messages.size());
+    for (var message : messages) {
+      String text = message.getTextContent() == null ? "" : message.getTextContent();
+      String toolCallId = null;
+      var toolResult = message.getFirstContentBlock(ToolResultBlock.class);
+      if (toolResult != null) toolCallId = toolResult.getId();
+      if (toolCallId == null) {
+        var toolUse = message.getFirstContentBlock(ToolUseBlock.class);
+        if (toolUse != null) toolCallId = toolUse.getId();
+      }
+      result.add(
+          new ContextMessage(
+              message.getRole() == null ? "USER" : message.getRole().name(),
+              message.getName(),
+              text,
+              toolCallId));
+    }
+    return result;
+  }
+
+  private static List<Msg> rebuild(List<Msg> original, List<ContextMessage> compacted) {
+    var reusable = new LinkedHashMap<String, java.util.ArrayDeque<Msg>>();
+    for (var message : original) {
+      String key = key(message.getRole() == null ? "" : message.getRole().name(), text(message));
+      reusable.computeIfAbsent(key, ignored -> new java.util.ArrayDeque<>()).add(message);
+    }
+    var result = new ArrayList<Msg>(compacted.size());
+    for (var message : compacted) {
+      var queue = reusable.get(key(message.role(), message.content()));
+      if (queue != null && !queue.isEmpty()) {
+        result.add(queue.removeFirst());
+        continue;
+      }
+      MsgRole role;
+      try {
+        role = MsgRole.valueOf(message.role());
+      } catch (IllegalArgumentException e) {
+        role = MsgRole.USER;
+      }
+      var builder = Msg.builder().role(role).name(message.name()).textContent(message.content());
+      if (role == MsgRole.TOOL && message.toolCallId() != null) {
+        builder.content(
+            ToolResultBlock.of(
+                message.toolCallId(),
+                message.name(),
+                TextBlock.builder().text(message.content()).build()));
+      }
+      result.add(builder.build());
+    }
+    return result;
+  }
+
+  private static String text(Msg message) {
+    return message.getTextContent() == null ? "" : message.getTextContent();
+  }
+
+  private static String key(String role, String text) {
+    return role + '\u0000' + text;
+  }
+
+  private record Compacted(List<Msg> messages, ContextBreakdown breakdown) {}
+
+  /**
    * 按价格版本的输出上界收紧请求；已有更小上限时保留更小值。
    *
    * <p>同时设置 maxTokens 和 maxCompletionTokens，覆盖不同供应方的字段约定。该约束仍以供应方实际遵守情况为界，超支由结算账本记录。
@@ -133,7 +244,10 @@ public record ControlledModel(
 
   /** 提取发给模型的消息切片、工具 Schema 以及原始响应/工具决策，脱敏后供玻璃盒透视使用。 */
   private static GlassboxModels.ModelCallPayload buildPayload(
-      List<Msg> messages, List<ToolSchema> tools, ChatResponse response) {
+      List<Msg> messages,
+      List<ToolSchema> tools,
+      ChatResponse response,
+      ContextBreakdown context) {
     boolean truncated = false;
     var reqMessages = new ArrayList<GlassboxModels.PromptMessage>();
     if (messages != null) {
@@ -177,7 +291,7 @@ public record ControlledModel(
     var safeResp = SensitiveDataMasker.maskAndTruncate(textBuilder.toString(), 32_768);
     if (safeResp.truncated()) truncated = true;
     return new GlassboxModels.ModelCallPayload(
-        reqMessages, reqTools, safeResp.text(), toolCalls, truncated);
+        reqMessages, reqTools, safeResp.text(), toolCalls, truncated, context);
   }
 
   private static String safeJson(Object value) {

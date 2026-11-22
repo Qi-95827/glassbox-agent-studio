@@ -8,6 +8,7 @@ import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.agent.definition.AgentDefinitionRegistry;
 import dev.workbench.framework.workflow.plan.AgentBinding;
 import dev.workbench.framework.workflow.plan.BindingComponent;
+import dev.workbench.framework.workflow.plan.RevisionEdge;
 import dev.workbench.privateagent.PrivateAgentCatalog;
 import dev.workbench.workspace.AuthorizedFileSet;
 import java.util.ArrayList;
@@ -132,6 +133,7 @@ public class PlanCandidateValidator {
     var selection = selectAgents(byKey, input, ownerScopeKey, planning, errors);
     validateRolesAndOutputs(byKey, errors, selection);
     validateReviewCoverage(byKey, errors, input.readOnly());
+    validateRevisionEdges(byKey, draft.revisionEdges(), errors);
 
     if (!errors.isEmpty()) return Result.invalid(errors);
 
@@ -183,7 +185,15 @@ public class PlanCandidateValidator {
             PlanCandidateDraft.PROTOCOL_VERSION,
             List.copyOf(normalizedNodes),
             draft.assumptions().stream().map(String::strip).distinct().toList(),
-            draft.openQuestions().stream().map(String::strip).distinct().toList());
+            draft.openQuestions().stream().map(String::strip).distinct().toList(),
+            draft.revisionEdges().stream()
+                .map(
+                    edge ->
+                        new RevisionEdge(
+                            edge.fromReviewerNodeKey().strip(),
+                            edge.toTargetNodeKey().strip(),
+                            edge.maxRevisions()))
+                .toList());
     return new Result(true, List.of(), normalized, sha(normalized, input, resolved), List.copyOf(resolved));
   }
 
@@ -327,6 +337,43 @@ public class PlanCandidateValidator {
       } else if (!requiredText) {
         errors.add(node.key() + "：分析或审查节点必须声明至少一个必需的文本产出。");
       }
+    }
+  }
+
+  /**
+   * 反思回边只允许审查节点指回其直接上游；每个审查节点最多一条回边，禁止自环与重复。
+   *
+   * <p>{@code maxRevisions} 由不可变值对象限定在 1 至 5；这里再核对节点角色、拓扑位置和重复声明。
+   */
+  private static void validateRevisionEdges(
+      Map<String, PlanCandidateDraft.Node> byKey, List<RevisionEdge> edges, List<String> errors) {
+    var reviewers = new HashSet<String>();
+    for (var edge : edges) {
+      if (edge == null) {
+        errors.add("反思回边不能为空。");
+        continue;
+      }
+      String reviewerKey = edge.fromReviewerNodeKey();
+      String targetKey = edge.toTargetNodeKey();
+      var reviewer = byKey.get(reviewerKey);
+      var target = byKey.get(targetKey);
+      if (reviewer == null) {
+        errors.add(reviewerKey + "：反思回边的审查节点不存在。");
+        continue;
+      }
+      if (target == null) {
+        errors.add(reviewerKey + "：反思回边的目标节点不存在：" + targetKey);
+        continue;
+      }
+      if (!reviewers.add(reviewerKey))
+        errors.add(reviewerKey + "：同一审查节点只能声明一条反思回边。");
+      if (reviewer.role() != PlanCandidateDraft.Role.REVIEW)
+        errors.add(reviewerKey + "：只有审查节点可以声明反思回边。");
+      if (target.role() != PlanCandidateDraft.Role.IMPLEMENT
+          && target.role() != PlanCandidateDraft.Role.ANALYZE)
+        errors.add(reviewerKey + "：反思回边只能指向开发或分析节点。");
+      if (!reviewer.dependsOn().contains(targetKey))
+        errors.add(reviewerKey + "：反思回边必须指向该审查节点的直接上游：" + targetKey);
     }
   }
 
@@ -659,6 +706,16 @@ public class PlanCandidateValidator {
     for (String item : normalized.assumptions()) digest.field(item);
     digest.field(normalized.openQuestions().size());
     for (String item : normalized.openQuestions()) digest.field(item);
+    // 只有声明反思回边时才扩展摘要，历史无回边候选的摘要保持完全不变。
+    if (!normalized.revisionEdges().isEmpty()) {
+      digest.field("revision-edges-v1");
+      digest.field(Integer.toString(normalized.revisionEdges().size()));
+      for (var edge : normalized.revisionEdges())
+        digest
+            .field(edge.fromReviewerNodeKey())
+            .field(edge.toTargetNodeKey())
+            .field(Integer.toString(edge.maxRevisions()));
+    }
     return digest.hex();
   }
 }

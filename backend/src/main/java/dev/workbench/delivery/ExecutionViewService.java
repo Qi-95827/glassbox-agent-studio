@@ -61,7 +61,8 @@ public class ExecutionViewService {
       RecoverySupportView recoverySupport,
       long lastEventSeq,
       String executionMode,
-      List<String> breakpoints) {
+      List<String> breakpoints,
+      List<RevisionEdgeView> revisionEdges) {
     public ExecutionView(
         int schemaVersion,
         String generatedAt,
@@ -121,9 +122,14 @@ public class ExecutionViewService {
           recoverySupport,
           lastEventSeq,
           "STEP_TEACHING",
+          List.of(),
           List.of());
     }
   }
+
+  /** 有界反思回边的只读视图；revisionCount 表示已触发次数。 */
+  public record RevisionEdgeView(
+      String reviewerNodeId, String targetNodeId, int maxRevisions, int revisionCount) {}
 
   public record PlanView(
       String id,

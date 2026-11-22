@@ -1,5 +1,6 @@
 package dev.workbench.framework.trace;
 
+import dev.workbench.framework.context.ContextBreakdown;
 import java.util.List;
 
 /** 玻璃盒全链路透视使用的纯不可变值对象，不依赖任何持久化或 SDK 类型。 */
@@ -21,11 +22,22 @@ public final class GlassboxModels {
       List<ToolSchemaView> requestTools,
       String responseContent,
       List<ToolCallDecision> responseToolCalls,
-      boolean truncated) {
+      boolean truncated,
+      ContextBreakdown context) {
     public ModelCallPayload {
       requestMessages = requestMessages == null ? List.of() : List.copyOf(requestMessages);
       requestTools = requestTools == null ? List.of() : List.copyOf(requestTools);
       responseToolCalls = responseToolCalls == null ? List.of() : List.copyOf(responseToolCalls);
+    }
+
+    /** 兼容没有上下文预算快照的历史调用。 */
+    public ModelCallPayload(
+        List<PromptMessage> requestMessages,
+        List<ToolSchemaView> requestTools,
+        String responseContent,
+        List<ToolCallDecision> responseToolCalls,
+        boolean truncated) {
+      this(requestMessages, requestTools, responseContent, responseToolCalls, truncated, null);
     }
   }
 

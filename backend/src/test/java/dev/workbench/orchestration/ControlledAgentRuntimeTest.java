@@ -86,7 +86,7 @@ class ControlledAgentRuntimeTest {
     verify(control, never()).beginModel(anyString(), any(), isNull());
     runtime.modelResult(12, 8);
     var order = inOrder(control);
-    order.verify(control).finishModel(InvocationStatus.COMPLETED, 12, 8, null);
+    order.verify(control).finishModel("agent", InvocationStatus.COMPLETED, 12, 8, null);
     order.verify(control).checkTokenBudget();
   }
 

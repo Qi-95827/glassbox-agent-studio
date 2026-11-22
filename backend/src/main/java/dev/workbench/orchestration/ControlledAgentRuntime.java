@@ -29,6 +29,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final CostService costs;
   private final WorkspaceAuthorizationService authorization;
   private final GlassboxTraceStore traces;
+  private final String locale;
   private AgentAssemblySnapshot.Components assembly;
   private CostService.Reservation costReservation = CostService.Reservation.NONE;
 
@@ -99,6 +100,32 @@ final class ControlledAgentRuntime implements AgentRuntime {
       CostService costs,
       WorkspaceAuthorizationService authorization,
       GlassboxTraceStore traces) {
+    this(
+        runId,
+        agentId,
+        control,
+        assemblyRecords,
+        runs,
+        evidence,
+        nodePolicy,
+        costs,
+        authorization,
+        traces,
+        null);
+  }
+
+  ControlledAgentRuntime(
+      String runId,
+      String agentId,
+      RunControl control,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
+      RunControl.NodePolicy nodePolicy,
+      CostService costs,
+      WorkspaceAuthorizationService authorization,
+      GlassboxTraceStore traces,
+      String locale) {
     this.runId = Objects.requireNonNull(runId);
     this.agentId = Objects.requireNonNull(agentId);
     this.control = Objects.requireNonNull(control);
@@ -109,6 +136,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
     this.costs = costs;
     this.authorization = authorization;
     this.traces = traces;
+    this.locale = locale;
   }
 
   @Override
@@ -129,7 +157,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void modelResult(Integer input, Integer output) {
-    control.finishModel(InvocationStatus.COMPLETED, input, output, null);
+    control.finishModel(agentId, InvocationStatus.COMPLETED, input, output, null);
     CostService.Settlement settlement = CostService.Settlement.NONE;
     if (costs != null) {
       settlement = costs.settle(costReservation, input, output);
@@ -205,12 +233,12 @@ final class ControlledAgentRuntime implements AgentRuntime {
   public void event(EventType type, String message) {
     var ref = evidence.eventRefForAgent(runId, agentId);
     // 调用标识只在服务端已创建对应记录后写入；旧调用或拒绝前事件保持空值。
-    if (type == EventType.MODEL_STARTED) ref = ref.withModelCall(control.currentModelCallId());
-    else if (type == EventType.MODEL_FINISHED) ref = ref.withModelCall(control.lastModelCallId());
+    if (type == EventType.MODEL_STARTED) ref = ref.withModelCall(control.currentModelCallId(agentId));
+    else if (type == EventType.MODEL_FINISHED) ref = ref.withModelCall(control.lastModelCallId(agentId));
     else if (type == EventType.TOOL_STARTED
         || type == EventType.TOOL_FINISHED
         || type == EventType.TOOL_REJECTED)
-      ref = ref.withToolCall(control.currentToolCallId());
+      ref = ref.withToolCall(control.currentToolCallId(agentId));
     evidence.event(runId, type, message, ref);
   }
 
@@ -221,16 +249,48 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void toolResult(String result, String resourceVersion) {
-    control.finishTool(InvocationStatus.COMPLETED, result, null, resourceVersion);
+    control.finishTool(agentId, InvocationStatus.COMPLETED, result, null, resourceVersion);
     // 工具结束时框架会话未必形成一致快照，不能视为系统检查点。
   }
 
   @Override
   public void modelTrace(GlassboxModels.ModelCallPayload payload) {
     if (traces == null || payload == null) return;
-    UUID callId = control.lastModelCallId();
-    if (callId == null) callId = control.currentModelCallId();
+    UUID callId = control.lastModelCallId(agentId);
+    if (callId == null) callId = control.currentModelCallId(agentId);
     if (callId != null) traces.recordModelPayload(runId, callId.toString(), payload);
+  }
+
+  @Override
+  public void contextCompacted(dev.workbench.framework.context.ContextBreakdown breakdown) {
+    if (breakdown == null || !breakdown.compacted()) return;
+    boolean english =
+        dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
+    String message =
+        english
+            ? "Context "
+                + breakdown.appliedTier()
+                + " applied: "
+                + breakdown.beforeTokens()
+                + " → "
+                + breakdown.totalEstimatedTokens()
+                + " tokens, saved "
+                + breakdown.savedPercent()
+                + "%."
+            : "已执行 "
+                + breakdown.appliedTier()
+                + " 上下文压缩："
+                + breakdown.beforeTokens()
+                + " → "
+                + breakdown.totalEstimatedTokens()
+                + " tokens，节省 "
+                + breakdown.savedPercent()
+                + "%。";
+    evidence.event(
+        runId,
+        EventType.CONTEXT_COMPACTED,
+        message,
+        evidence.eventRefForAgent(runId, agentId).withModelCall(control.currentModelCallId(agentId)));
   }
 
   @Override
@@ -241,6 +301,6 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void toolRejected(String safeMessage) {
-    control.finishTool(InvocationStatus.FAILED, null, safeMessage);
+    control.finishTool(agentId, InvocationStatus.FAILED, null, safeMessage);
   }
 }
