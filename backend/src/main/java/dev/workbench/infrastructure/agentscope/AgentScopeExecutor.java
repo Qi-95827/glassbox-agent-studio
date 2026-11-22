@@ -37,6 +37,9 @@ public class AgentScopeExecutor implements AgentExecutor {
   private final dev.workbench.framework.agent.definition.AgentRoleRegistry roles;
   private final dev.workbench.framework.skill.SkillRegistry skills;
   private final dev.workbench.control.MultiTierContextCompactor contextCompactor;
+  private final org.springframework.beans.factory.ObjectProvider<
+          dev.workbench.framework.agent.assembly.MemoryAssemblyPort>
+      memoryPorts;
 
   @org.springframework.beans.factory.annotation.Autowired
   public AgentScopeExecutor(
@@ -47,7 +50,10 @@ public class AgentScopeExecutor implements AgentExecutor {
       AgentToolRegistry tools,
       dev.workbench.framework.agent.definition.AgentRoleRegistry roles,
       dev.workbench.framework.skill.SkillRegistry skills,
-      dev.workbench.control.MultiTierContextCompactor contextCompactor) {
+      dev.workbench.control.MultiTierContextCompactor contextCompactor,
+      org.springframework.beans.factory.ObjectProvider<
+              dev.workbench.framework.agent.assembly.MemoryAssemblyPort>
+          memoryPorts) {
     this.json = json;
     this.stateStore = stateStore;
     this.assemblyPlanner = assemblyPlanner;
@@ -56,6 +62,7 @@ public class AgentScopeExecutor implements AgentExecutor {
     this.roles = roles;
     this.skills = skills;
     this.contextCompactor = contextCompactor;
+    this.memoryPorts = memoryPorts;
   }
 
   /** 兼容只装配执行必需依赖的独立验证；语言资源使用内置中文默认。 */
@@ -73,7 +80,8 @@ public class AgentScopeExecutor implements AgentExecutor {
         tools,
         new dev.workbench.framework.agent.definition.AgentRoleRegistry(),
         new dev.workbench.framework.skill.SkillRegistry(),
-        new dev.workbench.control.MultiTierContextCompactor());
+        new dev.workbench.control.MultiTierContextCompactor(),
+        null);
   }
 
   /** 创建每次运行独立的框架 Agent；工具按角色及用户授权注册。 */
@@ -174,6 +182,11 @@ public class AgentScopeExecutor implements AgentExecutor {
             scopedFiles.size(),
             scopedFiles.isEmpty() ? null : scopeDigest(scopedFiles),
             request.writeEnabled());
+    var memoryPort = memoryPorts == null ? null : memoryPorts.getIfAvailable();
+    var memoryMatches =
+        memoryPort == null || request.context().runId() == null
+            ? List.<AgentAssemblySnapshot.MemoryMatchView>of()
+            : memoryPort.matchesForRun(request.context().runId());
     var components =
         new AgentAssemblySnapshot.Components(
             definition.ref(),
@@ -195,7 +208,8 @@ public class AgentScopeExecutor implements AgentExecutor {
                             tool.name(),
                             tool.toolName(),
                             tool.fileExtensions()))
-                .toList());
+                .toList(),
+            memoryMatches);
     try (ReActAgent agent =
         ReActAgent.builder()
             .name(definition.name())

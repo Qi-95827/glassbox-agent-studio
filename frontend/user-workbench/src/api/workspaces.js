@@ -23,7 +23,13 @@ export const workspacesApi = {
   decideDelivery: (deliveryId, approve) =>
     post(`/workspaces/deliveries/${deliveryId}/decision`, { approve }),
   executeDelivery: deliveryId => post(`/workspaces/deliveries/${deliveryId}/execute`),
-  memories: id => get(`/workspaces/${id}/memories`),
+  memories: (id, params = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.set('status', params.status);
+    if (params.type) query.set('type', params.type);
+    const suffix = query.toString() ? `?${query}` : '';
+    return get(`/workspaces/${id}/memories${suffix}`);
+  },
   searchMemories: (id, q) => get(`/workspaces/${id}/memories/search?${new URLSearchParams({ q })}`),
   memoryHistory: (id, memoryId, beforeVersion) => {
     const query = new URLSearchParams({ limit: '20' });
@@ -34,6 +40,12 @@ export const workspacesApi = {
   updateMemory: (id, memoryId, payload) => put(`/workspaces/${id}/memories/${memoryId}`, payload),
   deleteMemory: (id, memoryId, version) =>
     del(`/workspaces/${id}/memories/${memoryId}?version=${version}`),
+  acceptMemory: (id, memoryId, version) =>
+    post(`/workspaces/${id}/memories/${memoryId}/accept?version=${version}`),
+  ignoreMemory: (id, memoryId, version) =>
+    post(`/workspaces/${id}/memories/${memoryId}/ignore?version=${version}`),
+  promoteMemory: (id, memoryId, version, payload) =>
+    post(`/workspaces/${id}/memories/${memoryId}/promote?version=${version}`, payload),
   repositoryGrants: () => get('/admin/repositories'),
   grantRepository: payload => post('/admin/repositories', payload),
   revokeRepository: id => del(`/admin/repositories/${id}`)

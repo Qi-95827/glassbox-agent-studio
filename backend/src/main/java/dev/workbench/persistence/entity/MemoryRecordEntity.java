@@ -3,6 +3,7 @@ package dev.workbench.persistence.entity;
 import dev.workbench.domain.MemoryCategory;
 import dev.workbench.domain.MemorySource;
 import dev.workbench.domain.MemoryStatus;
+import dev.workbench.framework.memory.MemoryType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -50,6 +51,26 @@ public class MemoryRecordEntity implements Persistable<String> {
   @Column(name = "version", nullable = false)
   private int version;
 
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @Column(name = "memory_type", nullable = false, length = 20)
+  private MemoryType memoryType;
+
+  @Column(name = "source_run_id", length = 36)
+  private String sourceRunId;
+
+  @Column(name = "path_patterns_json", nullable = false, length = 2000)
+  private String pathPatternsJson;
+
+  @Column(name = "confidence", nullable = false)
+  private double confidence;
+
+  @Column(name = "hit_count", nullable = false)
+  private int hitCount;
+
+  @Column(name = "last_hit_at", length = 40)
+  private String lastHitAt;
+
   @Column(name = "created_at", nullable = false, length = 40)
   private String createdAt;
 
@@ -68,6 +89,40 @@ public class MemoryRecordEntity implements Persistable<String> {
       int version,
       String createdAt,
       String updatedAt) {
+    this(
+        id,
+        workspaceId,
+        category,
+        content,
+        source,
+        status,
+        version,
+        MemoryType.SEMANTIC,
+        null,
+        "[]",
+        1.0,
+        0,
+        null,
+        createdAt,
+        updatedAt);
+  }
+
+  public MemoryRecordEntity(
+      String id,
+      String workspaceId,
+      MemoryCategory category,
+      String content,
+      MemorySource source,
+      MemoryStatus status,
+      int version,
+      MemoryType memoryType,
+      String sourceRunId,
+      String pathPatternsJson,
+      double confidence,
+      int hitCount,
+      String lastHitAt,
+      String createdAt,
+      String updatedAt) {
     this.id = id;
     this.workspaceId = workspaceId;
     this.category = category;
@@ -75,6 +130,12 @@ public class MemoryRecordEntity implements Persistable<String> {
     this.source = source;
     this.status = status;
     this.version = version;
+    this.memoryType = memoryType;
+    this.sourceRunId = sourceRunId;
+    this.pathPatternsJson = pathPatternsJson == null ? "[]" : pathPatternsJson;
+    this.confidence = Math.max(0, Math.min(1, confidence));
+    this.hitCount = Math.max(0, hitCount);
+    this.lastHitAt = lastHitAt;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
   }
@@ -117,6 +178,30 @@ public class MemoryRecordEntity implements Persistable<String> {
 
   public int getVersion() {
     return version;
+  }
+
+  public MemoryType getMemoryType() {
+    return memoryType == null ? MemoryType.SEMANTIC : memoryType;
+  }
+
+  public String getSourceRunId() {
+    return sourceRunId;
+  }
+
+  public String getPathPatternsJson() {
+    return pathPatternsJson;
+  }
+
+  public double getConfidence() {
+    return confidence;
+  }
+
+  public int getHitCount() {
+    return hitCount;
+  }
+
+  public String getLastHitAt() {
+    return lastHitAt;
   }
 
   public String getCreatedAt() {

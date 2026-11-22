@@ -44,7 +44,8 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
       Map<ToolKind, Integer> tools,
       Authorization authorization,
       Input input,
-      List<PrivateTool> privateTools) {
+      List<PrivateTool> privateTools,
+      List<MemoryMatchView> memoryMatches) {
     public Components {
       Objects.requireNonNull(definition);
       Objects.requireNonNull(model);
@@ -56,6 +57,33 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
       skills = List.copyOf(skills);
       tools = Map.copyOf(tools);
       privateTools = privateTools == null ? List.of() : List.copyOf(privateTools);
+      memoryMatches = memoryMatches == null ? List.of() : List.copyOf(memoryMatches);
+    }
+
+    /** 兼容没有记忆召回的装配。 */
+    public Components(
+        AgentDefinitionRef definition,
+        String definitionSha256,
+        ModelReference model,
+        Integer maxIterations,
+        int maxFrameworkRetries,
+        List<SkillRef> skills,
+        Map<ToolKind, Integer> tools,
+        Authorization authorization,
+        Input input,
+        List<PrivateTool> privateTools) {
+      this(
+          definition,
+          definitionSha256,
+          model,
+          maxIterations,
+          maxFrameworkRetries,
+          skills,
+          tools,
+          authorization,
+          input,
+          privateTools,
+          List.of());
     }
 
     /** 兼容没有私有工具记录的历史装配。 */
@@ -79,7 +107,23 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
           tools,
           authorization,
           input,
+          List.of(),
           List.of());
+    }
+  }
+
+  /** 一条被注入记忆的得分与召回理由；不保存正文。 */
+  public record MemoryMatchView(
+      String memoryId,
+      String memoryType,
+      double score,
+      String matchedReason,
+      int version) {
+    public MemoryMatchView {
+      memoryId = memoryId == null ? "" : memoryId;
+      memoryType = memoryType == null ? "SEMANTIC" : memoryType;
+      score = Math.max(0, Math.min(1, score));
+      matchedReason = matchedReason == null ? "" : matchedReason;
     }
   }
 

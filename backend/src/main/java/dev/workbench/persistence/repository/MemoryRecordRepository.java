@@ -17,6 +17,13 @@ public interface MemoryRecordRepository extends JpaRepository<MemoryRecordEntity
   List<MemoryRecordEntity> findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(
       String workspaceId, MemoryStatus status);
 
+  List<MemoryRecordEntity> findByWorkspaceIdOrderByUpdatedAtDescIdAsc(String workspaceId);
+
+  List<MemoryRecordEntity> findByWorkspaceIdAndStatusNotOrderByUpdatedAtDescIdAsc(
+      String workspaceId, MemoryStatus status);
+
+  boolean existsBySourceRunId(String sourceRunId);
+
   Optional<MemoryRecordEntity> findByIdAndWorkspaceIdAndStatus(
       String id, String workspaceId, MemoryStatus status);
 
@@ -43,15 +50,25 @@ public interface MemoryRecordRepository extends JpaRepository<MemoryRecordEntity
   @Transactional(propagation = Propagation.MANDATORY)
   @Modifying(flushAutomatically = true, clearAutomatically = true)
   @Query(
-      "update MemoryRecordEntity m set m.status = :deleted, m.version = m.version + 1,"
+      "update MemoryRecordEntity m set m.status = :next, m.version = m.version + 1,"
           + " m.updatedAt = :updatedAt"
-          + " where m.id = :id and m.workspaceId = :workspaceId and m.status = :active"
+          + " where m.id = :id and m.workspaceId = :workspaceId and m.status = :current"
           + " and m.version = :version")
-  int softDelete(
+  int moveStatus(
       @Param("id") String id,
       @Param("workspaceId") String workspaceId,
       @Param("updatedAt") String updatedAt,
-      @Param("deleted") MemoryStatus deleted,
-      @Param("active") MemoryStatus active,
+      @Param("next") MemoryStatus next,
+      @Param("current") MemoryStatus current,
       @Param("version") int version);
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  @Modifying(flushAutomatically = true, clearAutomatically = true)
+  @Query(
+      "update MemoryRecordEntity m set m.hitCount = m.hitCount + 1, m.lastHitAt = :hitAt"
+          + " where m.id = :id and m.status = :active")
+  int recordHit(
+      @Param("id") String id,
+      @Param("hitAt") String hitAt,
+      @Param("active") MemoryStatus active);
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Box, Button, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import HistoryRounded from '@mui/icons-material/HistoryRounded';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { workspacesApi } from '../../api/workspaces';
@@ -7,6 +7,7 @@ import { useToast } from '../../components/ToastProvider';
 import EmptyState from '../../components/EmptyState';
 import MemoryHistoryDialog from './MemoryHistoryDialog';
 import { googleTokens } from '../../theme/googleTheme';
+import { useI18n } from '../../i18n/I18nProvider';
 
 const categories = {
   PROJECT_CONVENTION: '项目约定',
@@ -14,13 +15,20 @@ const categories = {
   PRECAUTION: '注意事项'
 };
 
-/** 工作区项目背景：仅本地用户确认的内容可保存，任务需单独授权读取。 */
+/** 工作区三层记忆：语义/情景/程序；候选必须采纳后才注入任务。 */
 export default function WorkspaceMemoryPanel({ workspaceId }) {
+  const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const [typeFilter, setTypeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const memories = useQuery({
-    queryKey: ['workspace-memories', workspaceId],
-    queryFn: () => workspacesApi.memories(workspaceId)
+    queryKey: ['workspace-memories', workspaceId, typeFilter, statusFilter],
+    queryFn: () =>
+      workspacesApi.memories(workspaceId, {
+        type: typeFilter || undefined,
+        status: statusFilter || undefined
+      })
   });
   const [category, setCategory] = useState('PROJECT_CONVENTION');
   const [content, setContent] = useState('');
@@ -73,6 +81,26 @@ export default function WorkspaceMemoryPanel({ workspaceId }) {
     }
   };
 
+  const decide = async (row, action) => {
+    try {
+      if (action === 'accept') await workspacesApi.acceptMemory(workspaceId, row.id, row.version);
+      else await workspacesApi.ignoreMemory(workspaceId, row.id, row.version);
+      await refresh();
+      toast.success(t(action === 'accept' ? 'memory.accepted' : 'memory.ignored'));
+    } catch (error) {
+      toast.error(error.message);
+    }
+  };
+
+  const promote = async row => {
+    try {
+      await workspacesApi.promoteMemory(workspaceId, row.id, row.version, {});
+      toast.success(t('memory.promoted'));
+    } catch (error) {
+      toast.error(error.message);
+    }
+  };
+
   const runSearch = async () => {
     try {
       setResults(await workspacesApi.searchMemories(workspaceId, search));
@@ -83,9 +111,7 @@ export default function WorkspaceMemoryPanel({ workspaceId }) {
 
   return (
     <Stack spacing={1.75}>
-      <Alert severity="info">
-        仅本地用户确认的内容可保存。任务需单独授权读取；删除后新任务不再读取，但历史版本仍保留。请勿保存密钥。
-      </Alert>
+      <Alert severity="info">{t('memory.notice')}</Alert>
 
       <Box sx={{ p: 1.75, border: `1px solid ${googleTokens.outline}`, borderRadius: 3 }}>
         <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 1 }}>
@@ -137,6 +163,32 @@ export default function WorkspaceMemoryPanel({ workspaceId }) {
 
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
         <TextField
+          select
+          size="small"
+          label={t('memory.type')}
+          value={typeFilter}
+          onChange={event => setTypeFilter(event.target.value)}
+          sx={{ minWidth: 150 }}
+        >
+          <MenuItem value="">{t('memory.allTypes')}</MenuItem>
+          <MenuItem value="SEMANTIC">{t('memory.type.SEMANTIC')}</MenuItem>
+          <MenuItem value="EPISODIC">{t('memory.type.EPISODIC')}</MenuItem>
+          <MenuItem value="PROCEDURAL">{t('memory.type.PROCEDURAL')}</MenuItem>
+        </TextField>
+        <TextField
+          select
+          size="small"
+          label={t('memory.status')}
+          value={statusFilter}
+          onChange={event => setStatusFilter(event.target.value)}
+          sx={{ minWidth: 150 }}
+        >
+          <MenuItem value="">{t('memory.allStatuses')}</MenuItem>
+          <MenuItem value="ACTIVE">{t('memory.status.ACTIVE')}</MenuItem>
+          <MenuItem value="CANDIDATE">{t('memory.status.CANDIDATE')}</MenuItem>
+          <MenuItem value="ARCHIVED">{t('memory.status.ARCHIVED')}</MenuItem>
+        </TextField>
+        <TextField
           size="small"
           label="按内容查找项目背景"
           value={search}
@@ -144,7 +196,6 @@ export default function WorkspaceMemoryPanel({ workspaceId }) {
           sx={{ flex: 1 }}
           slotProps={{ htmlInput: { maxLength: 100 } }}
         />
-
         <Button variant="outlined" onClick={runSearch} disabled={!search.trim()}>
           查找
         </Button>
@@ -166,22 +217,48 @@ export default function WorkspaceMemoryPanel({ workspaceId }) {
           <Box key={row.id} sx={{ p: 1.5, borderBottom: `1px solid ${googleTokens.outline}` }}>
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
-
               spacing={1}
               sx={{ justifyContent: 'space-between' }}
             >
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                  {categories[row.category] || row.category} · v{row.version}
-                </Typography>
+                <Stack direction="row" spacing={0.6} sx={{ alignItems: 'center', mb: 0.4 }}>
+                  <Chip
+                    size="small"
+                    label={t(`memory.type.${row.memoryType || 'SEMANTIC'}`)}
+                    sx={{ bgcolor: '#E8F0FE', color: '#174EA6' }}
+                  />
+                  <Chip size="small" variant="outlined" label={t(`memory.status.${row.status}`)} />
+                  <Typography variant="caption" color="text.secondary">
+                    {categories[row.category] || row.category} · v{row.version}
+                    {row.score != null ? ` · score ${Number(row.score).toFixed(2)}` : ''}
+                  </Typography>
+                </Stack>
                 <Typography
                   variant="body2"
                   sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
                 >
                   {row.content}
                 </Typography>
+                {row.matchedReason && (
+                  <Typography variant="caption" color="text.secondary">
+                    {t('memory.matchedReason')}：{row.matchedReason}
+                  </Typography>
+                )}
               </Box>
-              <Stack direction="row" spacing={0.4} sx={{ flexShrink: 0 }}>
+              <Stack direction="row" spacing={0.4} sx={{ flexShrink: 0, flexWrap: 'wrap' }}>
+                {row.status === 'CANDIDATE' && (
+                  <>
+                    <Button size="small" variant="contained" onClick={() => decide(row, 'accept')}>
+                      {t('memory.accept')}
+                    </Button>
+                    <Button size="small" color="inherit" onClick={() => decide(row, 'ignore')}>
+                      {t('memory.ignore')}
+                    </Button>
+                    <Button size="small" variant="outlined" onClick={() => promote(row)}>
+                      {t('memory.promote')}
+                    </Button>
+                  </>
+                )}
                 <Button size="small" startIcon={<HistoryRounded />} onClick={() => setHistory(row)}>
                   历史
                 </Button>

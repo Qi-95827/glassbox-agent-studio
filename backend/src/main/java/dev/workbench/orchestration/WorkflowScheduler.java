@@ -553,7 +553,7 @@ class WorkflowScheduler {
         new AgentExecutionRequest(
             node.role(),
             id,
-            stepInput(task, attempt, json.writeValueAsString(input)),
+            stepInput(runId, task, attempt, json.writeValueAsString(input)),
             nodeWorkspaceId,
             files,
             !writeFiles.isEmpty(),
@@ -618,7 +618,7 @@ class WorkflowScheduler {
   }
 
   private static AgentInput stepInput(
-      TaskDefinition task, WorkflowExecutionService.ClaimedNode attempt, String text) {
+      String runId, TaskDefinition task, WorkflowExecutionService.ClaimedNode attempt, String text) {
     var sources = new java.util.ArrayList<AgentInput.Source>();
     sources.add(new AgentInput.Source(AgentInput.Kind.TASK, task.id().toString(), null));
     sources.add(
@@ -638,7 +638,7 @@ class WorkflowScheduler {
             new AgentInput.Source(
                 AgentInput.Kind.TOOL_CALL, evidence.toolCallId().toString(), evidence.version()));
     }
-    return new AgentInput(text, sources);
+    return new AgentInput(runId, text, sources);
   }
 
   private record StepInput(

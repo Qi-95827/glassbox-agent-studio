@@ -1,6 +1,7 @@
 package dev.workbench.persistence.entity;
 
 import dev.workbench.domain.MemoryCategory;
+import dev.workbench.framework.memory.MemoryType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
 import jakarta.persistence.EmbeddedId;
@@ -36,14 +37,48 @@ public class RunMemoryReferenceEntity implements Persistable<RunMemoryReferenceE
   @Column(name = "category", nullable = false, length = 30)
   private MemoryCategory category;
 
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @Column(name = "memory_type", nullable = false, length = 20)
+  private MemoryType memoryType;
+
+  @Column(name = "score", nullable = false)
+  private double score;
+
+  @Column(name = "matched_reason", length = 500)
+  private String matchedReason;
+
   protected RunMemoryReferenceEntity() {}
 
   public RunMemoryReferenceEntity(
       String runId, int sequenceNo, String memoryId, int memoryVersion, MemoryCategory category) {
+    this(
+        runId,
+        sequenceNo,
+        memoryId,
+        memoryVersion,
+        category,
+        MemoryType.SEMANTIC,
+        0,
+        null);
+  }
+
+  public RunMemoryReferenceEntity(
+      String runId,
+      int sequenceNo,
+      String memoryId,
+      int memoryVersion,
+      MemoryCategory category,
+      MemoryType memoryType,
+      double score,
+      String matchedReason) {
     this.id = new Id(runId, sequenceNo);
     this.memoryId = memoryId;
     this.memoryVersion = memoryVersion;
     this.category = category;
+    this.memoryType = memoryType == null ? MemoryType.SEMANTIC : memoryType;
+    this.score = score;
+    this.matchedReason = matchedReason;
   }
 
   @Override
@@ -72,6 +107,18 @@ public class RunMemoryReferenceEntity implements Persistable<RunMemoryReferenceE
 
   public MemoryCategory getCategory() {
     return category;
+  }
+
+  public MemoryType getMemoryType() {
+    return memoryType;
+  }
+
+  public double getScore() {
+    return score;
+  }
+
+  public String getMatchedReason() {
+    return matchedReason;
   }
 
   @Embeddable

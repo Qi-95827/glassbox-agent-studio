@@ -1,6 +1,7 @@
 package dev.workbench.domain;
 
-/** 首期仅接受用户手动确认，不自动提升模型推断。 */
+/** 记忆来源；系统只能生成候选，不能直接写入已确认记忆。 */
 public enum MemorySource {
-  USER_CONFIRMED
+  USER_CONFIRMED,
+  RUN_EXTRACTION
 }

@@ -59,6 +59,6 @@ public final class AgentContextAssembler {
     // 必需约束与交接文本整体装配；超过上限时在启动模型前阻塞，避免静默丢失硬约束。
     if (result.length() > maxChars)
       throw new IllegalStateException("Agent 上下文超过 " + maxChars + " 字符上限，已在启动模型前停止，请缩小授权范围或任务输入。");
-    return new AgentInput(result.toString(), sources);
+    return new AgentInput(input.runId(), result.toString(), sources);
   }
 }

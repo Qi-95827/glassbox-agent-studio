@@ -17,6 +17,7 @@ export default function AssemblyBlueprintPanel({ node, attempts }) {
   const grantedKeys = Object.keys(grantedMap);
   const filteredKeys = ALL_CORE_TOOLS.filter(key => !grantedKeys.includes(key));
   const sources = components?.input?.sources ?? [];
+  const memoryMatches = components?.memoryMatches ?? [];
 
   const filterReason = key => {
     if (key === 'WORKSPACE_WRITE') {
@@ -160,6 +161,50 @@ export default function AssemblyBlueprintPanel({ node, attempts }) {
                 />
               );
             })}
+          </Stack>
+        </Box>
+      )}
+
+      {memoryMatches.length > 0 && (
+        <Box
+          sx={{
+            p: 1.5,
+            borderRadius: 3,
+            bgcolor: '#FFFFFF',
+            border: `1px solid ${googleTokens.outline}`
+          }}
+        >
+          <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
+            {t('assembly.memory')}
+          </Typography>
+          <Stack spacing={0.6}>
+            {memoryMatches.map(match => (
+              <Stack
+                key={`${match.memoryId}:${match.version}`}
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={0.6}
+                sx={{
+                  alignItems: { sm: 'center' },
+                  px: 0.75,
+                  py: 0.5,
+                  borderRadius: 2,
+                  bgcolor: '#F8F9FA'
+                }}
+              >
+                <Chip
+                  size="small"
+                  label={`${t(`memory.type.${match.memoryType}`)} · ${Number(match.score).toFixed(2)}`}
+                  sx={{ bgcolor: '#E6F4EA', color: '#137333', fontWeight: 600 }}
+                />
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ overflowWrap: 'anywhere' }}
+                >
+                  {match.matchedReason}
+                </Typography>
+              </Stack>
+            ))}
           </Stack>
         </Box>
       )}

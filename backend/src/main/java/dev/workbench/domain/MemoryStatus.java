@@ -1,7 +1,9 @@
 package dev.workbench.domain;
 
-/** 活跃记录可检索，删除记录只保留历史。 */
+/** 记忆生命周期：候选必须经用户采纳才能注入任务。 */
 public enum MemoryStatus {
+  CANDIDATE,
   ACTIVE,
+  ARCHIVED,
   DELETED
 }

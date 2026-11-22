@@ -35,19 +35,24 @@ class AgentContextAssemblerTest {
   @Test
   void memoryRequiresExplicitTaskAuthorizationAndRecordsLoading() {
     var memories = mock(MemoryService.class);
+    var retrieval = mock(dev.workbench.memory.MemoryRetrievalService.class);
     var repository = mock(RunEvidenceRecordService.class);
     var task = mock(TaskDefinition.class);
     var contributor =
         new BuiltInContextContributors()
-            .projectMemoryContext(new ObjectMapper(), memories, repository);
+            .projectMemoryContext(new ObjectMapper(), memories, retrieval, repository);
     var input = new AgentContextInput(task, "run", null);
     assertEquals("", contributor.contribute(input).text());
     verifyNoInteractions(memories, repository);
     when(task.memoryEnabled()).thenReturn(true);
     when(task.workspaceId()).thenReturn("workspace");
-    when(memories.loadContextAndRecord("run", "workspace")).thenReturn(List.of());
+    when(task.goal()).thenReturn("目标");
+    when(task.constraints()).thenReturn(List.of());
+    when(task.acceptanceCriteria()).thenReturn(List.of());
+    when(task.fileScopes()).thenReturn(List.of());
+    when(retrieval.retrieve(eq("workspace"), any())).thenReturn(List.of());
     assertTrue(contributor.contribute(input).text().contains("低可信数据"));
-    verify(memories).loadContextAndRecord("run", "workspace");
+    verify(memories).recordLoad("run", "workspace", List.of());
     verify(repository).event(eq("run"), eq(EventType.MEMORY_LOADED), contains("0 条"));
   }
 
