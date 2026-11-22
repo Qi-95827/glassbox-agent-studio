@@ -37,9 +37,9 @@ export const ARCHITECTURE_TOPICS = [
         title: { 'zh-CN': '单进程零运维', 'en-US': 'Zero-Ops Local Process' },
         body: {
           'zh-CN':
-            '前端静态产物内嵌 Spring Boot，嵌入式 H2 文件库 + Flyway V6 自动迁移，开箱即跑。',
+            '前端静态产物内嵌 Spring Boot，嵌入式 H2 文件库 + Flyway V10 自动迁移，开箱即跑。',
           'en-US':
-            'Frontend bundle served by Spring Boot with embedded H2 file DB and Flyway V6 migrations out of the box.'
+            'Frontend bundle served by Spring Boot with embedded H2 file DB and Flyway V10 migrations out of the box.'
         }
       },
       {
@@ -66,11 +66,16 @@ export const ARCHITECTURE_TOPICS = [
         tone: 'blue',
         intent: {
           'zh-CN':
-            '提供可视化 DAG 流程图、四维玻璃盒透视、BYOK 配置与 Grafana 风格监控看板，轮询拉取增量事件。',
+            '提供可视化 DAG、四维玻璃盒（含上下文占比条）、动态工具审批与监控看板，优先通过 SSE 实时流式推送（断线自动降级轮询）。',
           'en-US':
-            'Renders the DAG flow graph, 4-panel glass-box inspector, BYOK settings, and monitoring dashboard via cursor-based event polling.'
+            'Renders DAG graphs, 4-panel glass-box (with Context Meter), live tool approvals, and monitoring via SSE streaming with polling fallback.'
         },
-        codeRefs: ['WorkbenchShell.jsx', 'RunDetailPage.jsx', 'NodeGlassboxDialog.jsx']
+        codeRefs: [
+          'WorkbenchShell.jsx',
+          'RunDetailPage.jsx',
+          'ToolApprovalDrawer.jsx',
+          'useRunExecution.js'
+        ]
       },
       api: {
         label: { 'zh-CN': 'Spring MVC & 安全边界', 'en-US': 'Spring MVC & Security' },
@@ -101,16 +106,16 @@ export const ARCHITECTURE_TOPICS = [
         codeRefs: ['TaskIdeaService.java', 'EntryRouteService.java', 'PlanCandidateValidator.java']
       },
       orchestration: {
-        label: { 'zh-CN': 'DAG 运行编排器', 'en-US': 'DAG Orchestrator' },
+        label: { 'zh-CN': '并发 DAG & 有界反思编排器', 'en-US': 'Parallel DAG & Reflection' },
         role: { 'zh-CN': '调度核心', 'en-US': 'Core Scheduler' },
         tone: 'blue',
         intent: {
           'zh-CN':
-            '按拓扑依赖认领就绪节点，协调断点暂停、交接校验、系统检查与检查点恢复，维护运行状态机。',
+            '在写集互斥前提下并发认领节点，支持审查打回触发有界反思环（maxRevisions），配合 SSE 流式广播与检查点恢复。',
           'en-US':
-            'Claims ready nodes in topological order, coordinating breakpoints, handoff validation, system checks, and checkpoint recovery.'
+            'Claims disjoint-write nodes concurrently, runs bounded critic-revision loops, broadcasts via SSE, and supports checkpoint recovery.'
         },
-        codeRefs: ['WorkflowScheduler.java', 'WorkflowExecutionService.java', 'RunService.java']
+        codeRefs: ['WorkflowScheduler.java', 'ReflectionCoordinator.java', 'RunStreamBroker.java']
       },
       agent: {
         label: { 'zh-CN': 'AgentScope 执行器', 'en-US': 'AgentScope Executor' },
@@ -129,41 +134,44 @@ export const ARCHITECTURE_TOPICS = [
         ]
       },
       gateway: {
-        label: { 'zh-CN': 'Tool Gateway 安全网关', 'en-US': 'Tool Gateway' },
-        role: { 'zh-CN': '六道安检门', 'en-US': '6 Security Gates' },
+        label: { 'zh-CN': 'Tool Gateway + Gate 5.5 + MCP', 'en-US': 'Tool Gateway + HITL + MCP' },
+        role: { 'zh-CN': '六道门 + 动态审批', 'en-US': '6 Gates + HITL' },
         tone: 'amber',
         intent: {
           'zh-CN':
-            '拦截每一次工具调用，依次执行注册校验、取消态、配额、重复熔断、文件授权复验与写入回执记录。',
+            '内置工具与外部 MCP 工具统一收口，串联六道安检门与 Gate 5.5 高危动态审批（放行 / 改参二次复验 / 拒绝回传模型）。',
           'en-US':
-            'Intercepts every tool call through 6 sequential gates: registry, cancellation, quotas, loop guard, file scope, and write receipts.'
+            'Routes built-in and external MCP tools through 6 security gates plus Gate 5.5 dynamic HITL approval (approve, edit+recheck, or reject).'
         },
-        codeRefs: ['ToolGateway.java', 'WorkspaceAuthorizationService.java']
+        codeRefs: ['ToolGateway.java', 'ToolApprovalService.java', 'McpAgentTool.java']
       },
       model: {
-        label: { 'zh-CN': '受控模型与 BYOK', 'en-US': 'Controlled Model & BYOK' },
-        role: { 'zh-CN': '模型适配层', 'en-US': 'Model Adapter' },
+        label: {
+          'zh-CN': '受控模型、BYOK 与四级上下文',
+          'en-US': 'Controlled Model & 4-Tier Context'
+        },
+        role: { 'zh-CN': '模型与上下文层', 'en-US': 'Model & Context' },
         tone: 'purple',
         intent: {
           'zh-CN':
-            '统一适配免 Key 模拟模型与 OpenAI 兼容端点，执行 AES-256-GCM 密钥解密、费用行锁预留与 I/O 落库。',
+            '统一适配模拟模型与 BYOK 加密端点，调用前执行 L0–L3 四级分层上下文压缩、行锁费用预留与 SSE 增量透视。',
           'en-US':
-            'Unifies simulated demo models and OpenAI-compatible BYOK endpoints with AES-256-GCM decryption, row-locked budgets, and I/O traces.'
+            'Wraps demo and AES-256 BYOK models with L0–L3 multi-tier context compaction, row-locked cost ledgers, and SSE token deltas.'
         },
-        codeRefs: ['ControlledModel.java', 'SecretCipher.java', 'UserModelConnectionFactory.java']
+        codeRefs: ['ControlledModel.java', 'MultiTierContextCompactor.java', 'SecretCipher.java']
       },
       storage: {
-        label: { 'zh-CN': 'H2 持久化 + Git / Docker', 'en-US': 'H2 DB + Git / Docker' },
+        label: { 'zh-CN': 'H2 (V10) + Git / Docker', 'en-US': 'H2 (V10) + Git / Docker' },
         role: { 'zh-CN': '存储与沙箱', 'en-US': 'Storage & Sandboxes' },
         tone: 'green',
         intent: {
           'zh-CN':
-            '82 张表记录全量运行事实；代码变更在独立 Git worktree 隔离执行；模拟 Bug 回归在固定 Docker 容器核验。',
+            'Flyway V1–V10 管理全量运行、审批单、三层长期记忆与 MCP 注册表；代码变更在独立 Git worktree 隔离执行。',
           'en-US':
-            '82 Flyway-managed tables store runtime facts; code edits run in isolated Git worktrees; bug tests verify inside pinned Docker containers.'
+            'Flyway V1–V10 persists runs, approvals, layered long-term memory, and MCP registries; code edits run in isolated Git worktrees.'
         },
         codeRefs: [
-          'V1__baseline.sql ~ V6__task_locale.sql',
+          'V1__baseline.sql ~ V10__mcp_server_registry.sql',
           'WorkspaceService.java',
           'BugService.java'
         ]
@@ -422,16 +430,23 @@ export const ARCHITECTURE_TOPICS = [
         codeRefs: ['TaskCreationService.java', 'RunCreationService.java']
       },
       schedule: {
-        label: { 'zh-CN': '4. DAG 拓扑调度执行', 'en-US': '4. DAG Topological Run' },
+        label: {
+          'zh-CN': '4. 并发 DAG 调度与有界反思环',
+          'en-US': '4. Parallel DAG & Bounded Reflection'
+        },
         role: { 'zh-CN': '核心循环', 'en-US': 'Scheduler Loop' },
         tone: 'blue',
         intent: {
           'zh-CN':
-            '认领全部上游均已完成的就绪节点，支持教学断点暂停、单节点装配执行与系统检查节点。',
+            '在写集互斥前提下并发认领多个就绪节点；审查节点打回时按 maxRevisions 上限自动派生新尝试注入缺陷反馈，超限转人工。',
           'en-US':
-            'Claims nodes whose dependencies have settled, supporting teaching breakpoints, isolated agent runs, and system checks.'
+            'Claims disjoint-write nodes concurrently; reviewer rejections spawn bounded revision attempts with critic feedback before escalating to humans.'
         },
-        codeRefs: ['WorkflowScheduler.java', 'WorkflowExecutionService.java']
+        codeRefs: [
+          'WorkflowScheduler.java',
+          'ReflectionCoordinator.java',
+          'WorkflowExecutionService.java'
+        ]
       },
       handoff: {
         label: { 'zh-CN': '5. 交接校验与结算', 'en-US': '5. Handoff & Settlement' },
@@ -559,18 +574,18 @@ export const ARCHITECTURE_TOPICS = [
       },
       gate5: {
         label: {
-          'zh-CN': '门 5 · 工作区文件授权交集复验',
-          'en-US': 'Gate 5 · File Scope Re-Check'
+          'zh-CN': '门 5 & 5.5 · 授权复验与高危动态审批',
+          'en-US': 'Gate 5 & 5.5 · Scope & HITL Approval'
         },
-        role: { 'zh-CN': '安检门 #5（最关键）', 'en-US': 'Security Gate #5 (Critical)' },
+        role: { 'zh-CN': '核心安检 + HITL', 'en-US': 'Critical Gate + HITL' },
         tone: 'amber',
         intent: {
           'zh-CN':
-            '规范化路径防御目录穿越（..），逐条核对读写权限交集，越权文件读取或写入 100% 拦截。',
+            '先复验文件授权交集防目录穿越，再按风险分级对高危写入或外部 MCP 工具触发动态挂起审批（放行 / 改参二次过门 5 / 拒绝回传模型）。',
           'en-US':
-            'Normalizes paths against traversal (..) and verifies read/write authorization intersection—blocking all out-of-scope access.'
+            'Re-checks file scope against path traversal, then suspends HIGH-risk writes or MCP calls for human approval (approve, edit+recheck, or reject).'
         },
-        codeRefs: ['WorkspaceAuthorizationService.java', 'ToolGateway.java']
+        codeRefs: ['ToolGateway.java', 'ToolApprovalService.java', 'McpAgentTool.java']
       },
       gate6: {
         label: { 'zh-CN': '门 6 · 受控执行与写入回执', 'en-US': 'Gate 6 · Execute & Receipt' },
@@ -666,16 +681,23 @@ export const ARCHITECTURE_TOPICS = [
         codeRefs: ['AgentAssemblyPlanner.java', 'AgentToolProvider.java']
       },
       context: {
-        label: { 'zh-CN': '授权上下文来源', 'en-US': 'Authorized Context Sources' },
+        label: {
+          'zh-CN': '三层长期记忆与授权上下文',
+          'en-US': 'Layered Memory & Authorized Context'
+        },
         role: { 'zh-CN': '输入配方 #4', 'en-US': 'Ingredient #4' },
         tone: 'green',
         intent: {
           'zh-CN':
-            '仅组装当前任务说明、用户确认的项目记忆、受信系统检查与已通过校验的直接上游交接。',
+            '仅注入用户确认激活（ACTIVE）的语义/情景/程序记忆（按混合评分 Top-K 召回并在快照记录得分与理由），加任务与签收交接。',
           'en-US':
-            'Assembles only the task brief, user-confirmed project memory, trusted system checks, and accepted upstream handoffs.'
+            'Injects only user-confirmed ACTIVE semantic/episodic/procedural memories via hybrid scoring (logging score & reason), plus task and handoffs.'
         },
-        codeRefs: ['AgentAssemblyPlanner.java']
+        codeRefs: [
+          'MemoryRetrievalService.java',
+          'EpisodicMemoryExtractor.java',
+          'AgentAssemblyPlanner.java'
+        ]
       },
       snapshot: {
         label: { 'zh-CN': '冻结装配快照 (Assembly Snapshot)', 'en-US': 'Frozen Assembly Snapshot' },
@@ -877,16 +899,19 @@ export const ARCHITECTURE_TOPICS = [
         codeRefs: ['UserModelConnectionFactory.java', 'OpenAICompatibleModelProbe.java']
       },
       controlled: {
-        label: { 'zh-CN': 'ControlledModel 拦截器', 'en-US': 'ControlledModel Wrapper' },
+        label: {
+          'zh-CN': 'ControlledModel & 四级上下文压缩',
+          'en-US': 'ControlledModel & 4-Tier Compaction'
+        },
         role: { 'zh-CN': '控制中枢', 'en-US': 'Control Hub' },
         tone: 'purple',
         intent: {
           'zh-CN':
-            '统一包裹真实模型与免 Key 模拟模型，串联停止信号检查、Token/费用预留与请求载荷采集。',
+            '调用前执行 L0 分桶统计、L1 工具结果卸载、L2 滑动窗口+结构化摘要、L3 硬兜底，并实时通过 SSE 推送模型增量片段。',
           'en-US':
-            'Wraps both live and simulated models, enforcing stop signals, token/cost reservation, and payload capture.'
+            'Runs L0 token breakdown, L1 tool offloading, L2 sliding summary, and L3 hard guard before calling, while streaming SSE token deltas.'
         },
-        codeRefs: ['ControlledModel.java', 'DemoModel.java']
+        codeRefs: ['ControlledModel.java', 'MultiTierContextCompactor.java', 'ContextMeterBar.jsx']
       },
       ledger: {
         label: { 'zh-CN': '行锁预留 & 独立事务结算', 'en-US': 'Row-Lock Reserve & Settle' },

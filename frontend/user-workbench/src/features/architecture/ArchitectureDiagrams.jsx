@@ -419,7 +419,7 @@ function SystemOverviewDiagram({ isEn, selectedId, onSelect }) {
         width={104}
         height={72}
         title={isEn ? 'Tool Gateway' : '工具安检门'}
-        subtitle={isEn ? '6 Gates' : '六道校验'}
+        subtitle={isEn ? '6 Gates · MCP' : '六道门 · MCP'}
         tone="amber"
         selected={selectedId === 'gateway'}
         onSelect={onSelect}
@@ -447,7 +447,7 @@ function SystemOverviewDiagram({ isEn, selectedId, onSelect }) {
         width={176}
         height={94}
         title={isEn ? 'H2 + Git + Docker' : 'H2 库 + Git / Docker'}
-        subtitle={isEn ? '82 Tables · Worktree · Test' : 'Flyway V6 · 沙箱验证'}
+        subtitle={isEn ? 'Flyway V10 · Worktree' : 'Flyway V10 · 沙箱验证'}
         tone="green"
         selected={selectedId === 'storage'}
         onSelect={onSelect}
@@ -517,8 +517,8 @@ function LayersStackDiagram({ isEn, subView, selectedId, onSelect }) {
           width={192}
           height={108}
           badge="L3"
-          title={isEn ? 'Query Hooks & i18n' : 'React Query & 双语'}
-          subtitle={isEn ? '1.8s Poll · zh / en' : '增量轮询 · 实时切换'}
+          title={isEn ? 'Query Hooks & i18n' : 'SSE / Query & 双语'}
+          subtitle={isEn ? 'SSE Stream · zh / en' : 'SSE 流式 · 降级轮询'}
           tone="green"
           selected={selectedId === 'fe-hooks'}
           onSelect={onSelect}
@@ -623,7 +623,7 @@ function LayersStackDiagram({ isEn, subView, selectedId, onSelect }) {
         height={84}
         badge="04"
         title={isEn ? 'store & persistence' : 'store & persistence 层'}
-        subtitle={isEn ? 'Spring Data JPA · Flyway V1–V6' : 'JPA Repository · 82 张表'}
+        subtitle={isEn ? 'Spring Data JPA · Flyway V1–V10' : 'JPA Repository · Flyway V1–V10'}
         tone="amber"
         selected={selectedId === 'be-persistence'}
         onSelect={onSelect}
@@ -906,9 +906,9 @@ function ToolGatewayDiagram({ isEn, selectedId, onSelect }) {
         y={206}
         width={216}
         height={76}
-        badge="G5"
-        title={isEn ? 'File Scope Re-Check' : '文件授权交集复验'}
-        subtitle={isEn ? 'Path Norm & Read/Write Scope' : '防路径穿越 · 越权必拦'}
+        badge="G5+"
+        title={isEn ? 'Scope & HITL 5.5' : '授权复验 & 5.5 审批'}
+        subtitle={isEn ? 'Path Norm · High-Risk Pause' : '防穿越 · 高危/MCP 挂起'}
         tone="amber"
         selected={selectedId === 'gate5'}
         onSelect={onSelect}
@@ -1217,8 +1217,8 @@ function ModelByokDiagram({ isEn, selectedId, onSelect }) {
         width={220}
         height={92}
         badge="HUB"
-        title={isEn ? 'ControlledModel' : 'ControlledModel 拦截器'}
-        subtitle={isEn ? 'Stop Guard · Payload Capture' : '停止检查 · 适配真实/模拟'}
+        title={isEn ? 'ControlledModel & L0–L3' : 'ControlledModel & 四级压缩'}
+        subtitle={isEn ? 'Compaction · SSE Token Stream' : 'L0–L3 上下文 · SSE 流式'}
         tone="purple"
         selected={selectedId === 'controlled'}
         onSelect={onSelect}

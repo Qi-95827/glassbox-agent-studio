@@ -12,7 +12,6 @@ import io.agentscope.core.tool.ToolBase;
 import io.agentscope.core.tool.ToolCallParam;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -52,8 +51,7 @@ final class McpAgentTool extends ToolBase {
   private String invoke(Map<String, Object> input) throws Exception {
     String argsJson = JSON.writeValueAsString(input == null ? Map.of() : input);
     ToolEffect effect = "HIGH".equals(binding.riskLevel()) ? ToolEffect.WRITE : ToolEffect.READ_ONLY;
-    var gateway =
-        new ToolGateway(context.json(), context.runtime(), new AtomicReference<>());
+    var gateway = new ToolGateway(context.json(), context.runtime(), context.failure());
     return gateway.execute(
         ToolKind.MCP,
         1,

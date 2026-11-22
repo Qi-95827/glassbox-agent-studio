@@ -44,7 +44,8 @@ public final class StdioMcpTransport implements McpTransport {
     builder.environment().put("SYSTEMROOT", System.getenv().getOrDefault("SYSTEMROOT", ""));
     builder.environment().put("TEMP", System.getenv().getOrDefault("TEMP", ""));
     if (environment != null) builder.environment().putAll(environment);
-    builder.redirectErrorStream(false);
+    // 丢弃子进程 stderr，既不污染 stdout JSON-RPC 流，也防止 OS 管道缓冲区写满导致子进程死锁。
+    builder.redirectError(ProcessBuilder.Redirect.DISCARD);
     this.process = builder.start();
     this.input = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
     this.output = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
