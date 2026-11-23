@@ -44,5 +44,9 @@ public interface MemoryEmbeddingProvider {
     }
   }
 
-  record Probe(boolean ok, int dimension, String status) {}
+  record Probe(boolean ok, int dimension, String status, String detail) {
+    public Probe(boolean ok, int dimension, String status) {
+      this(ok, dimension, status, "");
+    }
+  }
 }

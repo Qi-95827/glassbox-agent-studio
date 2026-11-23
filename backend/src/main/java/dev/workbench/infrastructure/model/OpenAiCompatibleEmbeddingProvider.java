@@ -33,6 +33,8 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
   private final String apiKey;
   private final Duration timeout;
   private final int batchSize;
+  private volatile String dimensionModeKey = "";
+  private volatile boolean dimensionModeExplicit = false;
 
   public OpenAiCompatibleEmbeddingProvider(
       ModelConnectionService connections,
@@ -77,10 +79,25 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
     var config = settings.current();
     var endpoint = endpoint(config);
     if (endpoint == null) return List.of();
+    String key = endpoint.model() + "#" + config.dimension();
+    boolean explicit = key.equals(dimensionModeKey) && dimensionModeExplicit;
     var result = new ArrayList<float[]>(texts.size());
     for (int start = 0; start < texts.size(); start += batchSize) {
       int end = Math.min(texts.size(), start + batchSize);
-      result.addAll(requestBatch(endpoint, texts.subList(start, end), true));
+      var batch = requestBatch(endpoint, texts.subList(start, end), true, explicit);
+      if (batch.size() != end - start) {
+        // 端点默认维度与配置不一致，或明确拒绝 dimensions：换一种请求模式重试一次。
+        var retry = requestBatch(endpoint, texts.subList(start, end), true, !explicit);
+        if (retry.size() == end - start) {
+          dimensionModeKey = key;
+          dimensionModeExplicit = !explicit;
+          batch = retry;
+        }
+      } else if (!key.equals(dimensionModeKey)) {
+        dimensionModeKey = key;
+        dimensionModeExplicit = explicit;
+      }
+      result.addAll(batch);
     }
     return List.copyOf(result);
   }
@@ -90,21 +107,84 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
     var config = settings.current();
     var endpoint = endpoint(config);
     if (endpoint == null) return new Probe(false, 0, "UNAVAILABLE");
-    var vectors = requestBatch(endpoint, List.of("embedding connectivity probe"), false);
-    if (vectors.isEmpty() || vectors.getFirst() == null || vectors.getFirst().length == 0)
-      return new Probe(false, 0, "EMPTY");
-    int actual = vectors.getFirst().length;
-    String status = config.dimension() > 0 && actual != config.dimension() ? "DIMENSION_MISMATCH" : "OK";
-    return new Probe(true, actual, status);
+    // 先用端点默认维度探测；多数兼容端点（含阿里云 text-embedding-v3）不接受 dimensions。
+    var first = sendProbe(endpoint, config.dimension(), false);
+    if (first.httpOk()
+        && (config.dimension() <= 0 || first.actualDimension() == config.dimension()))
+      return new Probe(true, first.actualDimension(), "OK", "");
+    if (!first.httpOk()) {
+      var second = sendProbe(endpoint, config.dimension(), true);
+      if (second.httpOk() && second.actualDimension() == config.dimension())
+        return new Probe(true, second.actualDimension(), "OK", "");
+      return new Probe(
+          false,
+          0,
+          "HTTP_" + first.statusCode(),
+          first.detail().isBlank() ? second.detail() : first.detail());
+    }
+    var second = sendProbe(endpoint, config.dimension(), true);
+    if (second.httpOk() && second.actualDimension() == config.dimension())
+      return new Probe(true, second.actualDimension(), "OK", "");
+    return new Probe(
+        false,
+        first.actualDimension(),
+        "DIMENSION_MISMATCH",
+        "expected " + config.dimension() + ", actual " + first.actualDimension());
   }
 
-  private List<float[]> requestBatch(Endpoint endpoint, List<String> texts, boolean enforceDimension) {
+  private record ProbeAttempt(
+      boolean httpOk, int statusCode, int actualDimension, String detail) {}
+
+  private ProbeAttempt sendProbe(
+      Endpoint endpoint, int expectedDimension, boolean includeDimensions) {
+    try {
+      var payload = new LinkedHashMap<String, Object>();
+      payload.put("model", endpoint.model());
+      payload.put("input", List.of("embedding connectivity probe"));
+      if (includeDimensions && expectedDimension > 0)
+        payload.put("dimensions", expectedDimension);
+      var requestBuilder =
+          HttpRequest.newBuilder(URI.create(endpoint.baseUrl() + "/embeddings"))
+              .timeout(timeout)
+              .header("Content-Type", "application/json")
+              .POST(HttpRequest.BodyPublishers.ofByteArray(JSON.writeValueAsBytes(payload)));
+      if (!endpoint.apiKey().isBlank())
+        requestBuilder.header("Authorization", "Bearer " + endpoint.apiKey());
+      var client =
+          HttpClient.newBuilder()
+              .connectTimeout(timeout)
+              .followRedirects(HttpClient.Redirect.NEVER)
+              .build();
+      var response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() / 100 != 2)
+        return new ProbeAttempt(
+            false, response.statusCode(), 0, truncate(response.body(), 500));
+      JsonNode embedding =
+          JSON.readTree(response.body()).path("data").path(0).path("embedding");
+      if (!embedding.isArray() || embedding.isEmpty())
+        return new ProbeAttempt(false, response.statusCode(), 0, truncate(response.body(), 500));
+      return new ProbeAttempt(true, response.statusCode(), embedding.size(), "");
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return new ProbeAttempt(false, 0, 0, "interrupted");
+    } catch (Exception e) {
+      return new ProbeAttempt(false, 0, 0, truncate(String.valueOf(e.getMessage()), 300));
+    }
+  }
+
+  private static String truncate(String value, int max) {
+    if (value == null) return "";
+    return value.length() <= max ? value : value.substring(0, max - 1) + "…";
+  }
+
+  private List<float[]> requestBatch(
+      Endpoint endpoint, List<String> texts, boolean enforceDimension, boolean includeDimensions) {
     try {
       int dimension = settings.current().dimension();
       var payload = new LinkedHashMap<String, Object>();
       payload.put("model", endpoint.model());
       payload.put("input", texts);
-      if (dimension > 0) payload.put("dimensions", dimension);
+      if (includeDimensions && dimension > 0) payload.put("dimensions", dimension);
       var requestBuilder =
           HttpRequest.newBuilder(URI.create(endpoint.baseUrl() + "/embeddings"))
               .timeout(timeout)

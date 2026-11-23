@@ -62,6 +62,8 @@ public class RagEmbeddingController {
       result.put("ok", probe.ok());
       result.put("status", probe.status());
       result.put("actualDimension", probe.dimension());
+      if (probe.detail() != null && !probe.detail().isBlank())
+        result.put("detail", probe.detail());
       return result;
     }
     result.put("ok", false);

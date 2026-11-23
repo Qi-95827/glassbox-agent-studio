@@ -108,8 +108,20 @@ export default function RagEmbeddingPanel() {
         return t('ragEmbedding.probeEmpty');
       case 'UNAVAILABLE':
         return t('ragEmbedding.probeUnavailable');
+      case 'UNREACHABLE':
+        return t('ragEmbedding.probeUnreachable', { detail: probe.detail || '' });
+      case 'HTTP_400':
+        return t('ragEmbedding.probeBadRequest', { detail: probe.detail || '' });
+      case 'HTTP_401':
+        return t('ragEmbedding.probeAuth');
+      case 'HTTP_403':
+        return t('ragEmbedding.probeForbidden');
+      case 'HTTP_404':
+        return t('ragEmbedding.probeNotFound', { detail: probe.detail || '' });
+      case 'HTTP_429':
+        return t('ragEmbedding.probeRateLimit');
       default:
-        return t('ragEmbedding.probeError');
+        return t('ragEmbedding.probeError', { status: probe.status, detail: probe.detail || '' });
     }
   };
 
