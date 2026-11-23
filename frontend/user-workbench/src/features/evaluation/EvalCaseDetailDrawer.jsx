@@ -191,9 +191,15 @@ function AgentPipeline({ category, trace, metrics }) {
               )}
             </Stack>
           )}
-          <Section title={t('evalLab.pipeline.summary')}>
-            <JsonBlock value={trace.summaryPreview || trace.offloadedPreview || unknown} />
-          </Section>
+          {!(
+            trace.structuredAnchors &&
+            trace.summaryPreview &&
+            String(trace.structuredAnchors).trim() === String(trace.summaryPreview).trim()
+          ) && (
+            <Section title={t('evalLab.pipeline.summary')}>
+              <JsonBlock value={trace.summaryPreview || trace.offloadedPreview || unknown} />
+            </Section>
+          )}
           {trace.structuredAnchors && (
             <Section title={t('evalLab.pipeline.structuredAnchors')}>
               <JsonBlock value={trace.structuredAnchors} />
@@ -464,8 +470,10 @@ const INTEGER_METRICS = new Set([
   'api400'
 ]);
 
+/** 后端已输出 0~100 百分数（无需再乘 100）。 */
+const DIRECT_PERCENT_METRICS = new Set(['compressionSavedPercent']);
+
 const PERCENT_METRICS = new Set([
-  'compressionSavedPercent',
   'needleRetention',
   'recallAtK',
   'precisionAtK',
@@ -513,6 +521,10 @@ export function formatMetricValue(key, value, locale, t) {
   if (BOOLEAN_METRICS.has(key)) return t(value ? 'common.yes' : 'common.no');
   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
   const intlLocale = locale === 'en-US' ? 'en-US' : 'zh-CN';
+  if (DIRECT_PERCENT_METRICS.has(key)) {
+    const percent = Math.round(value * 10) / 10;
+    return `${percent.toLocaleString(intlLocale, { maximumFractionDigits: 1 })}%`;
+  }
   if (PERCENT_METRICS.has(key)) {
     const percent = Math.round(value * 1000) / 10;
     return `${percent.toLocaleString(intlLocale, { maximumFractionDigits: 1 })}%`;

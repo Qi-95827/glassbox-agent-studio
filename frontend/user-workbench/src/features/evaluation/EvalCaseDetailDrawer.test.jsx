@@ -88,5 +88,35 @@ describe('评测题玻璃盒穿透抽屉', () => {
     expect(formatMetricValue('beforeTokens', 1226, 'en-US', t)).toBe('1,226');
     expect(formatMetricValue('answerF1', 0.457, 'en-US', t)).toBe('45.7%');
     expect(formatMetricValue('answerF1', 1, 'en-US', t)).toBe('100%');
+    expect(formatMetricValue('compressionSavedPercent', 94.51, 'zh-CN', t)).toBe('94.5%');
+  });
+
+  it('L2 压缩检查点与摘要内容相同时不重复渲染摘要框', () => {
+    const checkpoint = '【上下文压缩检查点】\n## confirmed_facts\n- fact 1';
+    render(
+      <I18nProvider initialLocale="zh-CN">
+        <EvalCaseDetailDrawer
+          open
+          item={{
+            ...item,
+            category: 'CONTEXT_COMPACTION',
+            metrics: { beforeTokens: 10000, afterTokens: 549, compressionSavedPercent: 94.51 },
+            trace: {
+              measurement: 'byok_compaction_agent',
+              prompt: '长文问题',
+              compactionTier: 'L2_SLIDING_SUMMARY',
+              summaryPreview: checkpoint,
+              structuredAnchors: checkpoint
+            }
+          }}
+          categoryLabel={{ CONTEXT_COMPACTION: '四级上下文压缩' }}
+          onClose={() => {}}
+        />
+      </I18nProvider>
+    );
+
+    expect(screen.getByText('94.5%')).toBeInTheDocument();
+    expect(screen.getByText('L2 结构化锚点检查点')).toBeInTheDocument();
+    expect(screen.queryByText('压缩摘要或卸载摘录')).not.toBeInTheDocument();
   });
 });
