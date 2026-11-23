@@ -8,6 +8,7 @@ import dev.workbench.framework.context.ContextMessage;
 import dev.workbench.framework.evaluation.EvalAnswerModel;
 import dev.workbench.framework.evaluation.EvalCaseExecution;
 import dev.workbench.framework.evaluation.EvalExperimentConfig;
+import dev.workbench.framework.evaluation.EvalModelException;
 import dev.workbench.framework.evaluation.EvalSample;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -51,6 +52,11 @@ final class AgentEvalCase {
       metrics.put("executionFailed", true);
       metrics.put("errorCode", e.code);
       trace.put("errorCode", e.code);
+    } catch (EvalModelException e) {
+      // 受控错误码直接透出（如思考链吃光预算），前端按词典翻译，不展示供应商报文。
+      metrics.put("executionFailed", true);
+      metrics.put("errorCode", e.code());
+      trace.put("errorCode", e.code());
     }
     metrics.put("modelRequestAttempted", calls > 0);
     metrics.put("llmCallsCount", calls);
@@ -117,6 +123,10 @@ final class AgentEvalCase {
       if (reply.costUsd() != null) costUsd += reply.costUsd();
       costKnown &= reply.costUsd() != null;
       return rawOutput;
+    } catch (EvalModelException e) {
+      usageKnown = false;
+      costKnown = false;
+      throw e;
     } catch (RuntimeException e) {
       usageKnown = false;
       costKnown = false;

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { I18nProvider } from '../../i18n/I18nProvider';
-import EvalCaseDetailDrawer from './EvalCaseDetailDrawer';
+import { translate } from '../../i18n';
+import EvalCaseDetailDrawer, { formatMetricValue } from './EvalCaseDetailDrawer';
 
 const item = {
   id: 'case-1',
@@ -17,7 +18,7 @@ const item = {
   durationMs: 120,
   linkedRunId: 'run-linked-1',
   rawOutput: 'read ok',
-  metrics: { selectionAccuracy: 1, gatewayPassRate: 1 },
+  metrics: { selectionAccuracy: 1, gatewayPassRate: 0.457, usageKnown: true },
   assertions: [
     { type: 'TOOL_CALLED', expected: 'workspace_read', actual: ['workspace_read'], passed: true }
   ],
@@ -44,7 +45,7 @@ const item = {
 };
 
 describe('评测题玻璃盒穿透抽屉', () => {
-  it('展示题目、断言、安检门并支持深链跳运行玻璃盒', async () => {
+  it('展示题目、双语断言、人性化指标并支持深链跳运行玻璃盒', async () => {
     const onOpenRun = vi.fn();
     render(
       <I18nProvider initialLocale="zh-CN">
@@ -60,11 +61,32 @@ describe('评测题玻璃盒穿透抽屉', () => {
 
     expect(screen.getByText('授权读取')).toBeInTheDocument();
     expect(screen.getByText(/工具 \/ Tools/)).toBeInTheDocument();
-    expect(screen.getByText('TOOL_CALLED')).toBeInTheDocument();
+    expect(screen.getByText('工具已被调用')).toBeInTheDocument();
     expect(screen.getByText(/目标路径命中只读授权范围/)).toBeInTheDocument();
     expect(screen.getByText(/read ok/)).toBeInTheDocument();
+    expect(screen.getByText('工具选择准确率')).toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByText('45.7%')).toBeInTheDocument();
+    // 内部调试字段不再出现在指标卡中。
+    expect(screen.queryByText('usageKnown')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /在运行玻璃盒中打开/ }));
     expect(onOpenRun).toHaveBeenCalledWith('run-linked-1');
+  });
+
+  it('英文界面使用英文指标名与 Yes/No，不出现代码变量名', () => {
+    const bundle = {
+      'common.yes': 'Yes',
+      'common.no': 'No',
+      'evalLab.metric.compactionEnabled': 'Compaction enabled',
+      'evalLab.metric.beforeTokens': 'Est. tokens before',
+      'evalLab.metric.answerF1': 'Answer F1'
+    };
+    const t = key => bundle[key] ?? translate('en-US', key);
+    expect(formatMetricValue('compactionEnabled', true, 'en-US', t)).toBe('Yes');
+    expect(formatMetricValue('compactionEnabled', false, 'en-US', t)).toBe('No');
+    expect(formatMetricValue('beforeTokens', 1226, 'en-US', t)).toBe('1,226');
+    expect(formatMetricValue('answerF1', 0.457, 'en-US', t)).toBe('45.7%');
+    expect(formatMetricValue('answerF1', 1, 'en-US', t)).toBe('100%');
   });
 });

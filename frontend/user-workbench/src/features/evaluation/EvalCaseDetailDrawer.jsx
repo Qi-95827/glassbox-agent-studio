@@ -335,22 +335,189 @@ function AgentPipeline({ category, trace, metrics }) {
 }
 
 const GATEWAY_ROOTS = ['toolCalls', 'attacks'];
-const METRIC_KEYS = {
-  needleRetention: 'evalLab.metric.needleRetention',
+
+/** 所有会在卡片网格中展示的量化指标；未登记的键不直接裸露英文变量名。 */
+export const METRIC_KEYS = {
+  beforeTokens: 'evalLab.metric.beforeTokens',
+  afterTokens: 'evalLab.metric.afterTokens',
+  afterCompactionTokens: 'evalLab.metric.afterCompactionTokens',
+  actualInputTokens: 'evalLab.metric.actualInputTokens',
+  actualOutputTokens: 'evalLab.metric.actualOutputTokens',
+  compactionBudget: 'evalLab.metric.compactionBudget',
+  contextLimit: 'evalLab.metric.contextLimit',
+  compactionEnabled: 'evalLab.metric.compactionEnabled',
+  choiceCorrect: 'evalLab.metric.choiceCorrect',
   compressionSavedPercent: 'evalLab.metric.compressionSavedPercent',
-  recallAtK: 'evalLab.metric.recallAtK',
-  precisionAtK: 'evalLab.metric.precisionAtK',
-  mrr: 'evalLab.metric.mrr',
-  blockRate: 'evalLab.metric.blockRate',
-  gate55CaptureRate: 'evalLab.metric.gate55CaptureRate',
-  injectionDefenseRate: 'evalLab.metric.injectionDefenseRate',
+  offloadedTools: 'evalLab.metric.offloadedTools',
+  needleRetention: 'evalLab.metric.needleRetention',
+  needleCount: 'evalLab.metric.needleCount',
+  retainedCount: 'evalLab.metric.retainedCount',
+  truncated: 'evalLab.metric.truncated',
+  api400: 'evalLab.metric.api400',
+  toolCallCount: 'evalLab.metric.toolCallCount',
+  executedCount: 'evalLab.metric.executedCount',
+  deniedCount: 'evalLab.metric.deniedCount',
+  duplicateDenied: 'evalLab.metric.duplicateDenied',
+  schemaValid: 'evalLab.metric.schemaValid',
   selectionAccuracy: 'evalLab.metric.selectionAccuracy',
   gatewayPassRate: 'evalLab.metric.gatewayPassRate',
   duplicateRate: 'evalLab.metric.duplicateRate',
   validationFirstPassRate: 'evalLab.metric.validationFirstPassRate',
+  recallAtK: 'evalLab.metric.recallAtK',
+  precisionAtK: 'evalLab.metric.precisionAtK',
+  mrr: 'evalLab.metric.mrr',
+  memoryTotalCount: 'evalLab.metric.memoryTotalCount',
+  retrievedCount: 'evalLab.metric.retrievedCount',
+  evidenceRecall: 'evalLab.metric.evidenceRecall',
+  candidateLeaked: 'evalLab.metric.candidateLeaked',
+  candidateLeakCount: 'evalLab.metric.candidateLeakCount',
+  memoryEnabled: 'evalLab.metric.memoryEnabled',
+  targetCount: 'evalLab.metric.targetCount',
+  candidateCount: 'evalLab.metric.candidateCount',
+  planValid: 'evalLab.metric.planValid',
+  supportingTitleRecall: 'evalLab.metric.supportingTitleRecall',
   handoffPassRate: 'evalLab.metric.handoffPassRate',
+  reflectionRounds: 'evalLab.metric.reflectionRounds',
+  llmCallsCount: 'evalLab.metric.llmCallsCount',
+  answerExactMatch: 'evalLab.metric.answerExactMatch',
+  answerF1: 'evalLab.metric.answerF1',
+  modelDefended: 'evalLab.metric.modelDefended',
+  modelHijacked: 'evalLab.metric.modelHijacked',
+  gatewayBlocked: 'evalLab.metric.gatewayBlocked',
+  endToEndSafe: 'evalLab.metric.endToEndSafe',
+  attackSuccessRate: 'evalLab.metric.attackSuccessRate',
+  blockRate: 'evalLab.metric.blockRate',
+  gate55CaptureRate: 'evalLab.metric.gate55CaptureRate',
+  injectionDefenseRate: 'evalLab.metric.injectionDefenseRate',
   fileMatchesExpected: 'evalLab.metric.fileMatchesExpected'
 };
+
+/** 纯内部调试字段：顶部胶囊与断言表已清晰呈现，不在指标卡中重复。 */
+export const HIDDEN_METRICS = new Set([
+  'usageKnown',
+  'costKnown',
+  'codeScore',
+  'codePassed',
+  'assertionCount',
+  'reportedInputTokens',
+  'modelRequestAttempted'
+]);
+
+const BOOLEAN_METRICS = new Set([
+  'compactionEnabled',
+  'choiceCorrect',
+  'schemaValid',
+  'memoryEnabled',
+  'candidateLeaked',
+  'planValid',
+  'modelDefended',
+  'modelHijacked',
+  'gatewayBlocked',
+  'endToEndSafe',
+  'truncated',
+  'executionFailed'
+]);
+
+const INTEGER_METRICS = new Set([
+  'beforeTokens',
+  'afterTokens',
+  'afterCompactionTokens',
+  'actualInputTokens',
+  'actualOutputTokens',
+  'compactionBudget',
+  'contextLimit',
+  'offloadedTools',
+  'needleCount',
+  'retainedCount',
+  'toolCallCount',
+  'executedCount',
+  'deniedCount',
+  'duplicateDenied',
+  'memoryTotalCount',
+  'retrievedCount',
+  'candidateLeakCount',
+  'targetCount',
+  'candidateCount',
+  'reflectionRounds',
+  'llmCallsCount',
+  'api400'
+]);
+
+const PERCENT_METRICS = new Set([
+  'compressionSavedPercent',
+  'needleRetention',
+  'recallAtK',
+  'precisionAtK',
+  'mrr',
+  'blockRate',
+  'gate55CaptureRate',
+  'injectionDefenseRate',
+  'selectionAccuracy',
+  'gatewayPassRate',
+  'duplicateRate',
+  'validationFirstPassRate',
+  'handoffPassRate',
+  'fileMatchesExpected',
+  'evidenceRecall',
+  'supportingTitleRecall',
+  'attackSuccessRate',
+  'answerF1',
+  'answerExactMatch'
+]);
+
+/** 断言类型双语映射；未登记类型回退到通用“其他断言”。 */
+export const ASSERTION_TYPE_KEYS = {
+  ANSWER_EXACT_MATCH: 'evalLab.assertion.ANSWER_EXACT_MATCH',
+  ANSWER_QUALITY: 'evalLab.assertion.ANSWER_QUALITY',
+  CHOICE_ACCURACY: 'evalLab.assertion.CHOICE_ACCURACY',
+  CHOICE_CORRECT: 'evalLab.assertion.CHOICE_CORRECT',
+  CANDIDATE_ZERO_LEAK: 'evalLab.assertion.CANDIDATE_ZERO_LEAK',
+  END_TO_END_SAFE: 'evalLab.assertion.END_TO_END_SAFE',
+  FILE_MATCHES_EXPECTED: 'evalLab.assertion.FILE_MATCHES_EXPECTED',
+  GATEWAY_PASS_RATE: 'evalLab.assertion.GATEWAY_PASS_RATE',
+  HANDOFF_PASS_RATE_MIN: 'evalLab.assertion.HANDOFF_PASS_RATE_MIN',
+  JSON_SCHEMA_VALID: 'evalLab.assertion.JSON_SCHEMA_VALID',
+  METRIC_EQ: 'evalLab.assertion.METRIC_EQ',
+  METRIC_GTE: 'evalLab.assertion.METRIC_GTE',
+  METRIC_LTE: 'evalLab.assertion.METRIC_LTE',
+  PLAN_VALID: 'evalLab.assertion.PLAN_VALID',
+  SUPPORTING_TITLE_RECALL: 'evalLab.assertion.SUPPORTING_TITLE_RECALL',
+  TOOL_CALLED: 'evalLab.assertion.TOOL_CALLED',
+  TOOL_NOT_CALLED: 'evalLab.assertion.TOOL_NOT_CALLED'
+};
+
+/** 整数千分位；比率百分比；布尔按当前语言显示是/否，禁止 true/false 与 .000。 */
+export function formatMetricValue(key, value, locale, t) {
+  if (typeof value === 'boolean') return t(value ? 'common.yes' : 'common.no');
+  if (BOOLEAN_METRICS.has(key)) return t(value ? 'common.yes' : 'common.no');
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+  const intlLocale = locale === 'en-US' ? 'en-US' : 'zh-CN';
+  if (PERCENT_METRICS.has(key)) {
+    const percent = Math.round(value * 1000) / 10;
+    return `${percent.toLocaleString(intlLocale, { maximumFractionDigits: 1 })}%`;
+  }
+  if (INTEGER_METRICS.has(key) || Number.isInteger(value)) {
+    return Math.round(value).toLocaleString(intlLocale);
+  }
+  return value.toLocaleString(intlLocale, { maximumFractionDigits: 3 });
+}
+
+/** 指标名必须走双语词典；为空的键不进入卡片网格。 */
+export function metricLabel(key, t) {
+  return METRIC_KEYS[key] ? t(METRIC_KEYS[key]) : '';
+}
+
+function assertionLabel(type, t) {
+  const key = ASSERTION_TYPE_KEYS[type];
+  return key ? t(key) : t('evalLab.assertion.OTHER');
+}
+
+function formatAssertionValue(value, t) {
+  if (value == null) return '';
+  if (typeof value === 'boolean') return t(value ? 'common.yes' : 'common.no');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
 
 /** 逐题玻璃盒穿透：题目 → 输出 → 安检门 → 压缩/记忆/规划 → 双轨裁判。 */
 export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClose, onOpenRun }) {
@@ -458,6 +625,7 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
             }}
           >
             {Object.entries(item?.metrics ?? {})
+              .filter(([key]) => !HIDDEN_METRICS.has(key) && METRIC_KEYS[key])
               .filter(([, value]) => typeof value === 'number' || typeof value === 'boolean')
               .map(([key, value]) => (
                 <Box
@@ -465,14 +633,10 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
                   sx={{ p: 1, border: `1px solid ${googleTokens.outline}`, borderRadius: 2 }}
                 >
                   <Typography variant="caption" color="text.secondary" noWrap>
-                    {METRIC_KEYS[key] ? t(METRIC_KEYS[key]) : key}
+                    {metricLabel(key, t)}
                   </Typography>
                   <Typography sx={{ fontSize: 15, fontWeight: 500 }}>
-                    {typeof value === 'boolean'
-                      ? value
-                        ? 'true'
-                        : 'false'
-                      : Number(value).toFixed(3)}
+                    {formatMetricValue(key, value, locale, t)}
                   </Typography>
                 </Box>
               ))}
@@ -492,18 +656,20 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
             <TableBody>
               {(item?.assertions ?? []).map((row, index) => (
                 <TableRow key={`${row.type}-${index}`}>
-                  <TableCell sx={{ fontSize: 11.5 }}>{row.type}</TableCell>
-                  <TableCell sx={{ fontSize: 11.5 }}>{String(row.expected ?? '')}</TableCell>
+                  <TableCell sx={{ fontSize: 11.5 }}>{assertionLabel(row.type, t)}</TableCell>
+                  <TableCell sx={{ fontSize: 11.5 }}>
+                    {formatAssertionValue(row.expected, t)}
+                  </TableCell>
                   <TableCell sx={{ fontSize: 11.5, maxWidth: 180 }}>
-                    {typeof row.actual === 'object'
-                      ? JSON.stringify(row.actual)
-                      : String(row.actual ?? '')}
+                    {formatAssertionValue(row.actual, t)}
                   </TableCell>
                   <TableCell>
                     <Chip
                       size="small"
                       color={row.passed ? 'success' : 'error'}
-                      label={row.passed ? 'PASS' : 'FAIL'}
+                      label={t(
+                        row.passed ? 'evalLab.case.passedShort' : 'evalLab.case.failedShort'
+                      )}
                     />
                   </TableCell>
                 </TableRow>
