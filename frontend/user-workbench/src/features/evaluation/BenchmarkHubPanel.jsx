@@ -326,7 +326,7 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
                 <Chip
                   size="small"
                   color={pack.sampleCount > 0 ? 'success' : 'default'}
-                  label={pack.status}
+                  label={t(`evalLab.hub.statusValue.${pack.status}`)}
                 />
               </Stack>
               <Typography variant="caption" color="text.secondary">

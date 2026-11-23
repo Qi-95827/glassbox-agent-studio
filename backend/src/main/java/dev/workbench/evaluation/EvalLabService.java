@@ -309,6 +309,11 @@ public class EvalLabService {
                 + verdict.inputTokens() + verdict.outputTokens();
             duration += executionWithScore.durationMs();
             var now = WorkbenchTime.now();
+            var trace = new java.util.LinkedHashMap<String, Object>(executionWithScore.trace());
+            trace.putIfAbsent("prompt", sample.prompt());
+            trace.putIfAbsent("setup", sample.setup());
+            trace.putIfAbsent("category", category.name());
+            trace.putIfAbsent("sampleId", sample.id());
             cases.save(
                 new EvalLabCaseResultEntity(
                     WorkbenchIds.newId(),
@@ -326,7 +331,7 @@ public class EvalLabService {
                     write(metrics),
                     write(graded.assertions()),
                     write(verdictMap(verdict)),
-                    write(executionWithScore.trace()),
+                    write(trace),
                     trim(executionWithScore.rawOutput(), 20_000),
                     executionWithScore.durationMs(),
                     executionWithScore.inputTokens(),

@@ -38,9 +38,9 @@ export const ARCHITECTURE_TOPICS = [
         title: { 'zh-CN': '单进程零运维', 'en-US': 'Zero-Ops Local Process' },
         body: {
           'zh-CN':
-            '前端静态产物内嵌 Spring Boot，嵌入式 H2 文件库 + Flyway V10 自动迁移，开箱即跑。',
+            '前端静态产物内嵌 Spring Boot，嵌入式 H2 文件库 + Flyway V12 自动迁移，开箱即跑。',
           'en-US':
-            'Frontend bundle served by Spring Boot with embedded H2 file DB and Flyway V10 migrations out of the box.'
+            'Frontend bundle served by Spring Boot with embedded H2 file DB and Flyway V12 migrations out of the box.'
         }
       },
       {
@@ -166,17 +166,17 @@ export const ARCHITECTURE_TOPICS = [
         drillTo: 'model-byok'
       },
       storage: {
-        label: { 'zh-CN': 'H2 (V10) + Git / Docker', 'en-US': 'H2 (V10) + Git / Docker' },
+        label: { 'zh-CN': 'H2 (V12) + Git / Docker', 'en-US': 'H2 (V12) + Git / Docker' },
         role: { 'zh-CN': '存储与沙箱', 'en-US': 'Storage & Sandboxes' },
         tone: 'green',
         intent: {
           'zh-CN':
-            'Flyway V1–V10 管理全量运行、审批单、三层长期记忆与 MCP 注册表；代码变更在独立 Git worktree 隔离执行。',
+            'Flyway V1–V12 管理全量运行、审批单、三层长期记忆、MCP 注册表与评测实验室；代码变更在独立 Git worktree 隔离执行。',
           'en-US':
-            'Flyway V1–V10 persists runs, approvals, layered long-term memory, and MCP registries; code edits run in isolated Git worktrees.'
+            'Flyway V1–V12 persists runs, approvals, layered long-term memory, MCP registries, and the Eval Lab; code edits run in isolated Git worktrees.'
         },
         codeRefs: [
-          'V1__baseline.sql ~ V10__mcp_server_registry.sql',
+          'V1__baseline.sql ~ V12__eval_hub_and_datasets.sql',
           'WorkspaceService.java',
           'BugService.java'
         ]
@@ -303,7 +303,7 @@ export const ARCHITECTURE_TOPICS = [
         tone: 'amber',
         intent: {
           'zh-CN':
-            'Spring Data JPA Repository + 细粒度 Store 封装，由 Flyway V1~V6 严格管理 82 张表结构演进。',
+            'Spring Data JPA Repository + 细粒度 Store 封装，由 Flyway V1~V12 严格管理 91 张表结构演进。',
           'en-US':
             'Spring Data JPA repositories wrapped in fine-grained stores, with 82 tables strictly versioned via Flyway V1–V6.'
         },
@@ -956,15 +956,15 @@ export const ARCHITECTURE_TOPICS = [
     group: 'governance',
     badge: '08',
     title: {
-      'zh-CN': 'Worktree 安全交付与 5 步诊断闭环',
-      'en-US': 'Worktree Delivery & 5-Step Diagnostics'
+      'zh-CN': 'Worktree 安全交付、系统监控与评测实验室',
+      'en-US': 'Worktree Delivery, Monitoring & Eval Lab'
     },
-    shortTitle: { 'zh-CN': '交付与监控', 'en-US': 'Delivery & Monitoring' },
+    shortTitle: { 'zh-CN': '交付 / 监控 / 评测', 'en-US': 'Delivery / Monitor / Eval' },
     tagline: {
       'zh-CN':
-        '代码修改在独立 Git worktree 隔离审查后再提交；运行异常可通过监控看板的 5 步向导一键深链定位到故障玻璃盒。',
+        '代码修改在独立 Git worktree 隔离审查后再提交；系统监控专注生产运行健康度，评测实验室独立评估 Agent 能力与消融差异。',
       'en-US':
-        'Code edits stay isolated in Git worktrees until human approval; failures triage through a 5-step wizard deep-linking straight to the glass-box.'
+        'Code edits stay isolated in Git worktrees until approval; system monitoring tracks production health, while the Eval Lab independently measures agent capability and ablations.'
     },
     defaultNode: 'triage',
     principles: [
@@ -993,6 +993,15 @@ export const ARCHITECTURE_TOPICS = [
             '5 步排查向导自动扫描终态、异常节点、被拦工具、失败模型与交接，一键跳到对应玻璃盒 Tab。',
           'en-US':
             '5-step diagnostics inspect status, failing nodes, denied tools, model errors, and handoffs with direct deep-links.'
+        }
+      },
+      {
+        title: { 'zh-CN': '监控与评测彻底解耦', 'en-US': 'Monitoring vs. Eval Separation' },
+        body: {
+          'zh-CN':
+            '「系统监控 /monitoring」只看生产运行健康度；「评测实验室 /evaluations」只看能力分数与 A/B 消融，两个一级菜单互不混淆。',
+          'en-US':
+            'System Monitoring (/monitoring) tracks production health; the Eval Lab (/evaluations) measures capability scores and A/B ablations as a separate workspace.'
         }
       }
     ],
@@ -1044,6 +1053,23 @@ export const ARCHITECTURE_TOPICS = [
             'Aggregates volume, pass rate, latency, and model cost across 24h/7d/30d with status and model filters.'
         },
         codeRefs: ['MonitoringDashboardService.java', 'MonitoringPanel.jsx', 'MonitoringCharts.jsx']
+      },
+      evalLab: {
+        label: { 'zh-CN': '评测实验室（六维 / A-B）', 'en-US': 'Eval Lab (6D / A-B)' },
+        role: { 'zh-CN': '能力评估', 'en-US': 'Capability Eval' },
+        tone: 'blue',
+        intent: {
+          'zh-CN':
+            '独立一级工作区：6 类真实执行器、内置微集 / Benchmark Hub / 自定义评测集、双轨裁判、纯 SVG 六维雷达、逐题玻璃盒穿透与 A/B 消融。',
+          'en-US':
+            'A separate workspace: six real runners, mini/Hub/custom datasets, hybrid graders, pure-SVG radar, per-case glass-box drill-down, and A/B ablations.'
+        },
+        codeRefs: [
+          'EvalLabService.java',
+          'EvalCategoryRunner.java',
+          'EvalRadarChart.jsx',
+          'BenchmarkHubPanel.jsx'
+        ]
       },
       triage: {
         label: { 'zh-CN': '5 步根因排查向导', 'en-US': '5-Step Triage Wizard' },

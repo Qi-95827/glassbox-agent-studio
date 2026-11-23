@@ -30,6 +30,7 @@ import { useI18n } from '../../i18n/I18nProvider';
 import { dateTime, duration, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
 import EvalRunDialog from './EvalRunDialog';
+import EvalRadarChart from './EvalRadarChart';
 
 const SOURCE_KEY = {
   MINI: 'evalLab.source.MINI',
@@ -225,6 +226,85 @@ export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
                 }
               />
               <Kpi label={t('evalLab.kpi.duration')} value={duration(run.totalDurationMs)} />
+            </Box>
+
+            <Divider />
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', md: '380px 1fr' },
+                gap: 2,
+                alignItems: 'start'
+              }}
+            >
+              <Box
+                sx={{
+                  p: 2,
+                  border: `1px solid ${googleTokens.outline}`,
+                  borderRadius: 3,
+                  bgcolor: '#fff'
+                }}
+              >
+                <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
+                  {t('evalLab.radar.title')}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {t('evalLab.radar.subtitle')}
+                </Typography>
+                <EvalRadarChart
+                  categories={(meta?.categories ?? []).map(category => ({
+                    code: category.code,
+                    label: locale === 'en-US' ? category.labelEn : category.labelZh
+                  }))}
+                  series={[
+                    {
+                      key: run.id,
+                      label: `#${shortId(run.id)}`,
+                      color: googleTokens.primary,
+                      values: Object.fromEntries(
+                        Object.entries(run.summary?.categories ?? {}).map(([code, value]) => [
+                          code,
+                          Number(value?.score ?? 0)
+                        ])
+                      ),
+                      sampleCounts: Object.fromEntries(
+                        Object.entries(run.summary?.categories ?? {}).map(([code, value]) => [
+                          code,
+                          value?.total ?? 0
+                        ])
+                      )
+                    }
+                  ]}
+                  ariaLabel={t('evalLab.radar.title')}
+                />
+              </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 1 }}>
+                  {t('evalLab.kpi.passRate')}
+                </Typography>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>ID</TableCell>
+                      <TableCell>{t('evalLab.kpi.passRate')}</TableCell>
+                      <TableCell>{t('evalLab.kpi.score')}</TableCell>
+                      <TableCell>Pass^k</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {Object.entries(run.summary?.categories ?? {}).map(([code, value]) => (
+                      <TableRow key={code}>
+                        <TableCell sx={{ fontSize: 12 }}>{code}</TableCell>
+                        <TableCell sx={{ fontSize: 12 }}>{percent(value?.passRate)}</TableCell>
+                        <TableCell sx={{ fontSize: 12 }}>
+                          {Number(value?.score ?? 0).toFixed(1)}
+                        </TableCell>
+                        <TableCell sx={{ fontSize: 12 }}>{percent(value?.passHatK)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Box>
             </Box>
 
             <Divider />

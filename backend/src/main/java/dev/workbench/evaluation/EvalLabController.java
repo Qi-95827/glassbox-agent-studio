@@ -19,12 +19,17 @@ public class EvalLabController {
   private final EvalLabService lab;
   private final EvalBenchmarkHubService hub;
   private final EvalCustomDatasetService datasets;
+  private final EvalCompareService comparisons;
 
   public EvalLabController(
-      EvalLabService lab, EvalBenchmarkHubService hub, EvalCustomDatasetService datasets) {
+      EvalLabService lab,
+      EvalBenchmarkHubService hub,
+      EvalCustomDatasetService datasets,
+      EvalCompareService comparisons) {
     this.lab = lab;
     this.hub = hub;
     this.datasets = datasets;
+    this.comparisons = comparisons;
   }
 
   public record Created(String id) {}
@@ -55,6 +60,13 @@ public class EvalLabController {
   public Map<String, Object> cancel(@PathVariable String id) {
     lab.cancel(id);
     return Map.of("cancelled", true);
+  }
+
+  @GetMapping("/compare")
+  public Map<String, Object> compare(
+      @org.springframework.web.bind.annotation.RequestParam String baseline,
+      @org.springframework.web.bind.annotation.RequestParam String candidate) {
+    return comparisons.compare(baseline, candidate);
   }
 
   @GetMapping("/hub")

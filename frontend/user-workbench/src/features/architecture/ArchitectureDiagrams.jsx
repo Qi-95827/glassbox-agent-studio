@@ -451,7 +451,7 @@ function SystemOverviewDiagram({ isEn, selectedId, onSelect }) {
         width={176}
         height={94}
         title={isEn ? 'H2 + Git + Docker' : 'H2 库 + Git / Docker'}
-        subtitle={isEn ? 'Flyway V10 · Worktree' : 'Flyway V10 · 沙箱验证'}
+        subtitle={isEn ? 'Flyway V12 · Worktree' : 'Flyway V12 · 沙箱验证'}
         tone="green"
         selected={selectedId === 'storage'}
         onSelect={onSelect}
@@ -627,7 +627,7 @@ function LayersStackDiagram({ isEn, subView, selectedId, onSelect }) {
         height={84}
         badge="04"
         title={isEn ? 'store & persistence' : 'store & persistence 层'}
-        subtitle={isEn ? 'Spring Data JPA · Flyway V1–V10' : 'JPA Repository · Flyway V1–V10'}
+        subtitle={isEn ? 'Spring Data JPA · Flyway V1–V12' : 'JPA Repository · Flyway V1–V12'}
         tone="amber"
         selected={selectedId === 'be-persistence'}
         onSelect={onSelect}
@@ -1266,11 +1266,11 @@ function DeliveryMonitoringDiagram({ isEn, selectedId, onSelect }) {
   return (
     <SvgFrame
       idPrefix={p}
-      viewBox="0 0 960 360"
+      viewBox="0 0 960 480"
       ariaLabel={
         isEn
-          ? 'Worktree Delivery and 5-Step Monitoring Diagnostics'
-          : 'Worktree 安全交付与 5 步诊断闭环'
+          ? 'Worktree Delivery, System Monitoring and Eval Lab'
+          : 'Worktree 安全交付、系统监控与评测实验室'
       }
     >
       <ZoneBox
@@ -1386,6 +1386,34 @@ function DeliveryMonitoringDiagram({ isEn, selectedId, onSelect }) {
         subtitle={isEn ? '?nodeId=...&glassbox=...' : '一键定位故障节点与面板'}
         tone="green"
         selected={selectedId === 'deeplink'}
+        onSelect={onSelect}
+      />
+
+      <ZoneBox
+        x={28}
+        y={362}
+        width={904}
+        height={92}
+        label={isEn ? 'TRACK 3 · EVAL LAB (SEPARATE WORKSPACE)' : '独立工作区 · 评测实验室'}
+        color="#AECBFA"
+        fill="rgba(232,240,254,0.18)"
+      />
+      <DiagramNode
+        idPrefix={p}
+        id="evalLab"
+        x={52}
+        y={384}
+        width={856}
+        height={52}
+        badge="EVAL"
+        title={isEn ? 'Eval Lab' : '评测实验室'}
+        subtitle={
+          isEn
+            ? '6 real runners · Mini / Hub / Custom · Hybrid grader · SVG radar · A/B ablation'
+            : '6 类真实执行器 · 内置/Hub/自定义 · 双轨裁判 · 六维雷达 · A/B 消融'
+        }
+        tone="blue"
+        selected={selectedId === 'evalLab'}
         onSelect={onSelect}
       />
     </SvgFrame>

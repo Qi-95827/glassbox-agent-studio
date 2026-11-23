@@ -1,6 +1,6 @@
 import { DiagramNode, FlowPath, SvgFrame, ZoneBox } from './DiagramPrimitives';
 
-/** 02.1 · 安全边界、归属隔离与 Flyway V1–V10 演进 */
+/** 02.1 · 安全边界、归属隔离与 Flyway V1–V12 演进 */
 function SecurityPersistenceDiagram({ isEn, selectedId, onSelect }) {
   const p = 'sec';
   return (
@@ -88,8 +88,8 @@ function SecurityPersistenceDiagram({ isEn, selectedId, onSelect }) {
         y={114}
         width={176}
         height={92}
-        badge="V10"
-        title={isEn ? 'Flyway V1–V10' : 'Flyway V1–V10'}
+        badge="V12"
+        title={isEn ? 'Flyway V1–V12' : 'Flyway V1–V12'}
         subtitle={isEn ? 'H2 · No Auto-DDL' : '只增不改 · 平滑升级'}
         tone="purple"
         selected={selectedId === 'flyway'}
