@@ -194,6 +194,23 @@ function AgentPipeline({ category, trace, metrics }) {
           <Section title={t('evalLab.pipeline.summary')}>
             <JsonBlock value={trace.summaryPreview || trace.offloadedPreview || unknown} />
           </Section>
+          {trace.structuredAnchors && (
+            <Section title={t('evalLab.pipeline.structuredAnchors')}>
+              <JsonBlock value={trace.structuredAnchors} />
+            </Section>
+          )}
+          {trace.retainedExcerptPreview && (
+            <Section title={t('evalLab.pipeline.retainedExcerpts')}>
+              <JsonBlock value={trace.retainedExcerptPreview} />
+            </Section>
+          )}
+          {trace.artifactRefs?.length > 0 && (
+            <Section
+              title={t('evalLab.pipeline.artifactRefs', { count: trace.artifactRefs.length })}
+            >
+              <JsonBlock value={trace.artifactRefs} maxHeight={100} />
+            </Section>
+          )}
           <Section title={t('evalLab.pipeline.segments')}>
             <JsonBlock value={trace.segmentTokens ?? unknown} />
           </Section>
@@ -349,6 +366,8 @@ export const METRIC_KEYS = {
   choiceCorrect: 'evalLab.metric.choiceCorrect',
   compressionSavedPercent: 'evalLab.metric.compressionSavedPercent',
   offloadedTools: 'evalLab.metric.offloadedTools',
+  artifactOffloads: 'evalLab.metric.artifactOffloads',
+  retainedExcerptChars: 'evalLab.metric.retainedExcerptChars',
   needleRetention: 'evalLab.metric.needleRetention',
   needleCount: 'evalLab.metric.needleCount',
   retainedCount: 'evalLab.metric.retainedCount',
@@ -427,6 +446,8 @@ const INTEGER_METRICS = new Set([
   'compactionBudget',
   'contextLimit',
   'offloadedTools',
+  'artifactOffloads',
+  'retainedExcerptChars',
   'needleCount',
   'retainedCount',
   'toolCallCount',

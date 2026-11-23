@@ -102,9 +102,32 @@ export default function ContextMeterBar({ context }) {
         ))}
       </Stack>
 
-      {(context.offloadedToolCallIds || []).length > 0 && (
+      {(context.artifactRefs || []).length > 0 && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+          {t('context.artifacts', { count: context.artifactRefs.length })}
+        </Typography>
+      )}
+      {context.offloadedToolCallIds && context.offloadedToolCallIds.length > 0 && (
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
           {t('context.offload', { count: context.offloadedToolCallIds.length })}
+        </Typography>
+      )}
+      {context.retainedExcerptPreview && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: 'block', mt: 0.5, whiteSpace: 'pre-wrap' }}
+        >
+          {t('context.excerpts', { preview: String(context.retainedExcerptPreview).slice(0, 260) })}
+        </Typography>
+      )}
+      {context.structuredAnchors && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: 'block', mt: 0.5, whiteSpace: 'pre-wrap' }}
+        >
+          {t('context.anchors', { preview: String(context.structuredAnchors).slice(0, 260) })}
         </Typography>
       )}
       {context.summaryPreview && (
