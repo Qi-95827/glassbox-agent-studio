@@ -32,6 +32,7 @@ const sectionKeys = {
   '/agents': 'nav.agents',
   '/workspaces': 'nav.workspaces',
   '/evaluations': 'nav.evaluations',
+  '/monitoring': 'nav.monitoring',
   '/settings': 'nav.settings',
   '/docs': 'nav.docs'
 };

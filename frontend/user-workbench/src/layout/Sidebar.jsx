@@ -17,6 +17,7 @@ import FactCheckOutlined from '@mui/icons-material/FactCheckOutlined';
 import SchemaOutlined from '@mui/icons-material/SchemaOutlined';
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined';
 import MenuBookOutlined from '@mui/icons-material/MenuBookOutlined';
+import MonitorHeartOutlined from '@mui/icons-material/MonitorHeartOutlined';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AppLogo from '../components/AppLogo';
 import { googleTokens } from '../theme/googleTheme';
@@ -47,6 +48,12 @@ const navigation = [
     path: '/evaluations',
     icon: FactCheckOutlined,
     match: value => value.startsWith('/evaluations')
+  },
+  {
+    key: 'nav.monitoring',
+    path: '/monitoring',
+    icon: MonitorHeartOutlined,
+    match: value => value.startsWith('/monitoring')
   },
   {
     key: 'nav.architecture',
