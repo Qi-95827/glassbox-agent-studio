@@ -9,6 +9,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
@@ -61,6 +62,13 @@ public class MemoryRecordEntity implements Persistable<String> {
 
   @Column(name = "path_patterns_json", nullable = false, length = 2000)
   private String pathPatternsJson;
+
+  @Lob
+  @Column(name = "embedding_json")
+  private String embeddingJson;
+
+  @Column(name = "embedding_model", length = 120)
+  private String embeddingModel;
 
   @Column(name = "confidence", nullable = false)
   private double confidence;
@@ -190,6 +198,20 @@ public class MemoryRecordEntity implements Persistable<String> {
 
   public String getPathPatternsJson() {
     return pathPatternsJson;
+  }
+
+  public String getEmbeddingJson() {
+    return embeddingJson;
+  }
+
+  public String getEmbeddingModel() {
+    return embeddingModel;
+  }
+
+  /** 懒建索引：只有 ACTIVE 记忆会在召回前补齐向量，CANDIDATE 永不注入或建索引。 */
+  public void embed(String embeddingJson, String embeddingModel) {
+    this.embeddingJson = embeddingJson;
+    this.embeddingModel = embeddingModel;
   }
 
   public double getConfidence() {

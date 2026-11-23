@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent-workbench-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${WORKBENCH_PG_DATABASE:-workbench}
+      POSTGRES_USER: ${WORKBENCH_PG_USER:-workbench}
+      POSTGRES_PASSWORD: ${WORKBENCH_PG_PASSWORD:-workbench}
+    ports:
+      - "${WORKBENCH_PG_PORT:-5432}:5432"
+    volumes:
+      - workbench-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${WORKBENCH_PG_USER:-workbench} -d ${WORKBENCH_PG_DATABASE:-workbench}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  workbench-pg-data:

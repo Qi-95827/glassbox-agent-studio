@@ -1,0 +1,33 @@
+# PostgreSQL 16 + pgvector 运行档；不改变默认 H2 单元测试路径。
+# 启动：docker compose up -d
+#       java -jar target/agent-workbench-0.1.0-SNAPSHOT.jar --spring.profiles.active=postgres
+server:
+  address: 127.0.0.1
+  port: 8088
+
+spring:
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: ${WORKBENCH_PG_URL:jdbc:postgresql://127.0.0.1:5432/workbench}
+    username: ${WORKBENCH_PG_USER:workbench}
+    password: ${WORKBENCH_PG_PASSWORD:workbench}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 1
+  # 先执行通用 V1~V13，再执行 pgvector 专属 V14（扩展 + vector 列 + HNSW 索引）。
+  flyway:
+    enabled: true
+    # PostgreSQL 使用等价基线（H2 历史迁移含 ADD CONSTRAINT IF NOT EXISTS / CLOB 专属语法）；
+    # 通用 H2 链仍为 classpath:db/migration 的 V1~V13。
+    locations: classpath:db/migration-pg
+    baseline-on-migrate: true
+    baseline-version: 0
+    validate-on-migrate: true
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
