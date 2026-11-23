@@ -5,6 +5,7 @@ import dev.workbench.framework.trace.SensitiveDataMasker;
 import dev.workbench.modelconnection.ModelProbe;
 import dev.workbench.modelconnection.ModelProviderType;
 import dev.workbench.modelconnection.RuntimeModelConnection;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.model.ExecutionConfig;
@@ -18,8 +19,14 @@ import io.agentscope.extensions.model.openai.exception.NotFoundException;
 import io.agentscope.extensions.model.openai.exception.PermissionDeniedException;
 import io.agentscope.extensions.model.openai.exception.RateLimitException;
 import io.agentscope.extensions.model.openai.formatter.OpenAIChatFormatter;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import org.springframework.stereotype.Component;
 
@@ -28,9 +35,11 @@ import org.springframework.stereotype.Component;
 public class OpenAICompatibleModelProbe implements ModelProbe {
   private static final int PROBE_MAX_TOKENS = 8;
   private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(20);
+  private static final ObjectMapper JSON = new ObjectMapper();
 
   @Override
   public ProbeResult probe(RuntimeModelConnection connection) {
+    if (isEmbeddingModel(connection.modelName())) return probeEmbedding(connection);
     try {
       var model =
           OpenAIChatModel.builder()
@@ -69,6 +78,62 @@ public class OpenAICompatibleModelProbe implements ModelProbe {
     } catch (RuntimeException e) {
       return new ProbeResult(false, reason(e));
     }
+  }
+
+  private static boolean isEmbeddingModel(String modelName) {
+    String name = modelName == null ? "" : modelName.toLowerCase(Locale.ROOT);
+    return name.contains("embedding")
+        || name.contains("embed")
+        || name.startsWith("bge-")
+        || name.startsWith("gte-")
+        || name.startsWith("m3e-");
+  }
+
+  /** Embedding 模型只有 {@code /embeddings}，不能复用聊天探针，否则必然 404。 */
+  private static ProbeResult probeEmbedding(RuntimeModelConnection connection) {
+    try {
+      String base = connection.baseUrl() == null ? "" : connection.baseUrl().strip();
+      if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+      var payload =
+          Map.of("model", connection.modelName(), "input", List.of("embedding probe"));
+      var request =
+          HttpRequest.newBuilder(URI.create(base + "/embeddings"))
+              .timeout(PROBE_TIMEOUT)
+              .header("Content-Type", "application/json")
+              .header("Authorization", "Bearer " + connection.apiKey())
+              .POST(HttpRequest.BodyPublishers.ofByteArray(JSON.writeValueAsBytes(payload)))
+              .build();
+      var client =
+          HttpClient.newBuilder()
+              .connectTimeout(PROBE_TIMEOUT)
+              .followRedirects(HttpClient.Redirect.NEVER)
+              .build();
+      var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() / 100 != 2)
+        return new ProbeResult(false, statusMessage(response.statusCode()));
+      var embedding = JSON.readTree(response.body()).path("data").path(0).path("embedding");
+      if (!embedding.isArray() || embedding.isEmpty())
+        return new ProbeResult(false, LocalizedMessages.get("probe.embeddingEmpty"));
+      return new ProbeResult(
+          true, LocalizedMessages.get("probe.embeddingOk", embedding.size()));
+    } catch (RuntimeException e) {
+      return new ProbeResult(false, reason(e));
+    } catch (Exception e) {
+      return new ProbeResult(false, reason(e));
+    }
+  }
+
+  private static String statusMessage(int status) {
+    return switch (status) {
+      case 401 -> LocalizedMessages.get("probe.auth");
+      case 403 -> LocalizedMessages.get("probe.forbidden");
+      case 404 -> LocalizedMessages.get("probe.notFound");
+      case 429 -> LocalizedMessages.get("probe.rateLimit");
+      default ->
+          status >= 400 && status < 500
+              ? LocalizedMessages.get("probe.badRequest")
+              : LocalizedMessages.get("probe.failed");
+    };
   }
 
   private static String reason(Throwable error) {
