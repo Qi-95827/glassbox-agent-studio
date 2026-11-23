@@ -1187,7 +1187,7 @@
   "evalLab.source.MINI": "内置精选微集",
   "evalLab.source.HUB": "Benchmark Hub",
   "evalLab.source.CUSTOM": "我的自定义集",
-  "evalLab.run.meta": "{source} · {categories} 类 · {time}",
+  "evalLab.run.meta": "{source} · {categories} 类 · {cases} 题次 · {time}",
   "evalLab.run.counts": "{cases} 题次 · 通过 {passed}",
   "evalLab.kpi.passRate": "综合通过率",
   "evalLab.kpi.score": "断言得分",
@@ -1396,5 +1396,15 @@
   "evalLab.pipeline.gate.ACCEPTED_RECEIPT": "下游接收",
   "evalLab.hub.mcpHint": "启用 MCP 后，函数调用按外部写操作进入 Gate 5.5。评测回调在本地生成回执。",
   "evalLab.compare.safetyBlockRate": "安全拦截率",
-  "evalLab.pipeline.caseHandoffIdentity": "发送方和接收方的尝试标识均绑定在当前评测题内。"
+  "evalLab.pipeline.caseHandoffIdentity": "发送方和接收方的尝试标识均绑定在当前评测题内。",
+  "evalLab.hub.runAll": "一键运行全部已下载公开集",
+  "evalLab.hub.runAllHint": "当前有 {count} 套可执行公开集",
+  "evalLab.hub.selectPacks": "选择公开集（可多选）",
+  "evalLab.hub.packsSelected": "已选 {count} 套",
+  "evalLab.hub.selectAllReady": "全选已下载",
+  "evalLab.hub.selectSingle": "仅选单项",
+  "evalLab.hub.perPackLimit": "每个公开集抽样数",
+  "evalLab.hub.samplingHint": "每个公开集抽样 {limit} 题 × {packs} 套 = {total} 题；重复 K 次共 {attempts} 题次",
+  "evalLab.hub.previewDisabled": "需独立 Docker 环境，不参与联合评测",
+  "evalLab.hub.noPackSelected": "请至少选择一个已下载的可执行公开集"
 }

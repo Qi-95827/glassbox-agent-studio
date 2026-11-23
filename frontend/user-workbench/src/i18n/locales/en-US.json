@@ -1187,7 +1187,7 @@
   "evalLab.source.MINI": "Built-in mini pack",
   "evalLab.source.HUB": "Benchmark Hub",
   "evalLab.source.CUSTOM": "My custom dataset",
-  "evalLab.run.meta": "{source} · {categories} domains · {time}",
+  "evalLab.run.meta": "{source} · {categories} domains · {cases} case runs · {time}",
   "evalLab.run.counts": "{cases} case runs · {passed} passed",
   "evalLab.kpi.passRate": "Overall pass rate",
   "evalLab.kpi.score": "Assertion score",
@@ -1396,5 +1396,15 @@
   "evalLab.pipeline.gate.ACCEPTED_RECEIPT": "Downstream receipt",
   "evalLab.hub.mcpHint": "With MCP enabled, function calls are treated as external writes at Gate 5.5. The evaluation callback produces a local receipt.",
   "evalLab.compare.safetyBlockRate": "Safety interception rate",
-  "evalLab.pipeline.caseHandoffIdentity": "The sender and receiver attempts are bound within this evaluation case."
+  "evalLab.pipeline.caseHandoffIdentity": "The sender and receiver attempts are bound within this evaluation case.",
+  "evalLab.hub.runAll": "Run all downloaded public sets",
+  "evalLab.hub.runAllHint": "{count} runnable public sets ready",
+  "evalLab.hub.selectPacks": "Select public sets (multi-select)",
+  "evalLab.hub.packsSelected": "{count} selected",
+  "evalLab.hub.selectAllReady": "Select all downloaded",
+  "evalLab.hub.selectSingle": "Single set",
+  "evalLab.hub.perPackLimit": "Samples per public set",
+  "evalLab.hub.samplingHint": "{limit} per set × {packs} sets = {total} samples; × repeat K = {attempts} case runs",
+  "evalLab.hub.previewDisabled": "Requires a separate Docker environment; excluded from suites",
+  "evalLab.hub.noPackSelected": "Select at least one runnable downloaded public set"
 }

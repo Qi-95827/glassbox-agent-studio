@@ -197,7 +197,9 @@ public class EvalBenchmarkHubService {
         throw new IllegalStateException("Hub 评测集尚未下载或导入：" + pack.packId() + "，请先在下载中心处理。");
       try (var reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
         int index = 0;
-        for (String line; samples.size() < limit && (line = reader.readLine()) != null; ) {
+        int taken = 0;
+        // 多包联合时 limit 表示“每个公开集最多 N 题”，必须逐包独立计数，避免第一个包吃光配额。
+        for (String line; taken < limit && (line = reader.readLine()) != null; ) {
           index++;
           if (line.isBlank()) continue;
           var sample =
@@ -206,6 +208,7 @@ public class EvalBenchmarkHubService {
           if (!BenchmarkPackAdapter.AGENT_PACK_MODE.equals(sample.setup().get("hubPackMode")))
             throw new IllegalArgumentException("公开题集格式已更新，请重新下载或导入。");
           samples.add(sample);
+          taken++;
         }
       } catch (IOException e) {
         throw new IllegalStateException("读取 Hub 评测集失败：" + pack.packId(), e);

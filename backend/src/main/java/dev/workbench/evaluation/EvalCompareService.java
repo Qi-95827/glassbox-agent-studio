@@ -26,6 +26,7 @@ public class EvalCompareService {
           "enableMcp",
           "repeatK",
           "sampleLimit",
+          "packIds",
           "maxCostUsd",
           "judgeModelConnectionId");
   private static final Map<String, String> OVERALL_KEYS = new LinkedHashMap<>();

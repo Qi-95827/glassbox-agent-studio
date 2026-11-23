@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -35,10 +35,12 @@ const EXPERIMENT_FIELDS = [
 ];
 
 const HUB_FIELDS = {
+  CODING_REFLECTION: ['enableReflection'],
   TOOL_MCP: ['enableMcp'],
   CONTEXT_COMPACTION: ['enableCompaction'],
   LONG_TERM_MEMORY: ['enableLongTermMemory'],
-  PLANNING_MULTI_AGENT: ['enableReflection']
+  PLANNING_MULTI_AGENT: ['enableReflection'],
+  SAFETY_INJECTION: ['enableMcp']
 };
 
 const defaults = {
@@ -57,6 +59,10 @@ const defaults = {
   enableMcp: false
 };
 
+function sameCodes(left, right) {
+  return left.length === right.length && [...left].sort().join('|') === [...right].sort().join('|');
+}
+
 /** 发起评测：数据源、类别、模型、消融开关、裁判、抽样与费用上限。 */
 export default function EvalRunDialog({
   open,
@@ -73,51 +79,108 @@ export default function EvalRunDialog({
   const hub = useEvalHub();
   const custom = useEvalDatasets();
   const [form, setForm] = useState(defaults);
+  const [packSelection, setPackSelection] = useState([]);
+  const [allReadyPending, setAllReadyPending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const categories = useMemo(() => meta?.categories ?? [], [meta]);
   const allCodes = useMemo(() => categories.map(item => item.code), [categories]);
-  const hubPacks = useMemo(
+  const allPacks = useMemo(
     () => (hub.data ?? []).filter(item => item.sampleCount > 0 || item.previewOnly),
     [hub.data]
   );
-  const isHub = form.sourceKind === 'HUB';
-  const selectedPack = isHub ? hubPacks.find(item => item.packId === form.sourceKey) : null;
-  const modelMode = form.modelMode;
-  const fields = isHub
-    ? EXPERIMENT_FIELDS.filter(([key]) => HUB_FIELDS[selectedPack?.category]?.includes(key))
-    : EXPERIMENT_FIELDS;
+  const runnablePacks = useMemo(
+    () => allPacks.filter(item => !item.previewOnly && item.sampleCount > 0),
+    [allPacks]
+  );
   const datasets = useMemo(() => custom.data ?? [], [custom.data]);
+  const isHub = form.sourceKind === 'HUB';
+  const selectedPacks = useMemo(
+    () => allPacks.filter(pack => packSelection.includes(pack.packId)),
+    [allPacks, packSelection]
+  );
+  const selectedRunnable = useMemo(
+    () => selectedPacks.filter(pack => !pack.previewOnly && pack.sampleCount > 0),
+    [selectedPacks]
+  );
+  const hubCategories = useMemo(
+    () => [...new Set(selectedRunnable.map(pack => pack.category))],
+    [selectedRunnable]
+  );
+  const hubCategoryKey = hubCategories.join(',');
+  const hubFieldKeys = useMemo(
+    () => new Set(selectedRunnable.flatMap(pack => HUB_FIELDS[pack.category] ?? [])),
+    [selectedRunnable]
+  );
+  const fields = isHub
+    ? EXPERIMENT_FIELDS.filter(([key]) => hubFieldKeys.has(key))
+    : EXPERIMENT_FIELDS;
+  const modelMode = form.modelMode;
+
+  const allCodesRef = useRef(allCodes);
+  allCodesRef.current = allCodes;
+  const runnableRef = useRef(runnablePacks);
+  runnableRef.current = runnablePacks;
+  const hubCategoriesRef = useRef(hubCategories);
+  hubCategoriesRef.current = hubCategories;
 
   const sourceCategory = useMemo(() => {
-    if (form.sourceKind === 'HUB') {
-      const pack = hubPacks.find(item => item.packId === form.sourceKey);
-      return pack?.category ?? null;
-    }
     if (form.sourceKind === 'CUSTOM') {
       const dataset = datasets.find(item => item.id === form.sourceKey);
       return dataset?.category ?? null;
     }
     return null;
-  }, [form.sourceKind, form.sourceKey, hubPacks, datasets]);
+  }, [form.sourceKind, form.sourceKey, datasets]);
 
   useEffect(() => {
     if (!open) return;
-    setForm(current => ({
+    const ids =
+      initialSource === 'HUB'
+        ? initialSourceKey === 'all-ready'
+          ? runnableRef.current.map(pack => pack.packId)
+          : (initialSourceKey ?? '')
+              .split(',')
+              .map(text => text.trim())
+              .filter(Boolean)
+        : [];
+    setPackSelection(ids);
+    setAllReadyPending(
+      initialSource === 'HUB' && initialSourceKey === 'all-ready' && ids.length === 0
+    );
+    setForm({
       ...defaults,
       sourceKind: initialSource,
-      sourceKey: initialSourceKey,
+      sourceKey: initialSource === 'HUB' ? (ids[0] ?? '') : initialSourceKey,
       sampleLimit: initialSource === 'HUB' ? 5 : defaults.sampleLimit,
       modelMode: initialSource === 'HUB' ? 'byok' : defaults.modelMode,
-      categories: initialSource === 'MINI' ? allCodes : current.categories
-    }));
+      categories: initialSource === 'MINI' ? allCodesRef.current : []
+    });
     setError('');
-  }, [open, initialSource, initialSourceKey, allCodes]);
+  }, [open, initialSource, initialSourceKey]);
 
   useEffect(() => {
-    if (sourceCategory) setForm(current => ({ ...current, categories: [sourceCategory] }));
-  }, [sourceCategory]);
+    if (!open || form.sourceKind !== 'HUB' || !allReadyPending || !runnablePacks.length) return;
+    setPackSelection(runnablePacks.map(pack => pack.packId));
+    setAllReadyPending(false);
+  }, [open, form.sourceKind, allReadyPending, runnablePacks]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (form.sourceKind === 'HUB') {
+      setForm(current =>
+        sameCodes(current.categories, hubCategoriesRef.current)
+          ? current
+          : { ...current, categories: hubCategoriesRef.current }
+      );
+    } else if (form.sourceKind === 'CUSTOM' && sourceCategory) {
+      setForm(current =>
+        sameCodes(current.categories, [sourceCategory])
+          ? current
+          : { ...current, categories: [sourceCategory] }
+      );
+    }
+  }, [open, form.sourceKind, hubCategoryKey, sourceCategory]);
 
   const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
   const toggleCategory = code =>
@@ -128,12 +191,25 @@ export default function EvalRunDialog({
         : [...current.categories, code]
     }));
 
+  const togglePack = packId => {
+    if (selectedPacks.some(pack => pack.packId === packId && pack.previewOnly)) return;
+    setPackSelection(current =>
+      current.includes(packId) ? current.filter(item => item !== packId) : [...current, packId]
+    );
+  };
+
+  const selectAllReady = () => setPackSelection(runnablePacks.map(pack => pack.packId));
+  const selectSingle = () =>
+    setPackSelection(runnablePacks.length ? [runnablePacks[0].packId] : []);
+
   const byokOptions = useMemo(() => {
     const list = connections.data?.connections ?? [];
     return list.filter(item => item.enabled);
   }, [connections.data]);
 
   const changeSource = sourceKind => {
+    setPackSelection([]);
+    setAllReadyPending(false);
     setForm(current => ({
       ...current,
       sourceKind,
@@ -144,15 +220,23 @@ export default function EvalRunDialog({
     }));
   };
 
+  const sampleLimit = Number(form.sampleLimit) || 0;
+  const repeatK = Number(form.repeatK) || 1;
+  const plannedSampleCount = isHub
+    ? selectedRunnable.reduce((sum, pack) => sum + Math.min(sampleLimit, pack.sampleCount), 0)
+    : 0;
+  const plannedAttempts = plannedSampleCount * repeatK;
+
   const submit = async () => {
     if (!isHub && !form.categories.length) {
       setError(t('evalLab.field.categories'));
       return;
     }
-    if (
-      (isHub && (!selectedPack || selectedPack.previewOnly)) ||
-      (form.sourceKind === 'CUSTOM' && !form.sourceKey)
-    ) {
+    if (isHub && !selectedRunnable.length) {
+      setError(t('evalLab.hub.noPackSelected'));
+      return;
+    }
+    if (form.sourceKind === 'CUSTOM' && !form.sourceKey) {
       setError(t('evalLab.field.source'));
       return;
     }
@@ -165,16 +249,21 @@ export default function EvalRunDialog({
     try {
       const created = await evalLabApi.start({
         sourceKind: form.sourceKind,
-        sourceKey: form.sourceKey,
-        categories: isHub ? [selectedPack.category] : form.categories,
+        sourceKey: isHub
+          ? selectedRunnable
+              .map(pack => pack.packId)
+              .sort()
+              .join(',')
+          : form.sourceKey,
+        categories: isHub ? hubCategories : form.categories,
         modelMode,
         modelConnectionId: modelMode === 'byok' ? form.modelConnectionId : null,
         enableCompaction: form.enableCompaction,
         enableLongTermMemory: form.enableLongTermMemory,
         enableReflection: form.enableReflection,
         enableMcp: form.enableMcp,
-        repeatK: Number(form.repeatK),
-        sampleLimit: Number(form.sampleLimit),
+        repeatK,
+        sampleLimit,
         maxCostUsd: form.maxCost === '' ? null : Number(form.maxCost),
         judgeModelConnectionId: form.judgeModelConnectionId || null
       });
@@ -215,23 +304,6 @@ export default function EvalRunDialog({
                 <MenuItem value="CUSTOM">{t('evalLab.source.CUSTOM')}</MenuItem>
               </Select>
             </FormControl>
-            {form.sourceKind === 'HUB' && (
-              <FormControl size="small" sx={{ minWidth: 260 }}>
-                <InputLabel>{t('evalLab.hub.title')}</InputLabel>
-                <Select
-                  label={t('evalLab.hub.title')}
-                  value={selectedPack?.packId ?? ''}
-                  onChange={event => set('sourceKey', event.target.value)}
-                >
-                  {hubPacks.map(pack => (
-                    <MenuItem key={pack.packId} value={pack.packId}>
-                      {pack.displayName} ·{' '}
-                      {pack.previewOnly ? t('evalLab.hub.routeB') : pack.sampleCount}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            )}
             {form.sourceKind === 'CUSTOM' && (
               <FormControl size="small" sx={{ minWidth: 260 }}>
                 <InputLabel>{t('evalLab.hub.customTitle')}</InputLabel>
@@ -250,10 +322,66 @@ export default function EvalRunDialog({
             )}
           </Stack>
 
-          {isHub && !hub.isLoading && !hubPacks.some(pack => !pack.previewOnly) && (
+          {isHub && (
+            <Box
+              sx={{
+                border: `1px solid ${googleTokens.outline}`,
+                borderRadius: 2.5,
+                p: 1.2
+              }}
+            >
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between', mb: 0.5 }}
+              >
+                <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
+                  {t('evalLab.hub.selectPacks')} ·{' '}
+                  {t('evalLab.hub.packsSelected', { count: selectedRunnable.length })}
+                </Typography>
+                <Stack direction="row" spacing={0.5}>
+                  <Button size="small" onClick={selectAllReady} disabled={!runnablePacks.length}>
+                    {t('evalLab.hub.selectAllReady')}
+                  </Button>
+                  <Button size="small" onClick={selectSingle} disabled={!runnablePacks.length}>
+                    {t('evalLab.hub.selectSingle')}
+                  </Button>
+                </Stack>
+              </Stack>
+              <Box sx={{ maxHeight: 210, overflowY: 'auto', pr: 0.5 }}>
+                {allPacks.map(pack => (
+                  <FormControlLabel
+                    key={pack.packId}
+                    disabled={pack.previewOnly || pack.sampleCount <= 0}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={packSelection.includes(pack.packId)}
+                        onChange={() => togglePack(pack.packId)}
+                      />
+                    }
+                    label={
+                      <Box>
+                        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                          {pack.displayName}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ ml: 0.8 }}>
+                          {pack.previewOnly
+                            ? t('evalLab.hub.previewDisabled')
+                            : `${t('evalLab.hub.capability.' + pack.category)} · ${pack.sampleCount}`}
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                ))}
+              </Box>
+            </Box>
+          )}
+
+          {isHub && !hub.isLoading && !runnablePacks.length && (
             <Alert severity="info">{t('evalLab.hub.noRunnablePack')}</Alert>
           )}
-          {selectedPack?.previewOnly && (
+          {selectedPacks.some(pack => pack.previewOnly) && (
             <Alert severity="info">{t('evalLab.hub.routeBHint')}</Alert>
           )}
           <Box>
@@ -275,7 +403,7 @@ export default function EvalRunDialog({
                       size="small"
                       checked={
                         isHub
-                          ? Boolean(selectedPack?.category === category.code)
+                          ? hubCategories.includes(category.code)
                           : form.categories.includes(category.code)
                       }
                       disabled={isHub || form.sourceKind === 'CUSTOM'}
@@ -352,13 +480,17 @@ export default function EvalRunDialog({
             <TextField
               size="small"
               type="number"
-              label={t('evalLab.field.sampleLimit')}
+              label={t(
+                isHub && selectedRunnable.length > 1
+                  ? 'evalLab.hub.perPackLimit'
+                  : 'evalLab.field.sampleLimit'
+              )}
               value={form.sampleLimit}
               onChange={event => set('sampleLimit', event.target.value)}
               slotProps={{
                 htmlInput: {
                   min: 1,
-                  max: Math.min(selectedPack?.sampleCount || 50, meta?.maxSampleLimit ?? 50)
+                  max: meta?.maxSampleLimit ?? 50
                 }
               }}
             />
@@ -371,8 +503,18 @@ export default function EvalRunDialog({
               slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
             />
           </Stack>
+          {isHub && selectedRunnable.length > 0 && (
+            <Typography variant="caption" color="text.secondary">
+              {t('evalLab.hub.samplingHint', {
+                limit: sampleLimit,
+                packs: selectedRunnable.length,
+                total: plannedSampleCount,
+                attempts: plannedAttempts
+              })}
+            </Typography>
+          )}
 
-          {isHub && selectedPack?.category === 'TOOL_MCP' && (
+          {isHub && hubCategories.includes('TOOL_MCP') && (
             <Typography variant="caption" color="text.secondary">
               {t('evalLab.hub.mcpHint')}
             </Typography>
@@ -407,7 +549,7 @@ export default function EvalRunDialog({
           onClick={submit}
           disabled={
             busy ||
-            (isHub && (!selectedPack || selectedPack.previewOnly)) ||
+            (isHub && !selectedRunnable.length) ||
             (modelMode === 'byok' && !form.modelConnectionId)
           }
           startIcon={busy ? <CircularProgress size={16} /> : null}

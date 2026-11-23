@@ -163,24 +163,60 @@ public class EvalLabService {
     String sourceKey = sourceKind.equals("MINI") ? "mini" : blankToNull(request.sourceKey());
     if (!sourceKind.equals("MINI") && sourceKey == null)
       throw new IllegalArgumentException("该数据源缺少评测集标识。");
-    var pack = "HUB".equals(sourceKind) ? hub.requirePack(sourceKey) : null;
-    if (pack != null && pack.previewOnly())
-      throw new IllegalArgumentException("SWE-bench Lite 官方执行需要独立 Git 与 Docker 环境。");
-    var selected = pack == null ? categories(request.categories()) : List.of(pack.evalCategory());
+    List<EvalBenchmarkHubService.CatalogPack> hubPacks = List.of();
+    List<String> hubPackIds = List.of();
+    if ("HUB".equals(sourceKind)) {
+      hubPackIds = resolveHubPackIds(sourceKey);
+      var statuses = new java.util.HashMap<String, EvalBenchmarkHubService.PackView>();
+      for (var view : hub.list()) statuses.put(view.packId(), view);
+      var packs = new ArrayList<EvalBenchmarkHubService.CatalogPack>();
+      for (String packId : hubPackIds) {
+        var catalogPack = hub.requirePack(packId);
+        var view = statuses.get(packId);
+        if (view == null || view.sampleCount() <= 0)
+          throw new IllegalArgumentException("公开集尚未下载或没有可执行样本：" + packId);
+        if (catalogPack.previewOnly())
+          throw new IllegalArgumentException(
+              catalogPack.displayName() + " 官方执行需要独立 Git 与 Docker 环境，不能加入联合评测。");
+        packs.add(catalogPack);
+      }
+      hubPacks = List.copyOf(packs);
+      // 联合批次统一落库为排序后的逗号列表，all-ready 也会被归一化为具体包集合。
+      sourceKey = String.join(",", hubPackIds);
+    }
+    var selected =
+        "HUB".equals(sourceKind)
+            ? hubPacks.stream()
+                .map(EvalBenchmarkHubService.CatalogPack::evalCategory)
+                .distinct()
+                .toList()
+            : categories(request.categories());
     var config = requestedConfig;
     if (config.usesByok()) connections.requireEnabledOwned(config.modelConnectionId());
     if (config.judgeEnabled()) connections.requireEnabledOwned(config.judgeModelConnectionId());
     // 先固定可执行题单，再把作业交给异步线程，避免重导入影响已经发起的评测。
-    var fixedSamples =
-        pack == null ? null : hub.samplesForRun(List.of(sourceKey), config.sampleLimit());
+    List<EvalSample> fixedSamples = null;
+    if ("HUB".equals(sourceKind)) {
+      fixedSamples = hub.samplesForRun(hubPackIds, config.sampleLimit());
+    }
     var snapshot = new java.util.LinkedHashMap<>(readMap(write(config)));
     if (fixedSamples != null) {
       if (config.usesByok()
           && config.maxCostUsd() != null
           && !pricedModel(config.modelConnectionId()))
         throw new IllegalArgumentException("使用美元费用上限前，请为被测模型配置美元计价。");
-      snapshot.put("datasetName", pack.displayName());
+      boolean english = "en-US".equals(locale);
+      String datasetName =
+          hubPacks.size() == 1
+              ? hubPacks.getFirst().displayName()
+              : english
+                  ? "Benchmark Hub Suite (" + hubPacks.size() + " packs)"
+                  : "Benchmark Hub 联合评测（" + hubPacks.size() + " 套）";
+      snapshot.put("packIds", hubPackIds);
+      snapshot.put("datasetName", datasetName);
       snapshot.put("sampleIds", fixedSamples.stream().map(EvalSample::id).toList());
+      snapshot.put("plannedSampleCount", fixedSamples.size());
+      snapshot.put("plannedAttempts", fixedSamples.size() * config.repeatK());
       String canonicalSamples =
           json.copy()
               .enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
@@ -190,13 +226,15 @@ public class EvalLabService {
     }
     String configJson = write(snapshot);
     String categoriesJson = write(selected.stream().map(Enum::name).toList());
+    String normalizedSourceKey = sourceKey;
+    List<EvalSample> frozenSamples = fixedSamples;
     var entity =
         new EvalLabRunEntity(
             id,
             owner,
             "QUEUED",
             sourceKind,
-            sourceKey,
+            normalizedSourceKey,
             categoriesJson,
             configJson,
             sha(configJson),
@@ -218,7 +256,15 @@ public class EvalLabService {
             org.springframework.security.core.context.SecurityContextHolder.setContext(
                 asyncContext);
             try {
-              execute(id, sourceKind, sourceKey, selected, config, locale, owner, fixedSamples);
+              execute(
+                  id,
+                  sourceKind,
+                  normalizedSourceKey,
+                  selected,
+                  config,
+                  locale,
+                  owner,
+                  frozenSamples);
             } finally {
               org.springframework.security.core.context.SecurityContextHolder.clearContext();
             }
@@ -498,6 +544,35 @@ public class EvalLabService {
     } catch (RuntimeException ignored) {
       return false;
     }
+  }
+
+  /**
+   * HUB 来源的包集合：支持单包、逗号分隔多包与 {@code all-ready}。
+   *
+   * <p>结果按字典序去重，保证同一组合在不同批次得到相同的 sourceKey 与题单哈希。
+   */
+  private List<String> resolveHubPackIds(String sourceKey) {
+    if ("all-ready".equalsIgnoreCase(sourceKey == null ? "" : sourceKey.strip())) {
+      var ready =
+          hub.list().stream()
+              .filter(view -> view.sampleCount() > 0 && !view.previewOnly())
+              .map(EvalBenchmarkHubService.PackView::packId)
+              .sorted()
+              .toList();
+      if (ready.isEmpty())
+        throw new IllegalArgumentException("当前没有已下载且可执行的公开集，请先在 Benchmark Hub 下载或导入。");
+      return ready;
+    }
+    var ids =
+        java.util.Arrays.stream(sourceKey.split(","))
+            .map(String::strip)
+            .filter(text -> !text.isBlank())
+            .distinct()
+            .sorted()
+            .toList();
+    if (ids.isEmpty())
+      throw new IllegalArgumentException("请选择至少一个已下载的公开评测集。");
+    return ids;
   }
 
   private List<EvalSample> resolveSamples(

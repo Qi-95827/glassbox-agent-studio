@@ -224,6 +224,95 @@ class AgentBenchmarkIntegrationTest {
     }
   }
 
+  @Test
+  void multiPackSuiteFreezesPerPackLimitAndComparesAsOneDataset() throws Exception {
+    hub.importJsonl(TOOL, tool(false) + "\n" + tool(true));
+    hub.importJsonl(LONG, longPayload("multi-long", 1.47, "fixture context for multi pack", "B"));
+    hub.importJsonl(MEMORY, memory());
+    hub.importJsonl(PLAN, hotpot());
+    hub.importJsonl(SAFETY, injection());
+
+    // sampleLimit 在多包模式下必须逐包独立截取，不能由第一个包吃光全部配额。
+    var balanced = hub.samplesForRun(List.of(TOOL, LONG), 1);
+    assertEquals(2, balanced.size());
+    assertEquals(
+        java.util.Set.of("hub:" + TOOL, "hub:" + LONG),
+        balanced.stream().map(sample -> sample.sourcePack()).collect(java.util.stream.Collectors.toSet()));
+
+    String suite = String.join(",", List.of(MEMORY, PLAN, SAFETY, LONG, TOOL));
+    var first =
+        await(
+            lab.start(
+                new EvalLabService.StartRequest(
+                    "HUB", suite, null, "mock", null, true, true, true, false, 1, 1, null, null),
+                "zh-CN"));
+    assertEquals(5, first.run().categories().size());
+    assertEquals(5, first.cases().size());
+    assertEquals(
+        java.util.Set.of(TOOL, LONG, MEMORY, PLAN, SAFETY),
+        java.util.Set.copyOf((List<String>) first.run().config().get("packIds")));
+    assertEquals(5, ((Number) first.run().config().get("plannedSampleCount")).intValue());
+    assertEquals(5, ((Number) first.run().config().get("plannedAttempts")).intValue());
+    assertEquals("Benchmark Hub 联合评测（5 套）", first.run().config().get("datasetName"));
+    String datasetHash = (String) first.run().config().get("datasetHash");
+    assertNotNull(datasetHash);
+
+    // 输入顺序不同也必须归一化为同一题单哈希。
+    String reordered = String.join(",", List.of(TOOL, SAFETY, PLAN, MEMORY, LONG, LONG));
+    var second =
+        await(
+            lab.start(
+                new EvalLabService.StartRequest(
+                    "HUB", reordered, null, "mock", null, true, true, true, false, 1, 1, null, null),
+                "zh-CN"));
+    assertEquals(datasetHash, second.run().config().get("datasetHash"));
+    assertEquals(first.run().sourceKey(), second.run().sourceKey());
+    assertTrue(
+        (Boolean) compare.compare(first.run().id(), second.run().id()).get("comparable"));
+
+    var allReady =
+        await(
+            lab.start(
+                new EvalLabService.StartRequest(
+                    "HUB", "all-ready", null, "mock", null, true, true, true, false, 1, 1, null, null),
+                "en-US"));
+    assertEquals(datasetHash, allReady.run().config().get("datasetHash"));
+    assertEquals("Benchmark Hub Suite (5 packs)", allReady.run().config().get("datasetName"));
+
+    hub.importJsonl(
+        "swe-bench-lite",
+        """
+        {"rows":[{"row":{"repo":"sample/project","instance_id":"multi-project-1",
+        "base_commit":"123456","problem_statement":"Repair a sample bug."}}]}
+        """);
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            lab.start(
+                new EvalLabService.StartRequest(
+                    "HUB",
+                    TOOL + ",swe-bench-lite",
+                    null,
+                    "mock",
+                    null,
+                    true,
+                    true,
+                    true,
+                    false,
+                    1,
+                    1,
+                    null,
+                    null),
+                "en-US"));
+    var stillFive =
+        await(
+            lab.start(
+                new EvalLabService.StartRequest(
+                    "HUB", "all-ready", null, "mock", null, true, true, true, false, 1, 1, null, null),
+                "en-US"));
+    assertFalse(((List<String>) stillFive.run().config().get("packIds")).contains("swe-bench-lite"));
+  }
+
   private void assertPack(String pack, EvalCategory category, String... fields) {
     var row = hub.samplesForRun(List.of(pack)).getFirst();
     assertEquals(category, row.category());

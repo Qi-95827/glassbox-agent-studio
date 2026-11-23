@@ -159,6 +159,7 @@ export default function EvalRunsPanel({ meta, onOpenCase, initialLaunchPack, onL
                     {t('evalLab.run.meta', {
                       source: t(SOURCE_KEY[item.sourceKind] ?? item.sourceKind),
                       categories: item.categories?.length ?? 0,
+                      cases: item.config?.plannedAttempts ?? summary?.total ?? 0,
                       time: dateTime(item.createdAt, locale)
                     })}
                   </Typography>

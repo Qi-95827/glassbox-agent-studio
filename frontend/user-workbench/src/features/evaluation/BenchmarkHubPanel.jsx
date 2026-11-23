@@ -87,6 +87,7 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
   const [samplesBusy, setSamplesBusy] = useState(false);
 
   const packs = hub.data ?? [];
+  const runnablePacks = packs.filter(pack => !pack.previewOnly && pack.sampleCount > 0);
   const myDatasets = datasets.data ?? [];
 
   useEffect(() => {
@@ -301,9 +302,25 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
   return (
     <Stack spacing={3}>
       <Box>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 0.5 }}>
-          <Typography sx={{ fontSize: 16, fontWeight: 600 }}>{t('evalLab.hub.title')}</Typography>
-          <Chip size="small" label={packs.length} variant="outlined" />
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between', mb: 0.5 }}
+        >
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Typography sx={{ fontSize: 16, fontWeight: 600 }}>{t('evalLab.hub.title')}</Typography>
+            <Chip size="small" label={packs.length} variant="outlined" />
+          </Stack>
+          {runnablePacks.length >= 2 && (
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<PlayArrowRounded />}
+              onClick={() => onRun?.('HUB', 'all-ready')}
+            >
+              {t('evalLab.hub.runAll')} · {runnablePacks.length}
+            </Button>
+          )}
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5, maxWidth: 940 }}>
           {t('evalLab.hub.description')}
