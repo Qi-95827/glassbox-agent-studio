@@ -1522,7 +1522,7 @@
   "ragEmbedding.statusEnvKey": "独立端点已填，使用服务端环境变量 Key",
   "ragEmbedding.statusMissingKey": "缺少 API Key：请复用模型连接，或在服务端设置 workbench.rag.embedding.api-key",
   "ragEmbedding.dimensionHint": "阿里云 text-embedding-v3 默认 1024 维；text-embedding-v4 支持 1536 维。维度必须与端点实际输出一致。",
-  "ragEmbedding.probe": "保存并测试连接",
+  "ragEmbedding.probe": "测试连接",
   "ragEmbedding.probeOk": "连接成功：实际返回 {actual} 维，配置 {expected} 维。",
   "ragEmbedding.probeMismatch": "端点可达，但返回 {actual} 维，与配置的 {expected} 维不一致；请修改“向量维度”后重试。",
   "ragEmbedding.probeMissingKey": "缺少 API Key，无法测试。请复用模型连接，或设置服务端环境变量 workbench.rag.embedding.api-key。",
