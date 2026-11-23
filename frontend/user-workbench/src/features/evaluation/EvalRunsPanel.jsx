@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Box,
@@ -71,7 +71,7 @@ function percent(value) {
 }
 
 /** 评测批次列表 + 单批次 KPI 与逐题真实结果。 */
-export default function EvalRunsPanel({ meta, onOpenCase }) {
+export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
   const { t, locale } = useI18n();
   const toast = useToast();
   const navigate = useNavigate();
@@ -79,12 +79,24 @@ export default function EvalRunsPanel({ meta, onOpenCase }) {
   const runs = useEvalLabRuns();
   const [selectedId, setSelectedId] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogInit, setDialogInit] = useState({ source: 'MINI', key: 'mini' });
   const list = runs.data ?? [];
   const activeId = selectedId || list[0]?.id || '';
   const detail = useEvalLabRun(activeId);
   const run = detail.data?.run;
   const cases = detail.data?.cases ?? [];
   const overall = run?.summary?.overall;
+
+  useEffect(() => {
+    if (!seed?.source) return;
+    setDialogInit({ source: seed.source, key: seed.key });
+    setDialogOpen(true);
+  }, [seed]);
+
+  const openDialog = () => {
+    setDialogInit({ source: 'MINI', key: 'mini' });
+    setDialogOpen(true);
+  };
 
   const cancel = async () => {
     try {
@@ -100,11 +112,7 @@ export default function EvalRunsPanel({ meta, onOpenCase }) {
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '320px 1fr' }, gap: 2.5 }}>
       <Box>
         <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
-          <Button
-            variant="contained"
-            startIcon={<AddRounded />}
-            onClick={() => setDialogOpen(true)}
-          >
+          <Button variant="contained" startIcon={<AddRounded />} onClick={openDialog}>
             {t('evalLab.newRun')}
           </Button>
           <Button
@@ -293,6 +301,8 @@ export default function EvalRunsPanel({ meta, onOpenCase }) {
       <EvalRunDialog
         open={dialogOpen}
         meta={meta}
+        initialSource={dialogInit.source}
+        initialSourceKey={dialogInit.key}
         onClose={() => setDialogOpen(false)}
         onCreated={id => setSelectedId(id)}
       />

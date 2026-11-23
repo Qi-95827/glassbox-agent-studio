@@ -1,5 +1,6 @@
 /target/
 /data/
+/data/eval-datasets/
 *.log
 .idea/
 .vscode/

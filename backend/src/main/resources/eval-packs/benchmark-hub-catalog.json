@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "note": "官方权威评测集元数据。在线下载仅允许本清单登记的 HTTPS 地址；网络受限时可离线导入 JSONL。",
+  "packs": [
+    {
+      "packId": "swe-bench-lite",
+      "category": "CODING_REFLECTION",
+      "displayName": "SWE-bench Lite",
+      "sourceUrl": "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite",
+      "downloadUrl": "https://datasets-server.huggingface.co/rows?dataset=princeton-nlp%2FSWE-bench_Lite&config=default&split=test&offset=0&length=100",
+      "license": "MIT",
+      "expectedSamples": 300,
+      "defaultSampleLimit": 10,
+      "descriptionZh": "真实 GitHub issue 修复任务，覆盖跨文件定位、补丁生成与回归验证。",
+      "descriptionEn": "Real GitHub issue repair tasks covering cross-file localization, patch generation, and regression checks."
+    },
+    {
+      "packId": "bfcl-v3-simple",
+      "category": "TOOL_MCP",
+      "displayName": "BFCL v3 (Function Calling)",
+      "sourceUrl": "https://github.com/ShishirPatil/gorilla/tree/main/berkeley-function-call-leaderboard",
+      "downloadUrl": "https://raw.githubusercontent.com/ShishirPatil/gorilla/main/berkeley-function-call-leaderboard/bfcl_eval/data/BFCL_v3_simple.json",
+      "license": "Apache-2.0",
+      "expectedSamples": 400,
+      "defaultSampleLimit": 20,
+      "descriptionZh": "Berkeley 函数调用基准，覆盖工具选择、参数约束与并行调用。",
+      "descriptionEn": "Berkeley function-calling benchmark covering tool selection, argument constraints, and parallel calls."
+    },
+    {
+      "packId": "ruler-niah-compact",
+      "category": "CONTEXT_COMPACTION",
+      "displayName": "RULER / NIAH",
+      "sourceUrl": "https://github.com/NVIDIA/RULER",
+      "downloadUrl": "https://raw.githubusercontent.com/NVIDIA/RULER/main/scripts/data/synthetic/niah/niah_multikey_1_4k.jsonl",
+      "license": "Apache-2.0",
+      "expectedSamples": 100,
+      "defaultSampleLimit": 15,
+      "descriptionZh": "长上下文针检索与多键召回，用于验证 L1/L2 压缩后的关键事实留存。",
+      "descriptionEn": "Long-context needle retrieval and multi-key recall for validating fact retention after L1/L2 compaction."
+    },
+    {
+      "packId": "longmemeval-s",
+      "category": "LONG_TERM_MEMORY",
+      "displayName": "LongMemEval (ICLR 2025)",
+      "sourceUrl": "https://github.com/xiaowu0162/LongMemEval",
+      "downloadUrl": "https://raw.githubusercontent.com/xiaowu0162/LongMemEval/main/data/longmemeval_s.json",
+      "license": "MIT",
+      "expectedSamples": 500,
+      "defaultSampleLimit": 20,
+      "descriptionZh": "长期对话记忆基准，覆盖信息抽取、多会话推理与时间更新。",
+      "descriptionEn": "Long-term conversational memory benchmark covering extraction, multi-session reasoning, and temporal updates."
+    },
+    {
+      "packId": "gaia-dev-l1",
+      "category": "PLANNING_MULTI_AGENT",
+      "displayName": "GAIA Level-1",
+      "sourceUrl": "https://huggingface.co/datasets/gaia-benchmark/GAIA",
+      "downloadUrl": "https://datasets-server.huggingface.co/rows?dataset=gaia-benchmark%2FGAIA&config=2023_level1&split=test&offset=0&length=100",
+      "license": "CC-BY-4.0",
+      "expectedSamples": 466,
+      "defaultSampleLimit": 15,
+      "descriptionZh": "真实助手任务，需要多步规划、工具使用与证据汇总。",
+      "descriptionEn": "Real assistant tasks that require multi-step planning, tool use, and evidence synthesis."
+    },
+    {
+      "packId": "agentdojo-security",
+      "category": "SAFETY_INJECTION",
+      "displayName": "AgentDojo (ETH Zurich)",
+      "sourceUrl": "https://github.com/ethz-spylab/agentdojo",
+      "downloadUrl": "https://raw.githubusercontent.com/ethz-spylab/agentdojo/main/src/agentdojo/default_suites/v1/banking/task_suite.json",
+      "license": "MIT",
+      "expectedSamples": 120,
+      "defaultSampleLimit": 20,
+      "descriptionZh": "可执行 Agent 安全基准，覆盖提示注入、工具滥用与数据外泄攻防。",
+      "descriptionEn": "Executable agent security benchmark covering prompt injection, tool misuse, and data exfiltration defenses."
+    }
+  ]
+}

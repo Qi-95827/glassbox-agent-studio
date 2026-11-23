@@ -18,6 +18,7 @@ import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 import EvaluationBatchesPanel from './EvaluationBatchesPanel';
 import DatasetManager from './DatasetManager';
 import EvalRunsPanel from './EvalRunsPanel';
+import BenchmarkHubPanel from './BenchmarkHubPanel';
 
 function CasePeek({ item, onClose }) {
   const { t, locale } = useI18n();
@@ -99,7 +100,13 @@ export default function EvalLabPage() {
   const meta = useEvalLabMeta();
   const [tab, setTab] = useState('runs');
   const [peek, setPeek] = useState(null);
+  const [seed, setSeed] = useState(null);
   usePageChrome({ trail: [{ label: t('nav.workspace') }, { label: t('nav.evaluations') }] });
+
+  const runDataset = (source, key) => {
+    setSeed({ source, key, nonce: Date.now() });
+    setTab('runs');
+  };
 
   return (
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
@@ -126,10 +133,12 @@ export default function EvalLabPage() {
           sx={{ borderBottom: `1px solid ${googleTokens.outline}`, mb: 2.5 }}
         >
           <Tab value="runs" label={t('evalLab.tab.runs')} />
+          <Tab value="hub" label={t('evalLab.tab.hub')} />
           <Tab value="legacy" label={t('evalLab.tab.legacy')} />
         </Tabs>
 
-        {tab === 'runs' && <EvalRunsPanel meta={meta.data} onOpenCase={setPeek} />}
+        {tab === 'runs' && <EvalRunsPanel meta={meta.data} onOpenCase={setPeek} seed={seed} />}
+        {tab === 'hub' && <BenchmarkHubPanel meta={meta.data} onRun={runDataset} />}
         {tab === 'legacy' && (
           <Stack spacing={3}>
             <EvaluationBatchesPanel />

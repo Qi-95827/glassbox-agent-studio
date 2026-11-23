@@ -1294,5 +1294,14 @@
   "evalLab.hub.downloaded": "Downloaded and verified",
   "evalLab.hub.whitelistRejected": "URL is not in the Catalog allowlist; download rejected",
   "evalLab.error.load": "Failed to load evaluation data: {message}",
-  "evalLab.error.action": "Action failed: {message}"
+  "evalLab.error.action": "Action failed: {message}",
+  "common.deleted": "Deleted",
+  "evalLab.hub.datasetSaved": "Dataset saved",
+  "evalLab.hub.sampleSaved": "Sample saved",
+  "evalLab.hub.deleteConfirm": "Delete permanently? This cannot be undone.",
+  "evalLab.hub.deleted": "Deleted",
+  "evalLab.hub.newSample": "New sample",
+  "evalLab.hub.noSamples": "This dataset has no samples yet",
+  "evalLab.hub.exportDone": "Export download started",
+  "evalLab.hub.offlineHint": "Offline import shares the same normalization pipeline as online downloads"
 }

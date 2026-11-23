@@ -50,6 +50,8 @@ public class EvalLabService {
   private final CodeAssertionGrader codeGrader;
   private final LlmJudgeGrader judge;
   private final EvalMetricsAggregator aggregator;
+  private final EvalBenchmarkHubService hub;
+  private final EvalCustomDatasetService customDatasets;
   private final OwnershipService ownership;
   private final ObjectMapper json;
   private final AuditService audit;
@@ -64,6 +66,8 @@ public class EvalLabService {
       CodeAssertionGrader codeGrader,
       LlmJudgeGrader judge,
       EvalMetricsAggregator aggregator,
+      EvalBenchmarkHubService hub,
+      EvalCustomDatasetService customDatasets,
       OwnershipService ownership,
       ObjectMapper json,
       AuditService audit,
@@ -75,6 +79,8 @@ public class EvalLabService {
     this.codeGrader = codeGrader;
     this.judge = judge;
     this.aggregator = aggregator;
+    this.hub = hub;
+    this.customDatasets = customDatasets;
     this.ownership = ownership;
     this.json = json;
     this.audit = audit;
@@ -376,9 +382,9 @@ public class EvalLabService {
     if ("MINI".equals(sourceKind)) {
       pool = miniPacks.loadAll();
     } else if ("HUB".equals(sourceKind)) {
-      throw new IllegalArgumentException("Benchmark Hub 数据源将在完成下载后启用。");
+      pool = hub.samplesForRun(splitSourceKey(sourceKey));
     } else {
-      throw new IllegalArgumentException("自定义评测集数据源将在第二阶段启用。");
+      pool = customDatasets.samplesForRun(sourceKey);
     }
     var result = new ArrayList<EvalSample>();
     for (var category : categories)
@@ -388,6 +394,15 @@ public class EvalLabService {
               .limit(sampleLimit)
               .toList());
     return List.copyOf(result);
+  }
+
+  private static List<String> splitSourceKey(String sourceKey) {
+    if (sourceKey == null || sourceKey.isBlank())
+      throw new IllegalArgumentException("缺少 Hub 评测集标识。");
+    return java.util.Arrays.stream(sourceKey.split(","))
+        .map(String::strip)
+        .filter(text -> !text.isBlank())
+        .toList();
   }
 
   private EvalLabRunEntity requireReadable(String id) {

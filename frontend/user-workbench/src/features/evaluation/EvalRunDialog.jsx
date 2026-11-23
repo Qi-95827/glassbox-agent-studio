@@ -22,11 +22,14 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { evalLabApi } from '../../api/evalLab';
 import { useModelConnections } from '../../hooks/useModelConnections';
+import { useEvalDatasets, useEvalHub } from '../../hooks/useEvalLab';
 import { useToast } from '../../components/ToastProvider';
 import { useI18n } from '../../i18n/I18nProvider';
 import { googleTokens } from '../../theme/googleTheme';
 
 const defaults = {
+  sourceKind: 'MINI',
+  sourceKey: 'mini',
   categories: [],
   modelMode: 'mock',
   modelConnectionId: '',
@@ -40,27 +43,56 @@ const defaults = {
   enableMcp: false
 };
 
-/** 发起评测：类别、模型、消融开关、裁判、抽样与费用上限。 */
-export default function EvalRunDialog({ open, meta, onClose, onCreated }) {
+/** 发起评测：数据源、类别、模型、消融开关、裁判、抽样与费用上限。 */
+export default function EvalRunDialog({
+  open,
+  meta,
+  initialSource = 'MINI',
+  initialSourceKey = 'mini',
+  onClose,
+  onCreated
+}) {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const connections = useModelConnections(open);
+  const hub = useEvalHub();
+  const custom = useEvalDatasets();
   const [form, setForm] = useState(defaults);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const categories = useMemo(() => meta?.categories ?? [], [meta]);
   const allCodes = useMemo(() => categories.map(item => item.code), [categories]);
+  const hubPacks = useMemo(() => (hub.data ?? []).filter(item => item.sampleCount > 0), [hub.data]);
+  const datasets = useMemo(() => custom.data ?? [], [custom.data]);
+
+  const sourceCategory = useMemo(() => {
+    if (form.sourceKind === 'HUB') {
+      const pack = hubPacks.find(item => item.packId === form.sourceKey);
+      return pack?.category ?? null;
+    }
+    if (form.sourceKind === 'CUSTOM') {
+      const dataset = datasets.find(item => item.id === form.sourceKey);
+      return dataset?.category ?? null;
+    }
+    return null;
+  }, [form.sourceKind, form.sourceKey, hubPacks, datasets]);
 
   useEffect(() => {
     if (!open) return;
     setForm(current => ({
       ...defaults,
+      sourceKind: initialSource,
+      sourceKey: initialSourceKey,
       categories: current.categories.length ? current.categories : allCodes
     }));
     setError('');
-  }, [open, allCodes]);
+  }, [open, initialSource, initialSourceKey, allCodes]);
+
+  useEffect(() => {
+    if (sourceCategory) setForm(current => ({ ...current, categories: [sourceCategory] }));
+  }, [sourceCategory]);
 
   const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
   const toggleCategory = code =>
@@ -76,9 +108,22 @@ export default function EvalRunDialog({ open, meta, onClose, onCreated }) {
     return list.filter(item => item.enabled);
   }, [connections.data]);
 
+  const changeSource = sourceKind => {
+    setForm(current => ({
+      ...current,
+      sourceKind,
+      sourceKey: sourceKind === 'MINI' ? 'mini' : '',
+      categories: sourceKind === 'MINI' ? allCodes : []
+    }));
+  };
+
   const submit = async () => {
     if (!form.categories.length) {
       setError(t('evalLab.field.categories'));
+      return;
+    }
+    if (form.sourceKind !== 'MINI' && !form.sourceKey) {
+      setError(t('evalLab.field.source'));
       return;
     }
     if (form.modelMode === 'byok' && !form.modelConnectionId) {
@@ -89,8 +134,8 @@ export default function EvalRunDialog({ open, meta, onClose, onCreated }) {
     setError('');
     try {
       const created = await evalLabApi.start({
-        sourceKind: 'MINI',
-        sourceKey: 'mini',
+        sourceKind: form.sourceKind,
+        sourceKey: form.sourceKey,
         categories: form.categories,
         modelMode: form.modelMode,
         modelConnectionId: form.modelMode === 'byok' ? form.modelConnectionId : null,
@@ -127,12 +172,63 @@ export default function EvalRunDialog({ open, meta, onClose, onCreated }) {
           </Alert>
         )}
         <Stack spacing={2.2}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            <FormControl size="small" sx={{ minWidth: 200 }}>
+              <InputLabel>{t('evalLab.field.source')}</InputLabel>
+              <Select
+                label={t('evalLab.field.source')}
+                value={form.sourceKind}
+                onChange={event => changeSource(event.target.value)}
+              >
+                <MenuItem value="MINI">{t('evalLab.source.MINI')}</MenuItem>
+                <MenuItem value="HUB">{t('evalLab.source.HUB')}</MenuItem>
+                <MenuItem value="CUSTOM">{t('evalLab.source.CUSTOM')}</MenuItem>
+              </Select>
+            </FormControl>
+            {form.sourceKind === 'HUB' && (
+              <FormControl size="small" sx={{ minWidth: 260 }}>
+                <InputLabel>{t('evalLab.hub.title')}</InputLabel>
+                <Select
+                  label={t('evalLab.hub.title')}
+                  value={form.sourceKey}
+                  onChange={event => set('sourceKey', event.target.value)}
+                >
+                  {hubPacks.map(pack => (
+                    <MenuItem key={pack.packId} value={pack.packId}>
+                      {pack.displayName} · {pack.sampleCount}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+            {form.sourceKind === 'CUSTOM' && (
+              <FormControl size="small" sx={{ minWidth: 260 }}>
+                <InputLabel>{t('evalLab.hub.customTitle')}</InputLabel>
+                <Select
+                  label={t('evalLab.hub.customTitle')}
+                  value={form.sourceKey}
+                  onChange={event => set('sourceKey', event.target.value)}
+                >
+                  {datasets.map(dataset => (
+                    <MenuItem key={dataset.id} value={dataset.id}>
+                      {dataset.name} · {dataset.sampleCount}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+          </Stack>
+
           <Box>
             <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 1 }}>
               {t('evalLab.field.categories')}
             </Typography>
             <Box
-              sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 0.5 }}
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+                gap: 0.5
+              }}
             >
               {categories.map(category => (
                 <FormControlLabel

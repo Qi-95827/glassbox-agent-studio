@@ -1294,5 +1294,14 @@
   "evalLab.hub.downloaded": "已下载并完成校验",
   "evalLab.hub.whitelistRejected": "该地址不在 Catalog 白名单内，已拒绝下载",
   "evalLab.error.load": "评测数据读取失败：{message}",
-  "evalLab.error.action": "操作失败：{message}"
+  "evalLab.error.action": "操作失败：{message}",
+  "common.deleted": "已删除",
+  "evalLab.hub.datasetSaved": "评测集已保存",
+  "evalLab.hub.sampleSaved": "样本已保存",
+  "evalLab.hub.deleteConfirm": "确认删除？该操作不可撤销。",
+  "evalLab.hub.deleted": "已删除",
+  "evalLab.hub.newSample": "新增样本",
+  "evalLab.hub.noSamples": "该评测集还没有样本",
+  "evalLab.hub.exportDone": "导出文件已开始下载",
+  "evalLab.hub.offlineHint": "离线导入与在线下载共享同一标准化入口"
 }

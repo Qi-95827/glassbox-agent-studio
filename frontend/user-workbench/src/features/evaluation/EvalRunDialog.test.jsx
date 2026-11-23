@@ -19,6 +19,11 @@ vi.mock('../../hooks/useModelConnections', () => ({
   useModelConnections: () => ({ data: { connections: [] } })
 }));
 
+vi.mock('../../hooks/useEvalLab', () => ({
+  useEvalHub: () => ({ data: [] }),
+  useEvalDatasets: () => ({ data: [] })
+}));
+
 const meta = {
   categories: [
     { code: 'CODING_REFLECTION', labelZh: '代码', labelEn: 'Coding', miniCount: 4 },
