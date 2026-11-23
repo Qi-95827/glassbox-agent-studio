@@ -41,7 +41,7 @@
 3. **L2 已转化为结构化锚点**：`66ebed52` 实际触发 `L2_SLIDING_SUMMARY`，抽屉展示 `confirmed_facts / active_constraints / file_and_tool_state / open_questions` 四段检查点，并支持与上一轮检查点增量合并。
 4. **Token 取舍**：实验总 Token 高于基准，是因为不再把正文压成无信息头尾，而是保留更多相关段落；平均仍节省 72.46%，且答案正确率翻倍。
 
-![A/B 消融对照：LongBench 20% → 40%，LoCoMo 45.7% → 74.6%](images/eval_ab_compare_857cc111.png)
+![A/B 消融对照：LongBench 20% → 40%，LoCoMo 45.7% → 74.6%](../images/eval_ab_compare_857cc111.png)
 
 ## 三、LoCoMo：BM25 + 相关性硬门槛 + RRF 的实际收益
 
@@ -66,7 +66,7 @@
 
 以下截图来自实验批次 `#857cc111` 的 LoCoMo 题目抽屉：
 
-![中文抽屉：真实量化指标全部格式化，无裸露英文变量名](images/eval_case_metric_cards_857cc111.png)
+![中文抽屉：真实量化指标全部格式化，无裸露英文变量名](../images/eval_case_metric_cards_857cc111.png)
 
 可见：
 
@@ -78,7 +78,7 @@
 
 另附上下文压缩抽屉截图，展示 L2 结构化锚点与 Query-Aware 保留片段：
 
-![上下文压缩抽屉：L2 结构化锚点与高相关片段](images/eval_case_drawer_857cc111.png)
+![上下文压缩抽屉：L2 结构化锚点与高相关片段](../images/eval_case_drawer_857cc111.png)
 
 ## 五、四阶段门禁结果
 
