@@ -60,7 +60,8 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
     boolean compactionEnabled = config == null || config.enableCompaction();
     dev.workbench.framework.context.CompactionResult result;
     if (compactionEnabled) {
-      var request = new CompactionRequest(messages, limit, 4, 2, 0.60, 0.78, 0.92);
+      var request =
+          new CompactionRequest(messages, limit, 4, 2, 0.60, 0.78, 0.92, sample.prompt());
       result = compactor.evaluateAndCompact(request);
     } else {
       // 消融实验关闭压缩：原样透传消息，仅记录 L0 观测与真实超限风险。
@@ -107,6 +108,8 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
     metrics.put("compressionSavedPercent", round(savedPercent));
     metrics.put("compactionTier", result.breakdown().appliedTier().name());
     metrics.put("offloadedTools", result.breakdown().offloadedToolCallIds().size());
+    metrics.put("artifactOffloads", result.breakdown().artifactRefs().size());
+    metrics.put("retainedExcerptChars", result.breakdown().retainedExcerptPreview().length());
     metrics.put("api400", api400);
 
     var evidence = new LinkedHashMap<String, Object>(metrics);
@@ -122,6 +125,9 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
     trace.put("retainedNeedles", retained);
     trace.put("segmentTokens", result.breakdown().segmentTokens());
     trace.put("summaryPreview", result.breakdown().summaryPreview());
+    trace.put("artifactRefs", result.breakdown().artifactRefs());
+    trace.put("retainedExcerptPreview", result.breakdown().retainedExcerptPreview());
+    trace.put("structuredAnchors", result.breakdown().structuredAnchors());
     trace.put("measurement", "compacted_context_scan");
 
     long duration = (System.nanoTime() - started) / 1_000_000;
@@ -157,7 +163,8 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
           var compacted =
               enabled
                   ? compactor.evaluateAndCompact(
-                      new CompactionRequest(original, budget, 2, 4, 0.60, 0.78, 0.92))
+                      new CompactionRequest(
+                          original, budget, 2, 4, 0.60, 0.78, 0.92, question.toString()))
                   : null;
           var history = compacted == null ? original : compacted.messages();
           int afterCompaction = estimate(history);
@@ -177,6 +184,12 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
           result.metrics.put("offloadedTools", offloaded.size());
           result.metrics.put("compactionEnabled", enabled);
           result.metrics.put("truncated", after < afterCompaction);
+          result.metrics.put(
+              "artifactOffloads",
+              compacted == null ? 0 : compacted.breakdown().artifactRefs().size());
+          result.metrics.put(
+              "retainedExcerptChars",
+              compacted == null ? 0 : compacted.breakdown().retainedExcerptPreview().length());
           var segments = new LinkedHashMap<String, Integer>();
           if (compacted == null) {
             for (var message : history)
@@ -191,6 +204,14 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
           result.trace.put("segmentTokens", segments);
           result.trace.put(
               "summaryPreview", compacted == null ? "" : compacted.breakdown().summaryPreview());
+          result.trace.put(
+              "artifactRefs", compacted == null ? List.of() : compacted.breakdown().artifactRefs());
+          result.trace.put(
+              "retainedExcerptPreview",
+              compacted == null ? "" : compacted.breakdown().retainedExcerptPreview());
+          result.trace.put(
+              "structuredAnchors",
+              compacted == null ? "" : compacted.breakdown().structuredAnchors());
           result.trace.put("offloadedToolCallIds", offloaded);
           result.trace.put("choices", choices);
           result.trace.put("domain", sample.setup().get("domain"));
