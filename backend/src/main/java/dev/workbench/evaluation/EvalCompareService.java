@@ -2,7 +2,6 @@ package dev.workbench.evaluation;
 
 import dev.workbench.framework.evaluation.EvalCategory;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,8 +11,8 @@ import org.springframework.stereotype.Service;
 /**
  * A/B 消融对照。
  *
- * <p>只比较两个真实批次的冻结快照与逐题结果，不重新执行、不推断原因。配置差异、六维 Δ、成本/延迟 Δ
- * 与逐题 IMPROVED / REGRESSED / UNCHANGED 均由持久化结果计算。
+ * <p>只比较两个真实批次的冻结快照与逐题结果，不重新执行、不推断原因。配置差异、六维 Δ、成本/延迟 Δ 与逐题 IMPROVED / REGRESSED / UNCHANGED
+ * 均由持久化结果计算。
  */
 @Service
 public class EvalCompareService {
@@ -37,7 +36,6 @@ public class EvalCompareService {
     OVERALL_KEYS.put("safetyBlockRate", "safetyBlockRate");
     OVERALL_KEYS.put("avgNeedleRetention", "avgNeedleRetention");
     OVERALL_KEYS.put("avgRecallAtK", "avgRecallAtK");
-    OVERALL_KEYS.put("avgCostUsd", "avgCostUsd");
     OVERALL_KEYS.put("p95DurationMs", "p95DurationMs");
   }
 
@@ -74,16 +72,59 @@ public class EvalCompareService {
             "sourceKind", candidate.run().sourceKind(),
             "sourceKey", candidate.run().sourceKey() == null ? "" : candidate.run().sourceKey(),
             "createdAt", candidate.run().createdAt()));
-    result.put("comparable", comparable(baseline, candidate));
+    boolean comparable = comparable(baseline, candidate);
+    result.put("comparable", comparable);
     result.put("configDiff", configDiff(baseConfig, candidateConfig));
-    result.put("categoryComparison", categoryComparison(baseSummary, candidateSummary));
-    result.put("metricDeltas", metricDeltas(baseSummary, candidateSummary));
-    result.put("caseDiff", caseDiff(baseline, candidate));
+    result.put("categoryComparison", categoryComparison(baseSummary, candidateSummary, comparable));
+    var deltas = new ArrayList<>(metricDeltas(baseSummary, candidateSummary));
+    deltas.add(
+        delta(
+            "totalTokens",
+            (double) baseline.run().totalTokens(),
+            (double) candidate.run().totalTokens()));
+    deltas.add(delta("totalCostUsd", modelCost(baseline), modelCost(candidate)));
+    deltas.add(
+        delta(
+            "avgCostUsd",
+            modelCost(baseline) == null
+                ? null
+                : number(map(baseSummary.get("overall")).get("avgCostUsd")),
+            modelCost(candidate) == null
+                ? null
+                : number(map(candidateSummary.get("overall")).get("avgCostUsd"))));
+    if (baseline.run().categories().contains(EvalCategory.CONTEXT_COMPACTION.name())
+        || candidate.run().categories().contains(EvalCategory.CONTEXT_COMPACTION.name())) {
+      deltas.add(
+          delta(
+              "avgPreparedInput",
+              meanCaseMetric(baseline, "afterTokens"),
+              meanCaseMetric(candidate, "afterTokens")));
+      deltas.add(
+          delta(
+              "avgActualInput",
+              meanCaseMetric(baseline, "actualInputTokens"),
+              meanCaseMetric(candidate, "actualInputTokens")));
+    }
+    result.put("metricDeltas", comparable ? List.copyOf(deltas) : List.of());
+    result.put("caseDiff", comparable ? caseDiff(baseline, candidate) : List.of());
     result.put("judge", judgeDiff(baseline, candidate));
     return result;
   }
 
-  private static boolean comparable(EvalLabService.Detail baseline, EvalLabService.Detail candidate) {
+  private static boolean comparable(
+      EvalLabService.Detail baseline, EvalLabService.Detail candidate) {
+    var left = baseline.run().config();
+    var right = candidate.run().config();
+    if ("HUB".equals(baseline.run().sourceKind()) || "HUB".equals(candidate.run().sourceKind())) {
+      return "COMPLETED".equals(baseline.run().status())
+          && "COMPLETED".equals(candidate.run().status())
+          && !Boolean.TRUE.equals(summary(baseline).get("budgetStopped"))
+          && !Boolean.TRUE.equals(summary(candidate).get("budgetStopped"))
+          && left.get("datasetHash") != null
+          && java.util.Objects.equals(left.get("datasetHash"), right.get("datasetHash"))
+          && java.util.Objects.equals(left.get("repeatK"), right.get("repeatK"))
+          && java.util.Objects.equals(left.get("maxCostUsd"), right.get("maxCostUsd"));
+    }
     var baseCategories = new LinkedHashSet<>(baseline.run().categories());
     var candidateCategories = new LinkedHashSet<>(candidate.run().categories());
     Object baseRepeat = baseline.run().config().get("repeatK");
@@ -109,7 +150,7 @@ public class EvalCompareService {
   }
 
   private static List<Map<String, Object>> categoryComparison(
-      Map<String, Object> baseline, Map<String, Object> candidate) {
+      Map<String, Object> baseline, Map<String, Object> candidate, boolean comparable) {
     var baseCategories = categories(baseline);
     var candidateCategories = categories(candidate);
     var rows = new ArrayList<Map<String, Object>>();
@@ -122,7 +163,7 @@ public class EvalCompareService {
       row.put("category", category.name());
       row.put("baselineScore", leftScore);
       row.put("candidateScore", rightScore);
-      row.put("delta", round(rightScore - leftScore));
+      if (comparable) row.put("delta", round(rightScore - leftScore));
       row.put("baselinePassRate", number(left.get("passRate")));
       row.put("candidatePassRate", number(right.get("passRate")));
       row.put("baselineSampleCount", number(left.get("total")));
@@ -150,6 +191,36 @@ public class EvalCompareService {
     return List.copyOf(rows);
   }
 
+  private static Double modelCost(EvalLabService.Detail detail) {
+    if ("HUB".equals(detail.run().sourceKind())
+        && detail.cases().stream()
+            .anyMatch(
+                row ->
+                    Boolean.TRUE.equals(row.metrics().get("modelRequestAttempted"))
+                        && !Boolean.TRUE.equals(row.metrics().get("costKnown")))) return null;
+    return detail.run().totalCostUsd();
+  }
+
+  private static Double meanCaseMetric(EvalLabService.Detail detail, String field) {
+    var rows = detail.cases();
+    if (rows.isEmpty()
+        || rows.stream().anyMatch(row -> !(row.metrics().get(field) instanceof Number)))
+      return null;
+    return rows.stream()
+        .mapToDouble(row -> number(row.metrics().get(field)))
+        .average()
+        .orElseThrow();
+  }
+
+  private static Map<String, Object> delta(String metric, Double baseline, Double candidate) {
+    var row = new LinkedHashMap<String, Object>();
+    row.put("metric", metric);
+    row.put("baseline", baseline);
+    row.put("candidate", candidate);
+    row.put("delta", baseline == null || candidate == null ? null : round(candidate - baseline));
+    return row;
+  }
+
   private static List<Map<String, Object>> caseDiff(
       EvalLabService.Detail baseline, EvalLabService.Detail candidate) {
     var left = caseScores(baseline.cases());
@@ -172,8 +243,12 @@ public class EvalCompareService {
       row.put("key", key);
       row.put("category", key.substring(0, key.indexOf('|')));
       row.put("sampleId", key.substring(key.indexOf('|') + 1));
-      row.put("titleZh", valueOrEmpty(candidateCase == null ? baseCase.titleZh() : candidateCase.titleZh()));
-      row.put("titleEn", valueOrEmpty(candidateCase == null ? baseCase.titleEn() : candidateCase.titleEn()));
+      row.put(
+          "titleZh",
+          valueOrEmpty(candidateCase == null ? baseCase.titleZh() : candidateCase.titleZh()));
+      row.put(
+          "titleEn",
+          valueOrEmpty(candidateCase == null ? baseCase.titleEn() : candidateCase.titleEn()));
       row.put("baselineScore", round(baseScore * 100));
       row.put("candidateScore", round(candidateScore * 100));
       row.put("baselinePassed", baseCase != null && baseCase.passed());
@@ -209,7 +284,10 @@ public class EvalCompareService {
     var result = new LinkedHashMap<String, CaseScore>();
     for (var entry : grouped.entrySet()) {
       double score =
-          entry.getValue().stream().mapToDouble(EvalLabService.CaseView::codeScore).average().orElse(0);
+          entry.getValue().stream()
+              .mapToDouble(EvalLabService.CaseView::codeScore)
+              .average()
+              .orElse(0);
       boolean passed =
           entry.getValue().stream().filter(EvalLabService.CaseView::passed).count()
               >= Math.ceil(entry.getValue().size() / 2.0);

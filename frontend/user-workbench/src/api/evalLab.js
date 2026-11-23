@@ -10,6 +10,7 @@ export const evalLabApi = {
   compare: (baseline, candidate) =>
     get(`/eval-lab/compare?${new URLSearchParams({ baseline, candidate })}`),
   hub: () => get('/eval-lab/hub'),
+  previewPack: packId => get('/eval-lab/hub/' + encodeURIComponent(packId) + '/samples'),
   downloadPack: packId => post(`/eval-lab/hub/${encodeURIComponent(packId)}/download`, {}),
   importPack: (packId, jsonl) =>
     post(`/eval-lab/hub/${encodeURIComponent(packId)}/import`, { jsonl }),

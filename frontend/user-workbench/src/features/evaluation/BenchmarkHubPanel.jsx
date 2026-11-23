@@ -64,6 +64,18 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
   const categories = useMemo(() => meta?.categories ?? [], [meta]);
 
   const [busy, setBusy] = useState('');
+  const [preview, setPreview] = useState(null);
+  const openPreview = async pack => {
+    setBusy(pack.packId);
+    try {
+      const rows = await evalLabApi.previewPack(pack.packId);
+      setPreview({ name: pack.displayName, rows });
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setBusy('');
+    }
+  };
   const [importTarget, setImportTarget] = useState(null);
   const [importText, setImportText] = useState('');
   const [datasetDialog, setDatasetDialog] = useState(null);
@@ -322,7 +334,15 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
             >
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
                 <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{pack.displayName}</Typography>
-                <Chip size="small" label={pack.category} variant="outlined" />
+                <Chip
+                  size="small"
+                  label={t(
+                    pack.previewOnly
+                      ? 'evalLab.hub.routeB'
+                      : 'evalLab.hub.capability.' + pack.category
+                  )}
+                  variant="outlined"
+                />
                 <Chip
                   size="small"
                   color={pack.sampleCount > 0 ? 'success' : 'default'}
@@ -338,6 +358,7 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
                 {pack.downloadedAt ? dateTime(pack.downloadedAt, locale) : t('common.notStarted')}
               </Typography>
               {pack.errorMessage && <Alert severity="warning">{pack.errorMessage}</Alert>}
+              {pack.previewOnly && <Alert severity="info">{t('evalLab.hub.routeBHint')}</Alert>}
               <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
                 <Button
                   size="small"
@@ -360,15 +381,25 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
                 >
                   {t('evalLab.hub.import')}
                 </Button>
-                <Button
-                  size="small"
-                  variant="contained"
-                  startIcon={<PlayArrowRounded />}
-                  disabled={!pack.sampleCount}
-                  onClick={() => onRun?.('HUB', pack.packId)}
-                >
-                  {t('evalLab.hub.run')}
-                </Button>
+                {pack.previewOnly ? (
+                  <Button
+                    size="small"
+                    disabled={!pack.sampleCount || busy === pack.packId}
+                    onClick={() => openPreview(pack)}
+                  >
+                    {t('evalLab.hub.preview')}
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<PlayArrowRounded />}
+                    disabled={!pack.sampleCount}
+                    onClick={() => onRun?.('HUB', pack.packId)}
+                  >
+                    {t('evalLab.hub.run')}
+                  </Button>
+                )}
               </Stack>
             </Box>
           ))}
@@ -722,6 +753,30 @@ export default function BenchmarkHubPanel({ meta, onRun }) {
           <Button variant="contained" onClick={saveSample} disabled={busy === 'sample'}>
             {t('evalLab.hub.saveSample')}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(preview)} onClose={() => setPreview(null)} fullWidth maxWidth="md">
+        <DialogTitle>
+          {preview?.name} · {t('evalLab.hub.preview')}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            {(preview?.rows ?? []).map(row => (
+              <Box key={row.id}>
+                <Typography sx={{ fontWeight: 600 }}>{row.id}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {row.repository} · {row.baseCommit}
+                </Typography>
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mt: 0.6 }}>
+                  {row.prompt}
+                </Typography>
+              </Box>
+            ))}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPreview(null)}>{t('common.close')}</Button>
         </DialogActions>
       </Dialog>
     </Stack>

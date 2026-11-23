@@ -37,20 +37,23 @@ class EvalBenchmarkHubIntegrationTest {
 
   @Test
   void offlineImportNormalizesAndPersistsOutsideGit() throws Exception {
-    String jsonl =
-        "{\"id\":\"bfcl-test-1\",\"question\":\"Read the authorized file and report its first line.\",\"function\":[{\"name\":\"workspace_read\"}]}\n";
+    String jsonl = AgentBenchmarkIntegrationTest.tool(false);
     var result = hub.importJsonl("bfcl-v3-simple", jsonl);
     assertEquals("IMPORTED", result.status());
     assertEquals(1, result.sampleCount());
     assertNotNull(result.sha256());
     assertEquals(64, result.sha256().length());
     Path file =
-        Path.of(System.getProperty("java.io.tmpdir"), "agent-workbench-eval-hub-test", "bfcl-v3-simple", "samples.jsonl");
+        Path.of(
+            System.getProperty("java.io.tmpdir"),
+            "agent-workbench-eval-hub-test",
+            "bfcl-v3-simple",
+            "samples-agent-v2.jsonl");
     assertTrue(Files.exists(file), "标准化样本必须落盘到 data/eval-datasets 根目录");
     var samples = hub.samplesForRun(java.util.List.of("bfcl-v3-simple"));
     assertEquals(1, samples.size());
     assertEquals("hub:bfcl-v3-simple", samples.getFirst().sourcePack());
-    assertEquals(Boolean.TRUE, samples.getFirst().setup().get("hubAdapted"));
+    assertEquals("agent_eval_v2", samples.getFirst().setup().get("hubPackMode"));
   }
 
   @Test

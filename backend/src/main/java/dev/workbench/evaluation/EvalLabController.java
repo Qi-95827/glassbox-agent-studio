@@ -87,6 +87,11 @@ public class EvalLabController {
     return hub.importJsonl(packId, request == null ? null : request.jsonl());
   }
 
+  @GetMapping("/hub/{packId}/samples")
+  public List<EvalBenchmarkHubService.SamplePreview> preview(@PathVariable String packId) {
+    return hub.preview(packId);
+  }
+
   @GetMapping("/datasets")
   public List<EvalCustomDatasetService.DatasetView> datasetList() {
     return datasets.list();
@@ -126,8 +131,7 @@ public class EvalLabController {
   }
 
   @DeleteMapping("/datasets/{id}/samples/{sampleKey}")
-  public Map<String, Object> deleteSample(
-      @PathVariable String id, @PathVariable String sampleKey) {
+  public Map<String, Object> deleteSample(@PathVariable String id, @PathVariable String sampleKey) {
     datasets.deleteSample(id, sampleKey);
     return Map.of("deleted", true);
   }

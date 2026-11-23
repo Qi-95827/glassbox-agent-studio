@@ -6,6 +6,7 @@ import dev.workbench.framework.evaluation.EvalCaseExecution;
 import dev.workbench.framework.evaluation.EvalSample;
 import dev.workbench.framework.prompt.PromptResourceLoader;
 import dev.workbench.modelconnection.ModelConnectionService;
+import dev.workbench.modelconnection.ModelProviderType;
 import dev.workbench.modelconnection.RuntimeModelConnection;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -22,8 +23,8 @@ import org.springframework.stereotype.Component;
 /**
  * 可选 LLM-as-a-Judge。
  *
- * <p>严格读取外置双语 Prompt，要求裁判只输出 JSON；裁判自身的 Token 与参考费用独立记录，不混入被测模型统计。
- * 未配置裁判连接时返回 {@code DISABLED}，不会用规则分数冒充大模型裁判。
+ * <p>严格读取外置双语 Prompt，要求裁判只输出 JSON；裁判自身的 Token 与参考费用独立记录，不混入被测模型统计。 未配置裁判连接时返回 {@code
+ * DISABLED}，不会用规则分数冒充大模型裁判。
  */
 @Component
 public class LlmJudgeGrader {
@@ -61,19 +62,21 @@ public class LlmJudgeGrader {
       EvalSample sample,
       EvalCaseExecution execution,
       String judgeConnectionId,
-      String locale) {
+      String locale,
+      String referenceAnswer) {
     if (judgeConnectionId == null || judgeConnectionId.isBlank()) return JudgeResult.disabled();
     RuntimeModelConnection connection;
     try {
       connection = connections.resolveForExecution(judgeConnectionId);
     } catch (RuntimeException e) {
-      return JudgeResult.failed("裁判模型连接不可用：" + safe(e.getMessage()), 0, 0, 0);
+      return JudgeResult.failed("JUDGE_CONNECTION_UNAVAILABLE", 0, 0, 0);
     }
     String prompt = PromptResourceLoader.load(locale, "eval-judge.txt");
     String user =
         prompt
             + "\n\n## Case prompt\n"
             + sample.prompt()
+            + (referenceAnswer == null ? "" : "\n\n## Reference answer\n" + referenceAnswer)
             + "\n\n## Declared rubric\n"
             + String.join("\n", sample.judgeRubric())
             + "\n\n## Model output\n"
@@ -81,28 +84,31 @@ public class LlmJudgeGrader {
             + "\n\n## Deterministic assertion evidence\n"
             + safeJson(execution == null ? Map.of() : execution.metrics());
     try {
-      var body =
-          JSON.writeValueAsBytes(
-              Map.of(
-                  "model",
-                  connection.modelName(),
-                  "messages",
-                  List.of(
-                      Map.of("role", "system", "content", prompt),
-                      Map.of("role", "user", "content", user)),
-                  "temperature",
-                  0,
-                  "max_tokens",
-                  900,
-                  "stream",
-                  false));
+      var endpoint = URI.create(connection.baseUrl() + "/chat/completions");
+      var payload = new LinkedHashMap<String, Object>();
+      payload.put("model", connection.modelName());
+      payload.put(
+          "messages",
+          List.of(
+              Map.of("role", "system", "content", prompt),
+              Map.of("role", "user", "content", user)));
+      payload.put("temperature", 0);
+      payload.put("max_tokens", referenceAnswer == null ? 900 : 2_048);
+      payload.put("stream", false);
+      if (referenceAnswer != null
+          && connection.providerType() == ModelProviderType.DEEPSEEK
+          && "api.deepseek.com".equalsIgnoreCase(endpoint.getHost())) {
+        // 公开问答裁判只需短 JSON 结论，避免默认思考用量挤占最终判词。
+        payload.put("thinking", Map.of("type", "disabled"));
+      }
+      var body = JSON.writeValueAsBytes(payload);
       var client =
           HttpClient.newBuilder()
               .connectTimeout(Duration.ofSeconds(15))
               .followRedirects(HttpClient.Redirect.NEVER)
               .build();
       var request =
-          HttpRequest.newBuilder(URI.create(connection.baseUrl() + "/chat/completions"))
+          HttpRequest.newBuilder(endpoint)
               .timeout(Duration.ofSeconds(90))
               .header("Content-Type", "application/json")
               .header("Authorization", "Bearer " + connection.apiKey())
@@ -110,20 +116,21 @@ public class LlmJudgeGrader {
               .build();
       var response = client.send(request, HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() / 100 != 2)
-        return JudgeResult.failed(
-            "裁判服务返回 HTTP " + response.statusCode() + "：" + truncate(response.body()), 0, 0, 0);
+        return JudgeResult.failed("裁判服务返回 HTTP " + response.statusCode(), 0, 0, 0);
       var root = JSON.readTree(response.body());
-      String content =
-          root.path("choices").path(0).path("message").path("content").asText("");
+      var choice = root.path("choices").path(0);
+      String content = choice.path("message").path("content").asText("");
       int input = root.path("usage").path("prompt_tokens").asInt(0);
       int output = root.path("usage").path("completion_tokens").asInt(0);
       double cost = cost(connection, input, output);
+      if ("length".equals(choice.path("finish_reason").asText()))
+        return JudgeResult.failed("裁判输出达到 Token 上限，未获得完整判词。", input, output, cost);
       return parseVerdict(content, input, output, cost);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       return JudgeResult.failed("裁判调用被中断。", 0, 0, 0);
     } catch (Exception e) {
-      return JudgeResult.failed("裁判调用失败：" + safe(e.getMessage()), 0, 0, 0);
+      return JudgeResult.failed("JUDGE_MODEL_ERROR", 0, 0, 0);
     }
   }
 
@@ -185,12 +192,6 @@ public class LlmJudgeGrader {
     return value.length() <= MAX_RESPONSE_CHARS
         ? value
         : value.substring(0, MAX_RESPONSE_CHARS - 1) + "…";
-  }
-
-  private static String safe(String value) {
-    if (value == null || value.isBlank()) return "未知错误";
-    String text = value.strip();
-    return text.length() <= 300 ? text : text.substring(0, 299) + "…";
   }
 
   /** 命中语言前缀时切换 Prompt，避免裁判用错语言解释扣分理由。 */

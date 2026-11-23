@@ -4,6 +4,10 @@
 > **适用基线**: Glass-Box Agent Studio（Spring Boot 3.5.7 / Java 21 / Spring Data JPA / Flyway V10 / React 19 + MUI M3）  
 > **核心目标**: 将「系统运维监控」与「Agent 能力评测」彻底解耦为两个独立一级工作区；构建覆盖 **6 大核心能力域、三层数据源（内置微集 + 按需下载中心 + 自定义导入）、双轨裁判（代码断言 + LLM-as-a-Judge）、A/B 消融对照与玻璃盒全量穿透** 的工业级 Agent 评测平台。
 
+公开集由 Benchmark Hub 标准化为带版本的题单。BFCL v4、LongBench v2、LoCoMo、HotpotQA、InjecAgent 分别进入工具、压缩、记忆、规划和安全 Runner。SWE-bench Lite 仅提供下载和任务预览，官方执行依赖独立 Git 与 Docker 环境。结果和 A/B 页面共用六维汇总与逐题轨迹。
+
+公开集题单启动前按抽样结果冻结并计算内容哈希。BYOK 只发送当前题实际阶段所需的公开材料。工具执行回调为隔离的本地评测桩，网关权限、参数、重复指纹及审批仍走生产组件。LoCoMo 的 ACTIVE 与 CANDIDATE 数据按题隔离并在退出时清理。模型异常按受控错误码给单题计零，批次可继续。验收以五类逐题组件证据、LongBench 开关两组输入差异、可比性反例及回归测试为准。
+
 ---
 
 ## 1. 产品定位与导航拆分
@@ -59,12 +63,12 @@ flowchart TB
 
 | Pack ID | 类别 | 权威开源集 | 原始源 | 协议 | 默认抽样建议 |
 | --- | --- | --- | --- | --- | --- |
-| `swe-bench-lite` | `CODING_REFLECTION` | SWE-bench Lite | HuggingFace / GitHub Raw | MIT | 前 10 题 |
-| `bfcl-v3-simple` | `TOOL_MCP` | BFCL v3（函数调用） | GitHub Raw | Apache-2.0 | 前 20 题 |
-| `ruler-niah-compact` | `CONTEXT_COMPACTION` | RULER / NIAH 长上下文针检索 | GitHub Raw | Apache-2.0 | 前 15 题 |
-| `longmemeval-s` | `LONG_TERM_MEMORY` | LongMemEval（ICLR 2025） | HuggingFace / GitHub Raw | MIT | 前 20 题 |
-| `gaia-dev-l1` | `PLANNING_MULTI_AGENT` | GAIA Level-1 | HuggingFace | CC-BY-4.0 | 前 15 题 |
-| `agentdojo-security` | `SAFETY_INJECTION` | AgentDojo（ETH Zurich） | GitHub Raw | MIT | 前 20 题 |
+| `swe-bench-lite` | `CODING_REFLECTION` | SWE-bench Lite | Hugging Face | MIT | 预览 5 题，官方执行需 Git 与 Docker |
+| `bfcl-v3-simple` | `TOOL_MCP` | BFCL v4（函数调用） | GitHub Raw | Apache-2.0 | 默认 5 题 |
+| `ruler-niah-compact` | `CONTEXT_COMPACTION` | LongBench v2 | Hugging Face | Apache-2.0 | 默认 5 题 |
+| `longmemeval-s` | `LONG_TERM_MEMORY` | LoCoMo | GitHub Raw | CC-BY-NC-4.0 | 展开前 50 条有效 QA，默认评测 5 题 |
+| `gaia-dev-l1` | `PLANNING_MULTI_AGENT` | HotpotQA | Hugging Face | CC-BY-SA-4.0 | 默认 5 题 |
+| `agentdojo-security` | `SAFETY_INJECTION` | InjecAgent | GitHub Raw | MIT | 默认 5 题 |
 
 - **下载与落盘规范**：
   - 用户点击「下载到本地」后，后端下载至 **`data/eval-datasets/<packId>/`**（必须在 `.gitignore` 中加入 `/data/eval-datasets/`，绝不进入 Git）。
@@ -149,7 +153,7 @@ backend/src/main/java/dev/workbench/
 ├── evaluation/                 # 【业务核心】EvalLabService, EvalLabController, EvalBenchmarkHubService, EvalCompareService
 │   ├── runner/                 # 6 个专属 CategoryRunner 实现（复用既有 WorkflowScheduler/MultiTierContextCompactor/MemoryRetrievalService/ToolGateway）
 │   ├── grader/                 # CodeAssertionGrader, LlmJudgeGrader
-│   └── dataset/                # BuiltInMiniPackLoader, BenchmarkPackAdapter(支持 SWE/BFCL/NIAH/LongMemEval/GAIA/AgentDojo JSONL 映射)
+│   └── dataset/                # BuiltInMiniPackLoader, BenchmarkPackAdapter(支持 SWE-bench、BFCL、LongBench、LoCoMo、HotpotQA 与 InjecAgent)
 ├── persistence/ & store/       # 新增 V11/V12 Entity & Spring Data JPA Repository
 └── resources/
     ├── eval-packs/             # 6 个内置精选微集 JSONL（总计 < 200KB）+ benchmark-hub-catalog.json

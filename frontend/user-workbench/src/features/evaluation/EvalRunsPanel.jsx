@@ -72,7 +72,7 @@ function percent(value) {
 }
 
 /** 评测批次列表 + 单批次 KPI 与逐题真实结果。 */
-export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
+export default function EvalRunsPanel({ meta, onOpenCase, initialLaunchPack, onLaunchConsumed }) {
   const { t, locale } = useI18n();
   const toast = useToast();
   const navigate = useNavigate();
@@ -89,10 +89,11 @@ export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
   const overall = run?.summary?.overall;
 
   useEffect(() => {
-    if (!seed?.source) return;
-    setDialogInit({ source: seed.source, key: seed.key });
+    if (!initialLaunchPack?.source) return;
+    setDialogInit({ source: initialLaunchPack.source, key: initialLaunchPack.key });
     setDialogOpen(true);
-  }, [seed]);
+    onLaunchConsumed?.();
+  }, [initialLaunchPack, onLaunchConsumed]);
 
   const openDialog = () => {
     setDialogInit({ source: 'MINI', key: 'mini' });
@@ -149,7 +150,9 @@ export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
                   <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 0.5 }}>
                     <StatusChip value={item.status} label={statusLabel(t, item.status)} />
                     <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
-                      #{shortId(item.id)}
+                      {item.config?.datasetName
+                        ? item.config.datasetName + ' · #' + shortId(item.id)
+                        : '#' + shortId(item.id)}
                     </Typography>
                   </Stack>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
@@ -185,7 +188,8 @@ export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
             >
               <Box>
                 <Typography sx={{ fontSize: 18, fontWeight: 500 }}>
-                  #{shortId(run.id)} · {t(SOURCE_KEY[run.sourceKind] ?? run.sourceKind)}
+                  {run.config?.datasetName ??
+                    '#' + shortId(run.id) + ' · ' + t(SOURCE_KEY[run.sourceKind] ?? run.sourceKind)}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   {dateTime(run.createdAt, locale)} · {run.locale}
@@ -218,7 +222,16 @@ export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
               />
               <Kpi
                 label={t('evalLab.kpi.cost')}
-                value={overall ? Number(overall.totalCostUsd).toFixed(4) : '—'}
+                value={
+                  overall &&
+                  !(
+                    run.sourceKind === 'HUB' &&
+                    run.config?.modelConnectionId &&
+                    run.summary?.knownModelCosts < overall.total
+                  )
+                    ? Number(overall.totalCostUsd).toFixed(4)
+                    : '—'
+                }
                 hint={
                   t('evalLab.kpi.judgeCost') +
                   ' ' +
@@ -262,10 +275,9 @@ export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
                       label: `#${shortId(run.id)}`,
                       color: googleTokens.primary,
                       values: Object.fromEntries(
-                        Object.entries(run.summary?.categories ?? {}).map(([code, value]) => [
-                          code,
-                          Number(value?.score ?? 0)
-                        ])
+                        Object.entries(run.summary?.categories ?? {})
+                          .filter(([, value]) => value?.total > 0)
+                          .map(([code, value]) => [code, Number(value.score)])
                       ),
                       sampleCounts: Object.fromEntries(
                         Object.entries(run.summary?.categories ?? {}).map(([code, value]) => [
@@ -292,16 +304,27 @@ export default function EvalRunsPanel({ meta, onOpenCase, seed }) {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {Object.entries(run.summary?.categories ?? {}).map(([code, value]) => (
-                      <TableRow key={code}>
-                        <TableCell sx={{ fontSize: 12 }}>{code}</TableCell>
-                        <TableCell sx={{ fontSize: 12 }}>{percent(value?.passRate)}</TableCell>
-                        <TableCell sx={{ fontSize: 12 }}>
-                          {Number(value?.score ?? 0).toFixed(1)}
-                        </TableCell>
-                        <TableCell sx={{ fontSize: 12 }}>{percent(value?.passHatK)}</TableCell>
-                      </TableRow>
-                    ))}
+                    {(meta?.categories ?? []).map(category => {
+                      const code = category.code;
+                      const value = run.summary?.categories?.[code];
+                      const measured = value?.total > 0;
+                      return (
+                        <TableRow key={code}>
+                          <TableCell sx={{ fontSize: 12 }}>
+                            {locale === 'en-US' ? category.labelEn : category.labelZh}
+                          </TableCell>
+                          <TableCell sx={{ fontSize: 12 }}>
+                            {measured ? percent(value.passRate) : '—'}
+                          </TableCell>
+                          <TableCell sx={{ fontSize: 12 }}>
+                            {measured ? Number(value.score).toFixed(1) : '—'}
+                          </TableCell>
+                          <TableCell sx={{ fontSize: 12 }}>
+                            {measured ? percent(value.passHatK) : '—'}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </Box>

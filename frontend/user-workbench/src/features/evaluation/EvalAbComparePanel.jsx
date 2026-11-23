@@ -34,7 +34,12 @@ const STATUS_COLOR = {
 };
 
 const METRIC_LABELS = {
+  totalTokens: 'evalLab.compare.totalTokens',
+  totalCostUsd: 'evalLab.compare.totalCost',
+  avgPreparedInput: 'evalLab.compare.avgPreparedInput',
+  avgActualInput: 'evalLab.compare.avgActualInput',
   passRate: 'evalLab.compare.passRate',
+  safetyBlockRate: 'evalLab.compare.safetyBlockRate',
   score: 'evalLab.kpi.score',
   avgNeedleRetention: 'evalLab.compare.retention',
   avgRecallAtK: 'evalLab.compare.recall',
@@ -50,7 +55,7 @@ function deltaColor(value) {
 
 /** A/B 消融对照：配置差异 + 双图层雷达 + 指标 Δ + 逐题 Diff。 */
 export default function EvalAbComparePanel({ meta }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const toast = useToast();
   const runs = useEvalLabRuns();
   const completed = useMemo(
@@ -64,15 +69,21 @@ export default function EvalAbComparePanel({ meta }) {
   const [busy, setBusy] = useState(false);
 
   const categories = useMemo(
-    () => (meta?.categories ?? []).map(item => ({ code: item.code, label: item.labelZh })),
-    [meta]
+    () =>
+      (meta?.categories ?? []).map(item => ({
+        code: item.code,
+        label: locale === 'en-US' ? item.labelEn : item.labelZh
+      })),
+    [meta, locale]
   );
 
   const radarSeries = useMemo(() => {
     if (!comparison) return [];
     const categoryRows = comparison.categoryComparison ?? [];
-    const values = seriesName =>
-      Object.fromEntries(categoryRows.map(row => [row.category, row[seriesName]]));
+    const values = (score, count) =>
+      Object.fromEntries(
+        categoryRows.filter(row => row[count] > 0).map(row => [row.category, row[score]])
+      );
     const counts = seriesName =>
       Object.fromEntries(categoryRows.map(row => [row.category, row[seriesName]]));
     return [
@@ -80,14 +91,14 @@ export default function EvalAbComparePanel({ meta }) {
         key: 'baseline',
         label: `A · ${shortId(comparison.baseline?.id)}`,
         color: '#1A73E8',
-        values: values('baselineScore'),
+        values: values('baselineScore', 'baselineSampleCount'),
         sampleCounts: counts('baselineSampleCount')
       },
       {
         key: 'candidate',
         label: `B · ${shortId(comparison.candidate?.id)}`,
         color: '#B3261E',
-        values: values('candidateScore'),
+        values: values('candidateScore', 'candidateSampleCount'),
         sampleCounts: counts('candidateSampleCount')
       }
     ];
@@ -165,7 +176,9 @@ export default function EvalAbComparePanel({ meta }) {
 
       {comparison && (
         <>
-          {!comparison.comparable && <Alert severity="warning">{t('evalLab.notComparable')}</Alert>}
+          {!comparison.comparable && (
+            <Alert severity="warning">{t('evalLab.compare.datasetMismatch')}</Alert>
+          )}
           <Box
             sx={{
               display: 'grid',
@@ -188,7 +201,7 @@ export default function EvalAbComparePanel({ meta }) {
               <EvalRadarChart
                 categories={categories}
                 series={radarSeries}
-                ariaLabel={t('evalLab.compare.title')}
+                ariaLabel={t('evalLab.radar.title')}
               />
             </Box>
             <Box
@@ -217,15 +230,18 @@ export default function EvalAbComparePanel({ meta }) {
                       <TableCell sx={{ fontSize: 12 }}>
                         {METRIC_LABELS[row.metric] ? t(METRIC_LABELS[row.metric]) : row.metric}
                       </TableCell>
-                      <TableCell sx={{ fontSize: 12 }}>{Number(row.baseline).toFixed(4)}</TableCell>
                       <TableCell sx={{ fontSize: 12 }}>
-                        {Number(row.candidate).toFixed(4)}
+                        {row.baseline == null ? '—' : Number(row.baseline).toFixed(4)}
+                      </TableCell>
+                      <TableCell sx={{ fontSize: 12 }}>
+                        {row.candidate == null ? '—' : Number(row.candidate).toFixed(4)}
                       </TableCell>
                       <TableCell
                         sx={{ fontSize: 12, color: deltaColor(row.delta), fontWeight: 600 }}
                       >
-                        {row.delta > 0 ? '+' : ''}
-                        {Number(row.delta).toFixed(4)}
+                        {row.delta == null
+                          ? '—'
+                          : (row.delta > 0 ? '+' : '') + Number(row.delta).toFixed(4)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -234,6 +250,46 @@ export default function EvalAbComparePanel({ meta }) {
             </Box>
           </Box>
 
+          <Box sx={{ overflowX: 'auto' }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 1 }}>
+              {t('evalLab.compare.categoryDiff')}
+            </Typography>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>{t('common.name')}</TableCell>
+                  <TableCell>A</TableCell>
+                  <TableCell>B</TableCell>
+                  <TableCell>Δ</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {categories.map(category => {
+                  const row = (comparison.categoryComparison ?? []).find(
+                    item => item.category === category.code
+                  );
+                  const bothMeasured =
+                    row?.baselineSampleCount > 0 && row?.candidateSampleCount > 0;
+                  return (
+                    <TableRow key={category.code}>
+                      <TableCell>{category.label}</TableCell>
+                      <TableCell>
+                        {row?.baselineSampleCount > 0 ? row.baselineScore.toFixed(1) : '—'}
+                      </TableCell>
+                      <TableCell>
+                        {row?.candidateSampleCount > 0 ? row.candidateScore.toFixed(1) : '—'}
+                      </TableCell>
+                      <TableCell sx={{ color: deltaColor(row?.delta) }}>
+                        {bothMeasured && row.delta != null
+                          ? (row.delta > 0 ? '+' : '') + row.delta.toFixed(1)
+                          : '—'}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </Box>
           <Box>
             <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 1 }}>
               {t('evalLab.compare.configDiff')}
@@ -274,13 +330,21 @@ export default function EvalAbComparePanel({ meta }) {
                   {(comparison.caseDiff ?? []).map(row => (
                     <TableRow key={row.key}>
                       <TableCell>
-                        <Typography sx={{ fontSize: 12 }}>{row.titleZh}</Typography>
+                        <Typography sx={{ fontSize: 12 }}>
+                          {locale === 'en-US' ? row.titleEn : row.titleZh}
+                        </Typography>
                         <Typography variant="caption" color="text.secondary">
                           {row.category} · {row.sampleId}
                         </Typography>
                       </TableCell>
-                      <TableCell>{Number(row.baselineScore).toFixed(1)}</TableCell>
-                      <TableCell>{Number(row.candidateScore).toFixed(1)}</TableCell>
+                      <TableCell>
+                        {row.baselineSampleCount === 0 ? '—' : Number(row.baselineScore).toFixed(1)}
+                      </TableCell>
+                      <TableCell>
+                        {row.candidateSampleCount === 0
+                          ? '—'
+                          : Number(row.candidateScore).toFixed(1)}
+                      </TableCell>
                       <TableCell sx={{ color: deltaColor(row.candidateScore - row.baselineScore) }}>
                         {row.candidateScore - row.baselineScore > 0 ? '+' : ''}
                         {(row.candidateScore - row.baselineScore).toFixed(1)}

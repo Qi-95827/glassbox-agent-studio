@@ -82,7 +82,8 @@ export default function EvalRadarChart({
               y1={CENTER_Y}
               x2={x}
               y2={y}
-              stroke="#E0E3E7"
+              stroke="#DADCE0"
+              strokeDasharray={normalized.some(item => item.measured[index]) ? undefined : '4 4'}
               strokeWidth={0.8}
             />
           );
@@ -116,6 +117,7 @@ export default function EvalRadarChart({
               strokeDasharray={item.measured.every(Boolean) ? '0' : '5 3'}
             />
             {categories.map((category, index) => {
+              if (!item.measured[index]) return null;
               const [x, y] = point(index, total, item.values[index] / 100);
               return (
                 <circle
@@ -165,6 +167,7 @@ export default function EvalRadarChart({
             {' · '}
             {normalized
               .map(item => {
+                if (!item.measured[hover.category]) return item.label + ' —';
                 const count = item.sampleCounts[hover.category];
                 return `${item.label} ${item.values[hover.category].toFixed(1)}%${
                   count == null ? '' : ` (${count})`

@@ -32,9 +32,8 @@ import org.springframework.stereotype.Service;
 /**
  * Benchmark Hub 按需下载中心。
  *
- * <p>在线下载只接受 Catalog 中登记的 HTTPS 地址（同时校验协议、主机白名单与完整 URL 等值），
- * 并限制文件体积、计算 SHA-256。网络受限时，离线 JSONL 导入与在线下载共享同一个
- * {@link BenchmarkPackAdapter} 标准化入口。
+ * <p>在线下载只接受 Catalog 中登记的 HTTPS 地址（同时校验协议、主机白名单与完整 URL 等值）， 并限制文件体积、计算 SHA-256。网络受限时，离线 JSONL
+ * 导入与在线下载共享同一个 {@link BenchmarkPackAdapter} 标准化入口。
  */
 @Service
 public class EvalBenchmarkHubService {
@@ -72,7 +71,8 @@ public class EvalBenchmarkHubService {
       int expectedSamples,
       int defaultSampleLimit,
       String descriptionZh,
-      String descriptionEn) {
+      String descriptionEn,
+      boolean previewOnly) {
     public EvalCategory evalCategory() {
       return EvalCategory.parse(category);
     }
@@ -89,6 +89,7 @@ public class EvalBenchmarkHubService {
       String descriptionZh,
       String descriptionEn,
       String status,
+      boolean previewOnly,
       int sampleCount,
       long sizeBytes,
       String sha256,
@@ -97,7 +98,8 @@ public class EvalBenchmarkHubService {
 
   public record ImportRequest(String jsonl) {}
 
-  public record ImportResult(String packId, String status, int sampleCount, String sha256, String path) {}
+  public record ImportResult(
+      String packId, String status, int sampleCount, String sha256, String path) {}
 
   public List<PackView> list() {
     var statuses = new java.util.HashMap<String, EvalBenchmarkPackEntity>();
@@ -105,6 +107,7 @@ public class EvalBenchmarkHubService {
     var result = new ArrayList<PackView>();
     for (var pack : catalog) {
       var row = statuses.get(pack.packId());
+      boolean ready = row != null && Files.isRegularFile(samplesFile(pack));
       result.add(
           new PackView(
               pack.packId(),
@@ -116,10 +119,15 @@ public class EvalBenchmarkHubService {
               pack.defaultSampleLimit(),
               pack.descriptionZh(),
               pack.descriptionEn(),
-              row == null ? "NOT_DOWNLOADED" : row.getStatus(),
-              row == null ? 0 : row.getSampleCount(),
-              row == null ? 0 : row.getSizeBytes(),
-              row == null ? null : row.getSha256(),
+              ready
+                  ? row.getStatus()
+                  : row != null && row.getLocalPath() != null
+                      ? "REIMPORT_REQUIRED"
+                      : row == null ? "NOT_DOWNLOADED" : row.getStatus(),
+              pack.previewOnly(),
+              ready ? row.getSampleCount() : 0,
+              ready ? row.getSizeBytes() : 0,
+              ready ? row.getSha256() : null,
               row == null ? null : row.getDownloadedAt(),
               row == null ? null : row.getErrorMessage()));
     }
@@ -175,22 +183,29 @@ public class EvalBenchmarkHubService {
   }
 
   public List<EvalSample> samplesForRun(List<String> packIds) {
+    return samplesForRun(packIds, Integer.MAX_VALUE);
+  }
+
+  public List<EvalSample> samplesForRun(List<String> packIds, int limit) {
     if (packIds == null || packIds.isEmpty())
       throw new IllegalArgumentException("请选择至少一个已下载的 Hub 评测集。");
     var samples = new ArrayList<EvalSample>();
     for (String packId : packIds) {
       var pack = requirePack(packId);
-      Path file = samplesFile(pack.packId());
+      Path file = samplesFile(pack);
       if (!Files.exists(file))
         throw new IllegalStateException("Hub 评测集尚未下载或导入：" + pack.packId() + "，请先在下载中心处理。");
-      try {
+      try (var reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
         int index = 0;
-        for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+        for (String line; samples.size() < limit && (line = reader.readLine()) != null; ) {
           index++;
           if (line.isBlank()) continue;
-          samples.add(
+          var sample =
               SampleJson.parseLine(
-                  line, pack.evalCategory(), "hub:" + pack.packId(), pack.packId() + "#" + index));
+                  line, pack.evalCategory(), "hub:" + pack.packId(), pack.packId() + "#" + index);
+          if (!BenchmarkPackAdapter.AGENT_PACK_MODE.equals(sample.setup().get("hubPackMode")))
+            throw new IllegalArgumentException("公开题集格式已更新，请重新下载或导入。");
+          samples.add(sample);
         }
       } catch (IOException e) {
         throw new IllegalStateException("读取 Hub 评测集失败：" + pack.packId(), e);
@@ -198,6 +213,22 @@ public class EvalBenchmarkHubService {
     }
     if (samples.isEmpty()) throw new IllegalStateException("Hub 评测集没有可执行样本。");
     return List.copyOf(samples);
+  }
+
+  public record SamplePreview(
+      String id, String title, String prompt, String repository, String baseCommit) {}
+
+  public List<SamplePreview> preview(String packId) {
+    return samplesForRun(List.of(packId), 5).stream()
+        .map(
+            sample ->
+                new SamplePreview(
+                    sample.id(),
+                    sample.titleEn(),
+                    sample.prompt(),
+                    (String) sample.setup().get("repository"),
+                    (String) sample.setup().get("baseCommit")))
+        .toList();
   }
 
   public CatalogPack requirePack(String packId) {
@@ -225,20 +256,32 @@ public class EvalBenchmarkHubService {
     if (uri.getUserInfo() != null || uri.getPort() != -1)
       throw new IllegalArgumentException("下载地址不允许携带凭据或自定义端口。");
     String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
-    if (!ALLOWED_HOSTS.contains(host))
-      throw new IllegalArgumentException("下载主机不在受信任白名单中：" + host);
+    if (!ALLOWED_HOSTS.contains(host)) throw new IllegalArgumentException("下载主机不在受信任白名单中：" + host);
   }
 
-  private ImportResult importPayload(CatalogPack pack, String payload, String sourceStatus) {
+  private synchronized ImportResult importPayload(
+      CatalogPack pack, String payload, String sourceStatus) {
     var samples = adapter.adapt(pack.packId(), pack.evalCategory(), payload, pack.license());
     try {
       Path dir = datasetsRoot.resolve(pack.packId()).normalize();
       if (!dir.startsWith(datasetsRoot)) throw new IllegalStateException("数据集目录越界。");
       Files.createDirectories(dir);
       var builder = new StringBuilder();
-      for (var sample : samples) builder.append(JSON.writeValueAsString(toMap(sample))).append('\n');
+      for (var sample : samples)
+        builder.append(JSON.writeValueAsString(toMap(sample))).append('\n');
       byte[] bytes = builder.toString().getBytes(StandardCharsets.UTF_8);
-      Files.write(dir.resolve("samples.jsonl"), bytes);
+      Path target = samplesFile(pack);
+      Path temporary = Files.createTempFile(dir, "samples-", ".tmp");
+      try {
+        Files.write(temporary, bytes);
+        Files.move(
+            temporary,
+            target,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      } finally {
+        Files.deleteIfExists(temporary);
+      }
       String sha = sha256(bytes);
       String now = dev.workbench.domain.WorkbenchTime.now();
       var row =
@@ -256,28 +299,24 @@ public class EvalBenchmarkHubService {
                           sourceStatus,
                           now));
       row.imported(
-          datasetsRoot.relativize(dir.resolve("samples.jsonl")).toString().replace('\\', '/'),
+          datasetsRoot.relativize(target).toString().replace('\\', '/'),
           sha,
           samples.size(),
           bytes.length,
           now);
       repository.save(row);
       return new ImportResult(
-          pack.packId(),
-          row.getStatus(),
-          samples.size(),
-          sha,
-          row.getLocalPath());
+          pack.packId(), row.getStatus(), samples.size(), sha, row.getLocalPath());
     } catch (IOException e) {
       markFailed(pack, "写入数据集文件失败：" + safe(e.getMessage()));
       throw new IllegalStateException("写入数据集文件失败。", e);
     }
   }
 
-  private Path samplesFile(String packId) {
-    Path dir = datasetsRoot.resolve(packId).normalize();
+  private Path samplesFile(CatalogPack pack) {
+    Path dir = datasetsRoot.resolve(pack.packId()).normalize();
     if (!dir.startsWith(datasetsRoot)) throw new IllegalStateException("数据集目录越界。");
-    return dir.resolve("samples.jsonl");
+    return dir.resolve("samples-agent-v2.jsonl");
   }
 
   private void markFailed(CatalogPack pack, String message) {
@@ -353,7 +392,8 @@ public class EvalBenchmarkHubService {
                 node.path("expectedSamples").asInt(0),
                 node.path("defaultSampleLimit").asInt(10),
                 node.path("descriptionZh").asText(""),
-                node.path("descriptionEn").asText("")));
+                node.path("descriptionEn").asText(""),
+                node.path("previewOnly").asBoolean(false)));
       }
       if (result.isEmpty()) throw new IllegalStateException("Benchmark Hub Catalog 为空。");
       return List.copyOf(result);

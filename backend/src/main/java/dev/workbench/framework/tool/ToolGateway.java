@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.ToolKind;
-import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.domain.WorkspaceVersionConflict;
+import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.trace.GlassboxModels.GatewayCheck;
 import dev.workbench.framework.trace.GlassboxModels.ToolCallTrace;
 import dev.workbench.framework.trace.SensitiveDataMasker;
@@ -99,11 +99,43 @@ public final class ToolGateway {
   /**
    * 带 Gate 5.5 的完整执行入口。
    *
-   * <p>{@code argsJson} 只用于风险分级与审批单展示；{@code editedValidate} 和 {@code editedAction}
-   * 让“改参放行”重新经过 Gate 5 授权交集校验后再执行。
+   * <p>{@code argsJson} 只用于风险分级与审批单展示；{@code editedValidate} 和 {@code editedAction} 让“改参放行”重新经过
+   * Gate 5 授权交集校验后再执行。
    */
   public <T> String execute(
       ToolKind kind,
+      int toolVersion,
+      String fingerprint,
+      String argsJson,
+      ToolEffect effect,
+      String start,
+      Function<T, String> summary,
+      Runnable validate,
+      Function<T, String> resourceVersion,
+      java.util.function.Consumer<String> editedValidate,
+      java.util.function.Function<String, T> editedAction,
+      Callable<T> action) {
+
+    return execute(
+        kind,
+        kind.name(),
+        toolVersion,
+        fingerprint,
+        argsJson,
+        effect,
+        start,
+        summary,
+        validate,
+        resourceVersion,
+        editedValidate,
+        editedAction,
+        action);
+  }
+
+  /** 保留动态注册工具的逻辑名称，供网关证据和风险策略使用。 */
+  public <T> String execute(
+      ToolKind kind,
+      String toolName,
       int toolVersion,
       String fingerprint,
       String argsJson,
@@ -125,23 +157,15 @@ public final class ToolGateway {
       try {
         var callId = runtime.beforeTool(kind, toolVersion, fingerprint);
         checks.add(
-            new GatewayCheck(
-                "OWNERSHIP_AND_SCOPE",
-                "身份与归属鉴权",
-                "PASS",
-                "运行实例已通过服务端归属与工作区范围校验"));
+            new GatewayCheck("OWNERSHIP_AND_SCOPE", "身份与归属鉴权", "PASS", "运行实例已通过服务端归属与工作区范围校验"));
         checks.add(
             new GatewayCheck(
                 "TOOL_REGISTRY_GRANT",
                 "工具注册与节点权限",
                 "PASS",
-                kind.name() + " v" + toolVersion + " 命中本节点授权工具集（" + effect.name() + "）"));
+                toolName + " v" + toolVersion + " 命中本节点授权工具集（" + effect.name() + "）"));
         checks.add(
-            new GatewayCheck(
-                "BUDGET_AND_LOOP",
-                "预算与防循环检查",
-                "PASS",
-                "总工具限额、单工具限额与重复指纹均在阈值内"));
+            new GatewayCheck("BUDGET_AND_LOOP", "预算与防循环检查", "PASS", "总工具限额、单工具限额与重复指纹均在阈值内"));
         Instant started = Instant.now();
         long nanos = System.nanoTime();
         runtime.event(EventType.TOOL_STARTED, start);
@@ -154,8 +178,7 @@ public final class ToolGateway {
                   "路径白名单与读写隔离",
                   "PASS",
                   effect == ToolEffect.WRITE ? "目标路径命中写授权白名单" : "目标路径命中只读授权范围"));
-          checks.add(
-              new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "PASS", "入参格式与约束校验通过"));
+          checks.add(new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "PASS", "入参格式与约束校验通过"));
         } catch (IllegalArgumentException e) {
           checks.add(
               new GatewayCheck(
@@ -164,8 +187,7 @@ public final class ToolGateway {
                   "DENY",
                   e.getMessage() == null ? "输入参数或路径不在授权范围内" : e.getMessage()));
           checks.add(
-              new GatewayCheck(
-                  "ARGUMENT_SCHEMA", "参数 Schema 校验", "DENY", "被工具网关前置校验拦截，未执行动作"));
+              new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "DENY", "被工具网关前置校验拦截，未执行动作"));
           checks.add(new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "SKIP", "前置校验未通过"));
           return rejected(
               callId,
@@ -180,16 +202,11 @@ public final class ToolGateway {
               checks);
         }
         ToolRiskAssessment risk =
-            riskPolicy.assess(new ToolRiskContext(kind.name(), effect, argsJson));
-        checks.add(
-            new GatewayCheck(
-                "RISK_ASSESSMENT",
-                "风险分级",
-                risk.level().name(),
-                risk.reason()));
+            riskPolicy.assess(new ToolRiskContext(toolName, effect, argsJson));
+        checks.add(new GatewayCheck("RISK_ASSESSMENT", "风险分级", risk.level().name(), risk.reason()));
         ToolApprovalDecision approval =
             risk.requiresApproval()
-                ? runtime.approvalDecision(kind.name(), toolVersion, argsJson, risk)
+                ? runtime.approvalDecision(toolName, toolVersion, argsJson, risk)
                 : ToolApprovalDecision.approve();
         checks.add(
             new GatewayCheck(
@@ -209,9 +226,7 @@ public final class ToolGateway {
               started,
               nanos,
               ToolResult.ErrorCode.APPROVAL_REJECTED,
-              approval.reason() == null
-                  ? "用户拒绝执行该工具，请调整方案后继续。"
-                  : "用户拒绝执行该工具：" + approval.reason(),
+              approval.reason() == null ? "用户拒绝执行该工具，请调整方案后继续。" : "用户拒绝执行该工具：" + approval.reason(),
               fingerprint,
               checks);
         }
@@ -237,10 +252,7 @@ public final class ToolGateway {
               editedValidate.accept(approval.editedArgsJson());
               checks.add(
                   new GatewayCheck(
-                      "EDITED_ARGS_REVALIDATION",
-                      "改参后二次 Gate 5 复验",
-                      "PASS",
-                      "修改后的参数仍属于节点授权范围"));
+                      "EDITED_ARGS_REVALIDATION", "改参后二次 Gate 5 复验", "PASS", "修改后的参数仍属于节点授权范围"));
             } catch (IllegalArgumentException invalid) {
               checks.add(
                   new GatewayCheck(
@@ -267,9 +279,7 @@ public final class ToolGateway {
         } catch (WorkspaceVersionConflict e) {
           // 此异常的契约要求在文件替换之前报告版本冲突。
           actionStarted = false;
-          checks.add(
-              new GatewayCheck(
-                  "VERSION_GUARD", "文件版本冲突检查", "DENY", "目标文件版本已变化，拒绝覆盖写入"));
+          checks.add(new GatewayCheck("VERSION_GUARD", "文件版本冲突检查", "DENY", "目标文件版本已变化，拒绝覆盖写入"));
           return rejected(
               callId,
               kind,
@@ -388,6 +398,9 @@ public final class ToolGateway {
     runtime.toolTrace(
         callId,
         new ToolCallTrace(
-            safeArgs.text(), checks, safeResult.text(), safeArgs.truncated() || safeResult.truncated()));
+            safeArgs.text(),
+            checks,
+            safeResult.text(),
+            safeArgs.truncated() || safeResult.truncated()));
   }
 }

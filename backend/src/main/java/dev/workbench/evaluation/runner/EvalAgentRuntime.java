@@ -62,9 +62,21 @@ final class EvalAgentRuntime implements AgentRuntime {
     toolCalls++;
     String key = tool.name() + "|" + version + "|" + (fingerprint == null ? "" : fingerprint);
     int count = fingerprints.merge(key, 1, Integer::sum);
-    if (count > maxIdenticalTools)
-      throw new IllegalStateException(
-          "重复工具指纹熔断：同一工具与参数已连续调用 " + count + " 次。");
+    if (count > maxIdenticalTools) {
+      String reason = "重复工具指纹熔断：同一工具与参数已连续调用 " + count + " 次。";
+      synchronized (gatewayChecks) {
+        gatewayChecks.add(
+            Map.of(
+                "callId",
+                "",
+                "checks",
+                List.of(
+                    new GlassboxModels.GatewayCheck("BUDGET_AND_LOOP", "预算与防循环检查", "DENY", reason)),
+                "result",
+                ""));
+      }
+      throw new IllegalStateException(reason);
+    }
     return UUID.randomUUID();
   }
 
@@ -96,9 +108,7 @@ final class EvalAgentRuntime implements AgentRuntime {
   @Override
   public ToolApprovalDecision approvalDecision(
       String toolName, int version, String argsJson, ToolRiskAssessment risk) {
-    if (!approveHighRisk)
-      return ToolApprovalDecision.reject(
-          "评测安全沙箱默认拒绝高危工具，等待人工在真实运行中审批。");
+    if (!approveHighRisk) return ToolApprovalDecision.reject("评测安全沙箱默认拒绝高危工具，等待人工在真实运行中审批。");
     return ToolApprovalDecision.approve();
   }
 }

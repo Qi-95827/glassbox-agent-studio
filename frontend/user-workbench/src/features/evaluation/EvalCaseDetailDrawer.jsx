@@ -4,6 +4,7 @@ import {
   Chip,
   Divider,
   Drawer,
+  LinearProgress,
   Stack,
   Table,
   TableBody,
@@ -31,6 +32,8 @@ function JsonBlock({ value, maxHeight = 220 }) {
         borderRadius: 2,
         fontSize: 11.5,
         lineHeight: 1.55,
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
         overflow: 'auto',
         maxHeight,
         fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace'
@@ -50,24 +53,284 @@ function Section({ title, children }) {
   );
 }
 
-function CheckRow({ check }) {
+function CheckRow({ check, detail }) {
+  const { t } = useI18n();
   const denied = check?.status === 'DENY';
+  const name = t('evalLab.pipeline.gate.' + check.gate);
   return (
     <Stack direction="row" spacing={0.8} sx={{ alignItems: 'flex-start', py: 0.35 }}>
       {denied ? (
         <CancelRounded sx={{ fontSize: 15, color: '#B3261E', mt: '1px' }} />
-      ) : (
+      ) : check.status === 'PASS' ? (
         <CheckCircleRounded sx={{ fontSize: 15, color: '#188038', mt: '1px' }} />
-      )}
+      ) : null}
       <Box>
         <Typography variant="caption" sx={{ fontWeight: 600 }}>
-          {check?.label || check?.gate} · {check?.status}
+          {name.startsWith('evalLab.pipeline.gate.') ? check.label || check.gate : name} ·{' '}
+          {check?.status}
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-          {check?.detail}
+          {detail ?? check.detail}
         </Typography>
       </Box>
     </Stack>
+  );
+}
+
+function Checks({ checks = [], caseHandoff = false }) {
+  const { t } = useI18n();
+  return checks.length ? (
+    checks.map((check, index) => (
+      <CheckRow
+        key={check.gate + index}
+        check={check}
+        detail={
+          caseHandoff && check.gate === 'ATTEMPT_IDENTITY'
+            ? t('evalLab.pipeline.caseHandoffIdentity')
+            : undefined
+        }
+      />
+    ))
+  ) : (
+    <Typography variant="body2" color="text.secondary">
+      {t('evalLab.pipeline.noChecks')}
+    </Typography>
+  );
+}
+
+function AnswerPair({ trace, metrics }) {
+  const { t } = useI18n();
+  return (
+    <Stack spacing={1}>
+      <Section title={t('evalLab.pipeline.modelAnswer')}>
+        <JsonBlock value={trace.modelAnswer || t('common.notAvailable')} />
+      </Section>
+      <Section title={t('evalLab.pipeline.referenceAnswer')}>
+        <JsonBlock value={trace.referenceAnswer} />
+      </Section>
+      {metrics.answerF1 != null && (
+        <Chip
+          size="small"
+          sx={{ alignSelf: 'start' }}
+          label={'F1 ' + Math.round(metrics.answerF1 * 100) + '%'}
+        />
+      )}
+    </Stack>
+  );
+}
+
+function DocumentList({ titles = [], supporting = [] }) {
+  return (
+    <Stack direction="row" gap={0.6} useFlexGap flexWrap="wrap">
+      {titles.map((title, index) => (
+        <Chip
+          key={title + index}
+          label={title}
+          size="small"
+          color={supporting.includes(title) ? 'success' : 'default'}
+          variant="outlined"
+        />
+      ))}
+    </Stack>
+  );
+}
+
+function AgentPipeline({ category, trace, metrics }) {
+  const { t } = useI18n();
+  const unknown = t('common.notAvailable');
+  let content;
+  switch (category) {
+    case 'TOOL_MCP':
+      content = (
+        <>
+          <Section title={t('evalLab.pipeline.toolSelection')}>
+            <DocumentList titles={trace.availableFunctions?.names} />
+            {(trace.parsedToolCalls ?? []).map((call, index) => (
+              <Box key={call.name + index} sx={{ mt: 1 }}>
+                <Chip size="small" label={call.name} color={call.executed ? 'success' : 'error'} />
+                <JsonBlock value={call.arguments} maxHeight={120} />
+                <Checks checks={call.checks} />
+              </Box>
+            ))}
+            {!trace.parsedToolCalls?.length && <Checks />}
+          </Section>
+        </>
+      );
+      break;
+    case 'CONTEXT_COMPACTION': {
+      const before = metrics.beforeTokens;
+      const after = metrics.afterTokens;
+      content = (
+        <>
+          <Chip
+            size="small"
+            sx={{ alignSelf: 'start' }}
+            label={
+              trace.compactionTier ? t('evalLab.pipeline.tier.' + trace.compactionTier) : unknown
+            }
+          />
+          {before > 0 && after != null && (
+            <Stack spacing={1}>
+              <Typography variant="body2">
+                {t('evalLab.pipeline.beforeTokens', { count: before })}
+              </Typography>
+              <LinearProgress variant="determinate" value={100} />
+              <Typography variant="body2">
+                {t('evalLab.pipeline.afterTokens', { count: after })}
+              </Typography>
+              <LinearProgress
+                color="success"
+                variant="determinate"
+                value={Math.min(100, (after * 100) / before)}
+              />
+              <Typography variant="caption">
+                {t('evalLab.pipeline.budget', { count: metrics.compactionBudget })}
+              </Typography>
+              {metrics.truncated && (
+                <Typography variant="caption">{t('evalLab.pipeline.truncated')}</Typography>
+              )}
+            </Stack>
+          )}
+          <Section title={t('evalLab.pipeline.summary')}>
+            <JsonBlock value={trace.summaryPreview || trace.offloadedPreview || unknown} />
+          </Section>
+          <Section title={t('evalLab.pipeline.segments')}>
+            <JsonBlock value={trace.segmentTokens ?? unknown} />
+          </Section>
+          {trace.choices?.length > 0 && (
+            <JsonBlock
+              value={trace.choices
+                .map((choice, index) => String.fromCharCode(65 + index) + '. ' + choice)
+                .join('\n')}
+            />
+          )}
+        </>
+      );
+      break;
+    }
+    case 'LONG_TERM_MEMORY':
+      content = (
+        <>
+          {trace.candidateLeaked != null && (
+            <Chip
+              size="small"
+              sx={{ alignSelf: 'start' }}
+              color={trace.candidateLeaked ? 'error' : 'success'}
+              label={t(
+                trace.candidateLeaked
+                  ? 'evalLab.pipeline.candidateLeaked'
+                  : 'evalLab.pipeline.candidateIsolated'
+              )}
+            />
+          )}
+          <Section title={t('evalLab.pipeline.recalled', { count: trace.topK ?? 5 })}>
+            {trace.recalledMemories?.length ? (
+              trace.recalledMemories.map(memory => (
+                <Box
+                  key={memory.id}
+                  sx={{ border: 1, borderColor: 'divider', borderRadius: 2, p: 1.25, mb: 0.75 }}
+                >
+                  <Typography variant="caption">
+                    {(memory.evidenceId || memory.id) + ' · ' + Number(memory.score).toFixed(3)}
+                  </Typography>
+                  <Typography variant="body2">{memory.content}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {memory.reason}
+                  </Typography>
+                </Box>
+              ))
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                {unknown}
+              </Typography>
+            )}
+          </Section>
+        </>
+      );
+      break;
+    case 'PLANNING_MULTI_AGENT':
+      content = (
+        <>
+          <Section title={t('evalLab.pipeline.planner')}>
+            {trace.planValidation && (
+              <Chip
+                size="small"
+                color={trace.planValidation.valid ? 'success' : 'error'}
+                label={trace.planValidation.valid ? 'PASS' : 'DENY'}
+              />
+            )}
+            <Typography variant="body2" sx={{ my: 0.6 }}>
+              {t('evalLab.pipeline.selectedTitles')}
+            </Typography>
+            <DocumentList titles={trace.selectedTitles} supporting={trace.supportingTitles} />
+            <Typography variant="body2" sx={{ my: 0.6 }}>
+              {t('evalLab.pipeline.supportingTitles')}
+            </Typography>
+            <DocumentList titles={trace.supportingTitles} />
+            <JsonBlock
+              value={
+                trace.planValidation?.errors?.length
+                  ? trace.planValidation.errors
+                  : (trace.plannerSteps ?? unknown)
+              }
+            />
+          </Section>
+          <Section title={t('evalLab.pipeline.handoff')}>
+            {trace.handoffEnvelope && (
+              <Typography variant="body2">{trace.handoffEnvelope.summary}</Typography>
+            )}
+            <Checks
+              checks={trace.handoffChecks}
+              caseHandoff={trace.handoffScope === 'EVALUATION_CASE'}
+            />
+          </Section>
+          <Section title={t('evalLab.pipeline.synthesis')}>
+            <Typography variant="body2">
+              {t('evalLab.pipeline.reflection', { count: metrics.reflectionRounds ?? 0 })}
+            </Typography>
+            {trace.reflectionSummary && <JsonBlock value={trace.reflectionSummary} />}
+          </Section>
+        </>
+      );
+      break;
+    case 'SAFETY_INJECTION':
+      content = (
+        <>
+          {trace.defenseLayer && (
+            <Chip
+              size="small"
+              sx={{ alignSelf: 'start' }}
+              color={trace.defenseLayer === 'BREACHED' ? 'error' : 'success'}
+              label={t('evalLab.pipeline.defense.' + trace.defenseLayer)}
+            />
+          )}
+          <Section title={t('evalLab.pipeline.modelDefense')}>
+            <JsonBlock value={trace.modelDecision ?? unknown} />
+          </Section>
+          <Section title={t('evalLab.pipeline.gatewayDefense')}>
+            <Checks checks={trace.gatewayChecks} />
+          </Section>
+          <Section title={t('evalLab.pipeline.observation')}>
+            <DocumentList titles={trace.attackerTools} />
+            <JsonBlock value={trace.toolResponsePreview ?? unknown} />
+          </Section>
+        </>
+      );
+      break;
+    default:
+      return null;
+  }
+  return (
+    <Section title={t('evalLab.pipeline.title')}>
+      <Stack spacing={1.6}>
+        {trace.modelName && <Typography variant="caption">{trace.modelName}</Typography>}
+        {trace.modelMode === 'mock' && (
+          <Chip size="small" sx={{ alignSelf: 'start' }} label={t('evalLab.field.mock')} />
+        )}
+        {content}
+        {trace.referenceAnswer && <AnswerPair trace={trace} metrics={metrics} />}
+      </Stack>
+    </Section>
   );
 }
 
@@ -95,6 +358,16 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
   const title = item ? (locale === 'en-US' ? item.titleEn : item.titleZh) : '';
   const trace = item?.trace ?? {};
   const judge = item?.judgeVerdict ?? {};
+  const metrics = item?.metrics ?? {};
+  const agent = Boolean(
+    trace.measurement?.startsWith('byok_') || trace.measurement?.startsWith('fixture_')
+  );
+  const status = metrics.executionFailed
+    ? 'evalLab.case.executionFailed'
+    : item?.passed
+      ? 'evalLab.case.passed'
+      : 'evalLab.case.failed';
+  const estimatedOnly = Boolean(metrics.usageKnown === false || trace.modelMode === 'mock');
   const calls = GATEWAY_ROOTS.flatMap(key => (Array.isArray(trace[key]) ? trace[key] : []));
   const matches = Array.isArray(trace.matches) ? trace.matches : [];
   const plans = Array.isArray(trace.plans) ? trace.plans : [];
@@ -111,11 +384,7 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
       <Box sx={{ p: 2.5 }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 0.5, flexWrap: 'wrap' }}>
           <Typography sx={{ fontSize: 17, fontWeight: 600, flex: 1 }}>{title}</Typography>
-          <Chip
-            size="small"
-            color={item?.passed ? 'success' : 'default'}
-            label={item?.passed ? t('evalLab.case.passed') : t('evalLab.case.failed')}
-          />
+          <Chip size="small" color={item?.passed ? 'success' : 'default'} label={t(status)} />
         </Stack>
         <Typography variant="caption" color="text.secondary">
           {categoryLabel?.[item?.category] ?? item?.category} · {item?.sampleId} ·{' '}
@@ -143,7 +412,23 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
           <Chip
             size="small"
             variant="outlined"
-            label={t('evalLab.case.cost', { cost: Number(item?.costUsd ?? 0).toFixed(5) })}
+            label={t('evalLab.case.cost', {
+              cost: metrics.costKnown === false ? '—' : Number(item?.costUsd ?? 0).toFixed(5)
+            })}
+          />
+          <Chip
+            size="small"
+            variant="outlined"
+            label={t('evalLab.pipeline.inputTokens', {
+              count: estimatedOnly ? '—' : (item?.inputTokens ?? '—')
+            })}
+          />
+          <Chip
+            size="small"
+            variant="outlined"
+            label={t('evalLab.pipeline.outputTokens', {
+              count: estimatedOnly ? '—' : (item?.outputTokens ?? '—')
+            })}
           />
         </Stack>
       </Box>
@@ -152,6 +437,13 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
         <Section title={t('evalLab.detail.input')}>
           <JsonBlock value={trace.prompt || t('common.notAvailable')} maxHeight={160} />
         </Section>
+
+        {metrics.errorCode && (
+          <Typography variant="body2" color="error">
+            {t('evalLab.pipeline.error.' + metrics.errorCode)}
+          </Typography>
+        )}
+        {agent && <AgentPipeline category={item?.category} trace={trace} metrics={metrics} />}
 
         <Section title={t('evalLab.case.rawOutput')}>
           <JsonBlock value={item?.rawOutput || t('common.notAvailable')} maxHeight={220} />
@@ -225,62 +517,66 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
           )}
         </Section>
 
-        <Section title={t('evalLab.detail.gateway')}>
-          {calls.length === 0 && <JsonBlock value={t('common.notAvailable')} maxHeight={80} />}
-          {calls.map((call, index) => (
-            <Box key={`${call.name}-${index}`} sx={{ mb: 1 }}>
-              <Stack direction="row" spacing={0.8} sx={{ alignItems: 'center', mb: 0.3 }}>
-                <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                  {call.name}
-                </Typography>
-                <Chip size="small" label={call.status} variant="outlined" />
-                {call.path && (
-                  <Typography variant="caption" color="text.secondary">
-                    {call.path}
-                  </Typography>
-                )}
-              </Stack>
-              {(call.checks ?? []).map((check, checkIndex) => (
-                <CheckRow key={`${check.gate}-${checkIndex}`} check={check} />
+        {!agent && (
+          <>
+            <Section title={t('evalLab.detail.gateway')}>
+              {calls.length === 0 && <JsonBlock value={t('common.notAvailable')} maxHeight={80} />}
+              {calls.map((call, index) => (
+                <Box key={`${call.name}-${index}`} sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={0.8} sx={{ alignItems: 'center', mb: 0.3 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                      {call.name}
+                    </Typography>
+                    <Chip size="small" label={call.status} variant="outlined" />
+                    {call.path && (
+                      <Typography variant="caption" color="text.secondary">
+                        {call.path}
+                      </Typography>
+                    )}
+                  </Stack>
+                  {(call.checks ?? []).map((check, checkIndex) => (
+                    <CheckRow key={`${check.gate}-${checkIndex}`} check={check} />
+                  ))}
+                </Box>
               ))}
-            </Box>
-          ))}
-        </Section>
+            </Section>
 
-        <Section title={t('evalLab.detail.compaction')}>
-          {trace.needles ? (
-            <JsonBlock
-              value={{
-                tier: item?.metrics?.compactionTier,
-                beforeTokens: item?.metrics?.beforeTokens,
-                afterTokens: item?.metrics?.afterTokens,
-                savedPercent: item?.metrics?.compressionSavedPercent,
-                needles: trace.needles,
-                retained: trace.retainedNeedles,
-                segmentTokens: trace.segmentTokens,
-                summaryPreview: trace.summaryPreview
-              }}
-            />
-          ) : (
-            <JsonBlock value={t('common.notAvailable')} maxHeight={70} />
-          )}
-        </Section>
+            <Section title={t('evalLab.detail.compaction')}>
+              {trace.needles ? (
+                <JsonBlock
+                  value={{
+                    tier: item?.metrics?.compactionTier,
+                    beforeTokens: item?.metrics?.beforeTokens,
+                    afterTokens: item?.metrics?.afterTokens,
+                    savedPercent: item?.metrics?.compressionSavedPercent,
+                    needles: trace.needles,
+                    retained: trace.retainedNeedles,
+                    segmentTokens: trace.segmentTokens,
+                    summaryPreview: trace.summaryPreview
+                  }}
+                />
+              ) : (
+                <JsonBlock value={t('common.notAvailable')} maxHeight={70} />
+              )}
+            </Section>
 
-        <Section title={t('evalLab.detail.memory')}>
-          {matches.length ? (
-            <JsonBlock value={matches} />
-          ) : (
-            <JsonBlock value={t('common.notAvailable')} maxHeight={70} />
-          )}
-        </Section>
+            <Section title={t('evalLab.detail.memory')}>
+              {matches.length ? (
+                <JsonBlock value={matches} />
+              ) : (
+                <JsonBlock value={t('common.notAvailable')} maxHeight={70} />
+              )}
+            </Section>
 
-        <Section title={t('evalLab.detail.planning')}>
-          {plans.length || trace.handoffEnvelope ? (
-            <JsonBlock value={{ plans, handoffEnvelope: trace.handoffEnvelope }} />
-          ) : (
-            <JsonBlock value={t('common.notAvailable')} maxHeight={70} />
-          )}
-        </Section>
+            <Section title={t('evalLab.detail.planning')}>
+              {plans.length || trace.handoffEnvelope ? (
+                <JsonBlock value={{ plans, handoffEnvelope: trace.handoffEnvelope }} />
+              ) : (
+                <JsonBlock value={t('common.notAvailable')} maxHeight={70} />
+              )}
+            </Section>
+          </>
+        )}
 
         <Section title={t('evalLab.detail.judge')}>
           {judge.mode === 'DISABLED' ? (
@@ -292,9 +588,11 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
           )}
         </Section>
 
-        <Section title={t('evalLab.detail.setup')}>
-          <JsonBlock value={trace.setup ?? {}} maxHeight={220} />
-        </Section>
+        {trace.setup && (
+          <Section title={t('evalLab.detail.setup')}>
+            <JsonBlock value={trace.setup} maxHeight={220} />
+          </Section>
+        )}
       </Stack>
     </Drawer>
   );

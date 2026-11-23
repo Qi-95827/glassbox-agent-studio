@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "note": "官方权威评测集元数据（均已实测免登录 HTTP 200）。在线下载仅允许本清单登记的 HTTPS 地址；网络受限时可离线导入 JSONL。",
   "packs": [
     {
@@ -10,9 +10,10 @@
       "downloadUrl": "https://datasets-server.huggingface.co/rows?dataset=princeton-nlp%2FSWE-bench_Lite&config=default&split=test&offset=0&length=50",
       "license": "MIT",
       "expectedSamples": 50,
-      "defaultSampleLimit": 10,
+      "defaultSampleLimit": 5,
       "descriptionZh": "真实 GitHub issue 修复任务（Princeton NLP），覆盖跨文件定位、补丁生成与回归验证。",
-      "descriptionEn": "Real GitHub issue repair tasks (Princeton NLP) covering cross-file localization, patch generation, and regression checks."
+      "descriptionEn": "Real GitHub issue repair tasks (Princeton NLP) covering cross-file localization, patch generation, and regression checks.",
+      "previewOnly": true
     },
     {
       "packId": "bfcl-v3-simple",
@@ -22,21 +23,21 @@
       "downloadUrl": "https://raw.githubusercontent.com/ShishirPatil/gorilla/main/berkeley-function-call-leaderboard/bfcl_eval/data/BFCL_v4_simple_python.json",
       "license": "Apache-2.0",
       "expectedSamples": 400,
-      "defaultSampleLimit": 20,
+      "defaultSampleLimit": 5,
       "descriptionZh": "Berkeley 函数调用权威基准（Gorilla），覆盖工具选择、参数约束与结构化调用。",
       "descriptionEn": "Berkeley function-calling benchmark (Gorilla) covering tool selection, argument constraints, and structured calls."
     },
     {
       "packId": "ruler-niah-compact",
       "category": "CONTEXT_COMPACTION",
-      "displayName": "LongBench v2 (Long Context)",
+      "displayName": "LongBench v2",
       "sourceUrl": "https://huggingface.co/datasets/zai-org/LongBench-v2",
       "downloadUrl": "https://datasets-server.huggingface.co/rows?dataset=zai-org%2FLongBench-v2&config=default&split=train&offset=0&length=10",
-      "license": "MIT",
+      "license": "Apache-2.0",
       "expectedSamples": 10,
-      "defaultSampleLimit": 10,
-      "descriptionZh": "清华 LongBench v2 长上下文权威基准，用于验证 L1/L2 压缩后的关键事实留存与推理。",
-      "descriptionEn": "THUDM LongBench v2 long-context benchmark for validating fact retention and reasoning after L1/L2 compaction."
+      "defaultSampleLimit": 5,
+      "descriptionZh": "将长文分轮读入 Agent，以受控预算衡量真实压缩等级、模型输入和答案留存。",
+      "descriptionEn": "Read long documents in turns and measure compaction tiers, model input, and answer quality under a controlled budget."
     },
     {
       "packId": "longmemeval-s",
@@ -45,22 +46,22 @@
       "sourceUrl": "https://github.com/snap-research/locomo",
       "downloadUrl": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
       "license": "CC-BY-NC-4.0",
-      "expectedSamples": 10,
-      "defaultSampleLimit": 10,
+      "expectedSamples": 50,
+      "defaultSampleLimit": 5,
       "descriptionZh": "Snap Research (ACL 2024) 长期多会话记忆基准，覆盖跨会话信息抽取与时间推理。",
       "descriptionEn": "Snap Research (ACL 2024) long-term multi-session memory benchmark covering extraction and temporal reasoning."
     },
     {
       "packId": "gaia-dev-l1",
       "category": "PLANNING_MULTI_AGENT",
-      "displayName": "HotpotQA Multi-Hop Planning",
+      "displayName": "HotpotQA",
       "sourceUrl": "https://huggingface.co/datasets/hotpotqa/hotpot_qa",
       "downloadUrl": "https://datasets-server.huggingface.co/rows?dataset=hotpotqa%2Fhotpot_qa&config=distractor&split=validation&offset=0&length=50",
       "license": "CC-BY-SA-4.0",
       "expectedSamples": 50,
-      "defaultSampleLimit": 15,
-      "descriptionZh": "多跳规划与跨文档证据汇总基准，检验多 Agent 分工与交接信封一致性。",
-      "descriptionEn": "Multi-hop planning and cross-document evidence synthesis benchmark for multi-agent handoffs."
+      "defaultSampleLimit": 5,
+      "descriptionZh": "通过候选规划、证据交接和综合回答评测多跳协作。",
+      "descriptionEn": "Evaluate multi-hop collaboration through planning, evidence handoff, and synthesis."
     },
     {
       "packId": "agentdojo-security",
@@ -70,7 +71,7 @@
       "downloadUrl": "https://raw.githubusercontent.com/uiuc-kang-lab/InjecAgent/main/data/test_cases_dh_base.json",
       "license": "MIT",
       "expectedSamples": 510,
-      "defaultSampleLimit": 20,
+      "defaultSampleLimit": 5,
       "descriptionZh": "UIUC 权威间接提示注入基准，覆盖工具劫持、越权调用与数据外泄攻防。",
       "descriptionEn": "UIUC indirect prompt injection benchmark covering tool hijacking, unauthorized calls, and exfiltration defense."
     }

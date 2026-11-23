@@ -24,6 +24,7 @@ public record EvalExperimentConfig(
         modelMode == null || modelMode.isBlank()
             ? "mock"
             : modelMode.strip().toLowerCase(java.util.Locale.ROOT);
+    if ("user".equals(modelMode)) modelMode = "byok";
     if (!java.util.List.of("mock", "deepseek", "byok").contains(modelMode))
       throw new IllegalArgumentException("未知模型模式：" + modelMode);
     modelConnectionId = blankToNull(modelConnectionId);
@@ -40,6 +41,10 @@ public record EvalExperimentConfig(
 
   public static EvalExperimentConfig defaults() {
     return new EvalExperimentConfig("mock", null, true, true, true, false, 1, 4, null, null);
+  }
+
+  public boolean usesByok() {
+    return "byok".equals(modelMode) && modelConnectionId != null;
   }
 
   public boolean judgeEnabled() {

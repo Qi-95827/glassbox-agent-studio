@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Box, Divider, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { usePageChrome } from '../../layout/pageChrome';
@@ -20,7 +20,8 @@ export default function EvalLabPage() {
   const meta = useEvalLabMeta();
   const [tab, setTab] = useState('runs');
   const [selectedCase, setSelectedCase] = useState(null);
-  const [seed, setSeed] = useState(null);
+  const [initialLaunchPack, setInitialLaunchPack] = useState(null);
+  const consumeLaunch = useCallback(() => setInitialLaunchPack(null), []);
   usePageChrome({ trail: [{ label: t('nav.workspace') }, { label: t('nav.evaluations') }] });
 
   const categoryLabel = useMemo(
@@ -35,7 +36,7 @@ export default function EvalLabPage() {
   );
 
   const runDataset = (source, key) => {
-    setSeed({ source, key, nonce: Date.now() });
+    setInitialLaunchPack({ source, key });
     setTab('runs');
   };
 
@@ -60,6 +61,9 @@ export default function EvalLabPage() {
 
         <Tabs
           value={tab}
+          variant="scrollable"
+          scrollButtons="auto"
+          allowScrollButtonsMobile
           onChange={(_, value) => setTab(value)}
           sx={{ borderBottom: `1px solid ${googleTokens.outline}`, mb: 2.5 }}
         >
@@ -70,7 +74,12 @@ export default function EvalLabPage() {
         </Tabs>
 
         {tab === 'runs' && (
-          <EvalRunsPanel meta={meta.data} onOpenCase={setSelectedCase} seed={seed} />
+          <EvalRunsPanel
+            meta={meta.data}
+            onOpenCase={setSelectedCase}
+            initialLaunchPack={initialLaunchPack}
+            onLaunchConsumed={consumeLaunch}
+          />
         )}
         {tab === 'hub' && <BenchmarkHubPanel meta={meta.data} onRun={runDataset} />}
         {tab === 'compare' && <EvalAbComparePanel meta={meta.data} />}

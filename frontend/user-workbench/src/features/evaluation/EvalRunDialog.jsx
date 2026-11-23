@@ -27,6 +27,20 @@ import { useToast } from '../../components/ToastProvider';
 import { useI18n } from '../../i18n/I18nProvider';
 import { googleTokens } from '../../theme/googleTheme';
 
+const EXPERIMENT_FIELDS = [
+  ['enableCompaction', 'evalLab.field.enableCompaction'],
+  ['enableLongTermMemory', 'evalLab.field.enableLongTermMemory'],
+  ['enableReflection', 'evalLab.field.enableReflection'],
+  ['enableMcp', 'evalLab.field.enableMcp']
+];
+
+const HUB_FIELDS = {
+  TOOL_MCP: ['enableMcp'],
+  CONTEXT_COMPACTION: ['enableCompaction'],
+  LONG_TERM_MEMORY: ['enableLongTermMemory'],
+  PLANNING_MULTI_AGENT: ['enableReflection']
+};
+
 const defaults = {
   sourceKind: 'MINI',
   sourceKey: 'mini',
@@ -64,7 +78,16 @@ export default function EvalRunDialog({
 
   const categories = useMemo(() => meta?.categories ?? [], [meta]);
   const allCodes = useMemo(() => categories.map(item => item.code), [categories]);
-  const hubPacks = useMemo(() => (hub.data ?? []).filter(item => item.sampleCount > 0), [hub.data]);
+  const hubPacks = useMemo(
+    () => (hub.data ?? []).filter(item => item.sampleCount > 0 || item.previewOnly),
+    [hub.data]
+  );
+  const isHub = form.sourceKind === 'HUB';
+  const selectedPack = isHub ? hubPacks.find(item => item.packId === form.sourceKey) : null;
+  const modelMode = form.modelMode;
+  const fields = isHub
+    ? EXPERIMENT_FIELDS.filter(([key]) => HUB_FIELDS[selectedPack?.category]?.includes(key))
+    : EXPERIMENT_FIELDS;
   const datasets = useMemo(() => custom.data ?? [], [custom.data]);
 
   const sourceCategory = useMemo(() => {
@@ -85,7 +108,9 @@ export default function EvalRunDialog({
       ...defaults,
       sourceKind: initialSource,
       sourceKey: initialSourceKey,
-      categories: current.categories.length ? current.categories : allCodes
+      sampleLimit: initialSource === 'HUB' ? 5 : defaults.sampleLimit,
+      modelMode: initialSource === 'HUB' ? 'byok' : defaults.modelMode,
+      categories: initialSource === 'MINI' ? allCodes : current.categories
     }));
     setError('');
   }, [open, initialSource, initialSourceKey, allCodes]);
@@ -113,20 +138,25 @@ export default function EvalRunDialog({
       ...current,
       sourceKind,
       sourceKey: sourceKind === 'MINI' ? 'mini' : '',
+      sampleLimit: sourceKind === 'HUB' ? 5 : defaults.sampleLimit,
+      modelMode: sourceKind === 'HUB' ? 'byok' : defaults.modelMode,
       categories: sourceKind === 'MINI' ? allCodes : []
     }));
   };
 
   const submit = async () => {
-    if (!form.categories.length) {
+    if (!isHub && !form.categories.length) {
       setError(t('evalLab.field.categories'));
       return;
     }
-    if (form.sourceKind !== 'MINI' && !form.sourceKey) {
+    if (
+      (isHub && (!selectedPack || selectedPack.previewOnly)) ||
+      (form.sourceKind === 'CUSTOM' && !form.sourceKey)
+    ) {
       setError(t('evalLab.field.source'));
       return;
     }
-    if (form.modelMode === 'byok' && !form.modelConnectionId) {
+    if (modelMode === 'byok' && !form.modelConnectionId) {
       setError(t('evalLab.field.modelConnection'));
       return;
     }
@@ -136,9 +166,9 @@ export default function EvalRunDialog({
       const created = await evalLabApi.start({
         sourceKind: form.sourceKind,
         sourceKey: form.sourceKey,
-        categories: form.categories,
-        modelMode: form.modelMode,
-        modelConnectionId: form.modelMode === 'byok' ? form.modelConnectionId : null,
+        categories: isHub ? [selectedPack.category] : form.categories,
+        modelMode,
+        modelConnectionId: modelMode === 'byok' ? form.modelConnectionId : null,
         enableCompaction: form.enableCompaction,
         enableLongTermMemory: form.enableLongTermMemory,
         enableReflection: form.enableReflection,
@@ -164,7 +194,7 @@ export default function EvalRunDialog({
       <DialogTitle>{t('evalLab.dialog.title')}</DialogTitle>
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {t('evalLab.dialog.subtitle')}
+          {t(isHub ? 'evalLab.hub.agentDescription' : 'evalLab.dialog.subtitle')}
         </Typography>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -190,12 +220,13 @@ export default function EvalRunDialog({
                 <InputLabel>{t('evalLab.hub.title')}</InputLabel>
                 <Select
                   label={t('evalLab.hub.title')}
-                  value={form.sourceKey}
+                  value={selectedPack?.packId ?? ''}
                   onChange={event => set('sourceKey', event.target.value)}
                 >
                   {hubPacks.map(pack => (
                     <MenuItem key={pack.packId} value={pack.packId}>
-                      {pack.displayName} · {pack.sampleCount}
+                      {pack.displayName} ·{' '}
+                      {pack.previewOnly ? t('evalLab.hub.routeB') : pack.sampleCount}
                     </MenuItem>
                   ))}
                 </Select>
@@ -219,6 +250,12 @@ export default function EvalRunDialog({
             )}
           </Stack>
 
+          {isHub && !hub.isLoading && !hubPacks.some(pack => !pack.previewOnly) && (
+            <Alert severity="info">{t('evalLab.hub.noRunnablePack')}</Alert>
+          )}
+          {selectedPack?.previewOnly && (
+            <Alert severity="info">{t('evalLab.hub.routeBHint')}</Alert>
+          )}
           <Box>
             <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 1 }}>
               {t('evalLab.field.categories')}
@@ -236,7 +273,12 @@ export default function EvalRunDialog({
                   control={
                     <Checkbox
                       size="small"
-                      checked={form.categories.includes(category.code)}
+                      checked={
+                        isHub
+                          ? Boolean(selectedPack?.category === category.code)
+                          : form.categories.includes(category.code)
+                      }
+                      disabled={isHub || form.sourceKind === 'CUSTOM'}
                       onChange={() => toggleCategory(category.code)}
                     />
                   }
@@ -258,7 +300,7 @@ export default function EvalRunDialog({
                 <MenuItem value="byok">BYOK</MenuItem>
               </Select>
             </FormControl>
-            {form.modelMode === 'byok' && (
+            {modelMode === 'byok' && (
               <FormControl size="small" sx={{ minWidth: 240 }}>
                 <InputLabel>{t('evalLab.field.modelConnection')}</InputLabel>
                 <Select
@@ -290,9 +332,11 @@ export default function EvalRunDialog({
               </Select>
             </FormControl>
           </Stack>
-          {form.modelMode === 'byok' && (
+          {modelMode === 'byok' && (
             <Typography variant="caption" color="text.secondary">
-              {t('evalLab.field.byokHint')}
+              {t(
+                isHub && !byokOptions.length ? 'evalLab.hub.noConnection' : 'evalLab.field.byokHint'
+              )}
             </Typography>
           )}
 
@@ -311,7 +355,12 @@ export default function EvalRunDialog({
               label={t('evalLab.field.sampleLimit')}
               value={form.sampleLimit}
               onChange={event => set('sampleLimit', event.target.value)}
-              slotProps={{ htmlInput: { min: 1, max: meta?.maxSampleLimit ?? 50 } }}
+              slotProps={{
+                htmlInput: {
+                  min: 1,
+                  max: Math.min(selectedPack?.sampleCount || 50, meta?.maxSampleLimit ?? 50)
+                }
+              }}
             />
             <TextField
               size="small"
@@ -323,28 +372,30 @@ export default function EvalRunDialog({
             />
           </Stack>
 
-          <Box
-            sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 0.5 }}
-          >
-            {[
-              ['enableCompaction', 'evalLab.field.enableCompaction'],
-              ['enableLongTermMemory', 'evalLab.field.enableLongTermMemory'],
-              ['enableReflection', 'evalLab.field.enableReflection'],
-              ['enableMcp', 'evalLab.field.enableMcp']
-            ].map(([key, label]) => (
-              <FormControlLabel
-                key={key}
-                control={
-                  <Switch
-                    size="small"
-                    checked={form[key]}
-                    onChange={event => set(key, event.target.checked)}
-                  />
-                }
-                label={t(label)}
-              />
-            ))}
-          </Box>
+          {isHub && selectedPack?.category === 'TOOL_MCP' && (
+            <Typography variant="caption" color="text.secondary">
+              {t('evalLab.hub.mcpHint')}
+            </Typography>
+          )}
+          {fields.length > 0 && (
+            <Box
+              sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 0.5 }}
+            >
+              {fields.map(([key, label]) => (
+                <FormControlLabel
+                  key={key}
+                  control={
+                    <Switch
+                      size="small"
+                      checked={form[key]}
+                      onChange={event => set(key, event.target.checked)}
+                    />
+                  }
+                  label={t(label)}
+                />
+              ))}
+            </Box>
+          )}
         </Stack>
       </DialogContent>
       <DialogActions>
@@ -354,7 +405,11 @@ export default function EvalRunDialog({
         <Button
           variant="contained"
           onClick={submit}
-          disabled={busy}
+          disabled={
+            busy ||
+            (isHub && (!selectedPack || selectedPack.previewOnly)) ||
+            (modelMode === 'byok' && !form.modelConnectionId)
+          }
           startIcon={busy ? <CircularProgress size={16} /> : null}
         >
           {busy ? t('evalLab.starting') : t('evalLab.start')}

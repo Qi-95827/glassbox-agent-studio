@@ -9,11 +9,13 @@ import dev.workbench.domain.WorkbenchTime;
 import dev.workbench.evaluation.dataset.BuiltInMiniPackLoader;
 import dev.workbench.evaluation.grader.CodeAssertionGrader;
 import dev.workbench.evaluation.grader.LlmJudgeGrader;
+import dev.workbench.framework.evaluation.EvalAnswerModel;
 import dev.workbench.framework.evaluation.EvalCaseExecution;
 import dev.workbench.framework.evaluation.EvalCategory;
 import dev.workbench.framework.evaluation.EvalCategoryRunner;
 import dev.workbench.framework.evaluation.EvalExperimentConfig;
 import dev.workbench.framework.evaluation.EvalSample;
+import dev.workbench.modelconnection.ModelConnectionService;
 import dev.workbench.ownership.OwnershipService;
 import dev.workbench.persistence.entity.EvalLabCaseResultEntity;
 import dev.workbench.persistence.entity.EvalLabRunEntity;
@@ -22,7 +24,6 @@ import dev.workbench.persistence.repository.EvalLabRunRepository;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -49,6 +50,8 @@ public class EvalLabService {
   private final Map<EvalCategory, EvalCategoryRunner> runners = new EnumMap<>(EvalCategory.class);
   private final CodeAssertionGrader codeGrader;
   private final LlmJudgeGrader judge;
+  private final EvalAnswerModel answerModel;
+  private final ModelConnectionService connections;
   private final EvalMetricsAggregator aggregator;
   private final EvalBenchmarkHubService hub;
   private final EvalCustomDatasetService customDatasets;
@@ -65,6 +68,8 @@ public class EvalLabService {
       List<EvalCategoryRunner> runners,
       CodeAssertionGrader codeGrader,
       LlmJudgeGrader judge,
+      EvalAnswerModel answerModel,
+      ModelConnectionService connections,
       EvalMetricsAggregator aggregator,
       EvalBenchmarkHubService hub,
       EvalCustomDatasetService customDatasets,
@@ -78,6 +83,8 @@ public class EvalLabService {
     for (var runner : runners) this.runners.put(runner.category(), runner);
     this.codeGrader = codeGrader;
     this.judge = judge;
+    this.answerModel = answerModel;
+    this.connections = connections;
     this.aggregator = aggregator;
     this.hub = hub;
     this.customDatasets = customDatasets;
@@ -148,18 +155,41 @@ public class EvalLabService {
   public String start(StartRequest request, String requestLocale) {
     if (request == null) throw new IllegalArgumentException("评测请求不能为空。");
     String sourceKind = normalizeSource(request.sourceKind());
-    var config = buildConfig(request);
-    var selected = categories(request.categories());
+    var requestedConfig = buildConfig(request);
     String locale = normalizeLocale(requestLocale);
     String owner = ownership.scope().ownerScopeKey();
     String id = WorkbenchIds.newId();
     String now = WorkbenchTime.now();
-    String configJson = write(config);
-    String categoriesJson = write(selected.stream().map(Enum::name).toList());
-    String sourceKey =
-        sourceKind.equals("MINI") ? "mini" : blankToNull(request.sourceKey());
+    String sourceKey = sourceKind.equals("MINI") ? "mini" : blankToNull(request.sourceKey());
     if (!sourceKind.equals("MINI") && sourceKey == null)
       throw new IllegalArgumentException("该数据源缺少评测集标识。");
+    var pack = "HUB".equals(sourceKind) ? hub.requirePack(sourceKey) : null;
+    if (pack != null && pack.previewOnly())
+      throw new IllegalArgumentException("SWE-bench Lite 官方执行需要独立 Git 与 Docker 环境。");
+    var selected = pack == null ? categories(request.categories()) : List.of(pack.evalCategory());
+    var config = requestedConfig;
+    if (config.usesByok()) connections.requireEnabledOwned(config.modelConnectionId());
+    if (config.judgeEnabled()) connections.requireEnabledOwned(config.judgeModelConnectionId());
+    // 先固定可执行题单，再把作业交给异步线程，避免重导入影响已经发起的评测。
+    var fixedSamples =
+        pack == null ? null : hub.samplesForRun(List.of(sourceKey), config.sampleLimit());
+    var snapshot = new java.util.LinkedHashMap<>(readMap(write(config)));
+    if (fixedSamples != null) {
+      if (config.usesByok()
+          && config.maxCostUsd() != null
+          && !pricedModel(config.modelConnectionId()))
+        throw new IllegalArgumentException("使用美元费用上限前，请为被测模型配置美元计价。");
+      snapshot.put("datasetName", pack.displayName());
+      snapshot.put("sampleIds", fixedSamples.stream().map(EvalSample::id).toList());
+      String canonicalSamples =
+          json.copy()
+              .enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+              .valueToTree(fixedSamples)
+              .toString();
+      snapshot.put("datasetHash", sha(canonicalSamples));
+    }
+    String configJson = write(snapshot);
+    String categoriesJson = write(selected.stream().map(Enum::name).toList());
     var entity =
         new EvalLabRunEntity(
             id,
@@ -182,11 +212,13 @@ public class EvalLabService {
       executor.submit(
           () -> {
             var asyncContext =
-                org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+                org.springframework.security.core.context.SecurityContextHolder
+                    .createEmptyContext();
             if (capturedAuth != null) asyncContext.setAuthentication(capturedAuth);
-            org.springframework.security.core.context.SecurityContextHolder.setContext(asyncContext);
+            org.springframework.security.core.context.SecurityContextHolder.setContext(
+                asyncContext);
             try {
-              execute(id, sourceKind, sourceKey, selected, config, locale, owner);
+              execute(id, sourceKind, sourceKey, selected, config, locale, owner, fixedSamples);
             } finally {
               org.springframework.security.core.context.SecurityContextHolder.clearContext();
             }
@@ -266,7 +298,8 @@ public class EvalLabService {
       List<EvalCategory> selected,
       EvalExperimentConfig config,
       String locale,
-      String owner) {
+      String owner,
+      List<EvalSample> fixedSamples) {
     var row = runs.findById(id).orElse(null);
     if (row == null) return;
     row.start(WorkbenchTime.now());
@@ -280,7 +313,11 @@ public class EvalLabService {
     String fatal = null;
     String finalStatus = "COMPLETED";
     try {
-      var samples = resolveSamples(sourceKind, sourceKey, selected, config.sampleLimit());
+      var samples =
+          fixedSamples == null
+              ? resolveSamples(sourceKind, sourceKey, selected, config.sampleLimit())
+              : fixedSamples;
+      boolean hubRun = fixedSamples != null;
       outer:
       for (var category : selected) {
         var runner = runners.get(category);
@@ -301,31 +338,73 @@ public class EvalLabService {
             try {
               execution = runner.run(sample, config, owner);
             } catch (RuntimeException e) {
+              String reason = hubRun ? "AGENT_EXECUTION_ERROR" : safe(e.getMessage());
               execution =
                   EvalCaseExecution.failed(
-                      safe(e.getMessage()), Map.of("category", category.name(), "sampleId", sample.id()));
+                      reason,
+                      Map.of(
+                          "category",
+                          category.name(),
+                          "sampleId",
+                          sample.id(),
+                          "errorCode",
+                          reason));
             }
-            var graded = codeGrader.grade(sample.assertions(), execution);
-            var executionWithScore = execution.withAssertions(graded.assertions(), graded.score());
+            boolean executionFailed =
+                Boolean.TRUE.equals(execution.metrics().get("executionFailed"));
+            boolean agentGrade = Boolean.TRUE.equals(execution.evidence().get("agentGrade"));
+            var code =
+                executionFailed
+                    ? new CodeAssertionGrader.Graded(List.of(), 0, false)
+                    : agentGrade
+                        ? codeGrader.gradeAgent(category, execution, false)
+                        : codeGrader.grade(sample.assertions(), execution);
+            var reference = execution.trace().get("referenceAnswer");
+            var answer = execution.trace().get("modelAnswer");
+            boolean judgeInputAvailable =
+                !agentGrade
+                    || (reference == null
+                        ? !execution.rawOutput().isBlank()
+                        : answer instanceof String text && !text.isBlank());
             var verdict =
                 config.judgeEnabled()
-                    ? judge.judge(sample, executionWithScore, config.judgeModelConnectionId(), locale)
+                        && !cancellations.contains(id)
+                        && !executionFailed
+                        && judgeInputAvailable
+                    ? judge.judge(
+                        sample,
+                        execution.withAssertions(code.assertions(), code.score()),
+                        config.judgeModelConnectionId(),
+                        locale,
+                        reference instanceof String text ? text : null)
                     : LlmJudgeGrader.JudgeResult.disabled();
-            boolean judgePass =
-                !"BYOK".equals(verdict.mode()) || verdict.passed() == null || verdict.passed();
-            boolean passed = graded.passed() && judgePass;
+            boolean judgePassed =
+                "BYOK".equals(verdict.mode()) && Boolean.TRUE.equals(verdict.passed());
+            var graded =
+                agentGrade && !executionFailed && judgePassed
+                    ? codeGrader.gradeAgent(category, execution, true)
+                    : code;
+            boolean passed =
+                graded.passed()
+                    && (agentGrade
+                        || !"BYOK".equals(verdict.mode())
+                        || !Boolean.FALSE.equals(verdict.passed()));
+            var executionWithScore = execution.withAssertions(graded.assertions(), graded.score());
             var metrics = new LinkedHashMapCopy(executionWithScore.metrics());
-            metrics.put("codePassed", graded.passed());
+            metrics.put("codePassed", code.passed());
             var caseCost = executionWithScore.costUsd();
             modelCost += caseCost;
             judgeCost += verdict.costUsd();
-            tokens += executionWithScore.inputTokens() + executionWithScore.outputTokens()
-                + verdict.inputTokens() + verdict.outputTokens();
+            tokens +=
+                executionWithScore.inputTokens()
+                    + executionWithScore.outputTokens()
+                    + verdict.inputTokens()
+                    + verdict.outputTokens();
             duration += executionWithScore.durationMs();
             var now = WorkbenchTime.now();
             var trace = new java.util.LinkedHashMap<String, Object>(executionWithScore.trace());
             trace.putIfAbsent("prompt", sample.prompt());
-            trace.putIfAbsent("setup", sample.setup());
+            if (!hubRun) trace.putIfAbsent("setup", sample.setup());
             trace.putIfAbsent("category", category.name());
             trace.putIfAbsent("sampleId", sample.id());
             cases.save(
@@ -364,14 +443,35 @@ public class EvalLabService {
                     metrics));
             row.progress(modelCost, tokens, duration);
             runs.save(row);
+            if (hubRun
+                && config.usesByok()
+                && config.maxCostUsd() != null
+                && Boolean.TRUE.equals(metrics.get("modelRequestAttempted"))
+                && !Boolean.TRUE.equals(metrics.get("costKnown"))
+                && !executionFailed) {
+              budgetStopped = true;
+              break outer;
+            }
           }
         }
       }
-      var summary =
-          aggregator.aggregate(rows, config.repeatK(), budgetStopped);
+      var summary = aggregator.aggregate(rows, config.repeatK(), budgetStopped);
       summary.put("judgeCostUsd", round(judgeCost));
       summary.put("modelCostUsd", round(modelCost));
       summary.put("judgeEnabled", config.judgeEnabled());
+      if (hubRun) {
+        summary.put("plannedAttempts", samples.size() * config.repeatK());
+        summary.put(
+            "unscoredAttempts",
+            rows.stream()
+                .filter(result -> Boolean.TRUE.equals(result.metrics().get("executionFailed")))
+                .count());
+        summary.put(
+            "knownModelCosts",
+            rows.stream()
+                .filter(result -> Boolean.TRUE.equals(result.metrics().get("costKnown")))
+                .count());
+      }
       var finished = WorkbenchTime.now();
       row.finish(finalStatus, write(summary), modelCost, tokens, duration, null);
       runs.save(row);
@@ -392,16 +492,19 @@ public class EvalLabService {
     }
   }
 
+  private boolean pricedModel(String connectionId) {
+    try {
+      return answerModel.open(connectionId).pricedInUsd();
+    } catch (RuntimeException ignored) {
+      return false;
+    }
+  }
+
   private List<EvalSample> resolveSamples(
-      String sourceKind,
-      String sourceKey,
-      List<EvalCategory> categories,
-      int sampleLimit) {
+      String sourceKind, String sourceKey, List<EvalCategory> categories, int sampleLimit) {
     List<EvalSample> pool;
     if ("MINI".equals(sourceKind)) {
       pool = miniPacks.loadAll();
-    } else if ("HUB".equals(sourceKind)) {
-      pool = hub.samplesForRun(splitSourceKey(sourceKey));
     } else {
       pool = customDatasets.samplesForRun(sourceKey);
     }
@@ -413,15 +516,6 @@ public class EvalLabService {
               .limit(sampleLimit)
               .toList());
     return List.copyOf(result);
-  }
-
-  private static List<String> splitSourceKey(String sourceKey) {
-    if (sourceKey == null || sourceKey.isBlank())
-      throw new IllegalArgumentException("缺少 Hub 评测集标识。");
-    return java.util.Arrays.stream(sourceKey.split(","))
-        .map(String::strip)
-        .filter(text -> !text.isBlank())
-        .toList();
   }
 
   private EvalLabRunEntity requireReadable(String id) {
@@ -440,7 +534,9 @@ public class EvalLabService {
         request.enableReflection() == null || request.enableReflection(),
         Boolean.TRUE.equals(request.enableMcp()),
         request.repeatK() == null ? 1 : request.repeatK(),
-        request.sampleLimit() == null ? 4 : request.sampleLimit(),
+        request.sampleLimit() == null
+            ? ("HUB".equalsIgnoreCase(request.sourceKind()) ? 5 : 4)
+            : request.sampleLimit(),
         request.maxCostUsd(),
         request.judgeModelConnectionId());
   }
