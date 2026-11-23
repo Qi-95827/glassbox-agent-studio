@@ -31,6 +31,8 @@ export default function RagEmbeddingPanel() {
   const [model, setModel] = useState('');
   const [dimension, setDimension] = useState('1536');
   const [busy, setBusy] = useState(false);
+  const [probe, setProbe] = useState(null);
+  const [probing, setProbing] = useState(false);
 
   useEffect(() => {
     if (!settings.data) return;
@@ -52,11 +54,62 @@ export default function RagEmbeddingPanel() {
         dimension: Number(dimension) || 0
       });
       await queryClient.invalidateQueries({ queryKey: ['rag-embedding'] });
+      setProbe(null);
       toast.success(t('ragEmbedding.saved'));
     } catch (error) {
       toast.error(error.message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const runProbe = async () => {
+    setProbing(true);
+    try {
+      const result = await ragEmbeddingApi.probe();
+      setProbe(result);
+      if (result.ok) toast.success(t('ragEmbedding.probeOkShort'));
+      else toast.warning(t('ragEmbedding.probeFailedShort'));
+    } catch (error) {
+      setProbe({ ok: false, status: 'ERROR', message: error.message });
+      toast.error(error.message);
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  const statusKey = () => {
+    if (!enabled) return 'ragEmbedding.statusDisabled';
+    if (settings.data?.connectionId) return 'ragEmbedding.statusConnection';
+    if (!settings.data?.baseUrl || !settings.data?.model) return 'ragEmbedding.statusNoEndpoint';
+    return settings.data?.apiKeyFromEnvironment
+      ? 'ragEmbedding.statusEnvKey'
+      : 'ragEmbedding.statusMissingKey';
+  };
+
+  const probeText = () => {
+    if (!probe) return '';
+    switch (probe.status) {
+      case 'OK':
+        return t('ragEmbedding.probeOk', {
+          actual: probe.actualDimension,
+          expected: probe.expectedDimension
+        });
+      case 'DIMENSION_MISMATCH':
+        return t('ragEmbedding.probeMismatch', {
+          actual: probe.actualDimension,
+          expected: probe.expectedDimension
+        });
+      case 'MISSING_KEY':
+        return t('ragEmbedding.probeMissingKey');
+      case 'DISABLED':
+        return t('ragEmbedding.probeDisabled');
+      case 'EMPTY':
+        return t('ragEmbedding.probeEmpty');
+      case 'UNAVAILABLE':
+        return t('ragEmbedding.probeUnavailable');
+      default:
+        return t('ragEmbedding.probeError');
     }
   };
 
@@ -140,15 +193,29 @@ export default function RagEmbeddingPanel() {
           />
         </Stack>
         <Typography variant="caption" color="text.secondary">
-          {t('ragEmbedding.status', {
-            status: settings.data?.endpointConfigured
-              ? t('ragEmbedding.configured')
-              : t('ragEmbedding.notConfigured')
-          })}
+          {t('ragEmbedding.status', { status: t(statusKey()) })}
         </Typography>
-        <Button variant="outlined" loading={busy} onClick={save} sx={{ alignSelf: 'start' }}>
-          {t('ragEmbedding.save')}
-        </Button>
+        <Typography variant="caption" color="text.secondary">
+          {t('ragEmbedding.dimensionHint')}
+        </Typography>
+        {probe && (
+          <Alert severity={probe.ok ? 'success' : 'warning'} sx={{ py: 0.25 }}>
+            {probeText()}
+          </Alert>
+        )}
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <Button variant="outlined" loading={busy} onClick={save}>
+            {t('ragEmbedding.save')}
+          </Button>
+          <Button
+            variant="text"
+            loading={probing}
+            disabled={!settings.data?.enabled}
+            onClick={runProbe}
+          >
+            {t('ragEmbedding.probe')}
+          </Button>
+        </Stack>
       </Stack>
     </Box>
   );

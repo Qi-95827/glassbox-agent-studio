@@ -25,6 +25,7 @@ public class RagEmbeddingSettings {
   private final String defaultBaseUrl;
   private final String defaultModel;
   private final int defaultDimension;
+  private final String apiKey;
 
   public RagEmbeddingSettings(
       @Value("${workbench.rag.embedding.settings-file:data/rag-embedding-settings.json}")
@@ -33,13 +34,15 @@ public class RagEmbeddingSettings {
       @Value("${workbench.rag.embedding.connection-id:}") String defaultConnectionId,
       @Value("${workbench.rag.embedding.base-url:}") String defaultBaseUrl,
       @Value("${workbench.rag.embedding.model:}") String defaultModel,
-      @Value("${workbench.rag.embedding.dimension:1536}") int defaultDimension) {
+      @Value("${workbench.rag.embedding.dimension:1536}") int defaultDimension,
+      @Value("${workbench.rag.embedding.api-key:}") String apiKey) {
     this.file = Path.of(file).toAbsolutePath().normalize();
     this.defaultEnabled = defaultEnabled;
     this.defaultConnectionId = safe(defaultConnectionId);
     this.defaultBaseUrl = safe(defaultBaseUrl);
     this.defaultModel = safe(defaultModel);
     this.defaultDimension = Math.max(0, defaultDimension);
+    this.apiKey = safe(apiKey);
   }
 
   public record Config(
@@ -66,9 +69,10 @@ public class RagEmbeddingSettings {
 
   public synchronized View view() {
     var config = current();
+    boolean hasKey = !apiKey.isBlank();
     boolean endpoint =
         !config.connectionId().isBlank()
-            || (!config.baseUrl().isBlank() && !config.model().isBlank());
+            || (!config.baseUrl().isBlank() && !config.model().isBlank() && hasKey);
     return new View(
         config.enabled(),
         config.connectionId(),
@@ -76,7 +80,7 @@ public class RagEmbeddingSettings {
         config.model(),
         config.dimension(),
         endpoint,
-        false);
+        hasKey);
   }
 
   public synchronized View save(Update update) {
@@ -149,6 +153,7 @@ public class RagEmbeddingSettings {
     result.put("model", view.model());
     result.put("dimension", view.dimension());
     result.put("endpointConfigured", view.endpointConfigured());
+    result.put("apiKeyFromEnvironment", view.apiKeyFromEnvironment());
     return result;
   }
 }

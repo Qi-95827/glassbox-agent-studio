@@ -80,17 +80,31 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
     var result = new ArrayList<float[]>(texts.size());
     for (int start = 0; start < texts.size(); start += batchSize) {
       int end = Math.min(texts.size(), start + batchSize);
-      result.addAll(requestBatch(endpoint, texts.subList(start, end)));
+      result.addAll(requestBatch(endpoint, texts.subList(start, end), true));
     }
     return List.copyOf(result);
   }
 
-  private List<float[]> requestBatch(Endpoint endpoint, List<String> texts) {
+  @Override
+  public Probe probe() {
+    var config = settings.current();
+    var endpoint = endpoint(config);
+    if (endpoint == null) return new Probe(false, 0, "UNAVAILABLE");
+    var vectors = requestBatch(endpoint, List.of("embedding connectivity probe"), false);
+    if (vectors.isEmpty() || vectors.getFirst() == null || vectors.getFirst().length == 0)
+      return new Probe(false, 0, "EMPTY");
+    int actual = vectors.getFirst().length;
+    String status = config.dimension() > 0 && actual != config.dimension() ? "DIMENSION_MISMATCH" : "OK";
+    return new Probe(true, actual, status);
+  }
+
+  private List<float[]> requestBatch(Endpoint endpoint, List<String> texts, boolean enforceDimension) {
     try {
       int dimension = settings.current().dimension();
       var payload = new LinkedHashMap<String, Object>();
       payload.put("model", endpoint.model());
       payload.put("input", texts);
+      if (dimension > 0) payload.put("dimensions", dimension);
       var requestBuilder =
           HttpRequest.newBuilder(URI.create(endpoint.baseUrl() + "/embeddings"))
               .timeout(timeout)
@@ -113,7 +127,7 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
         float[] values = new float[embedding.size()];
         for (int index = 0; index < embedding.size(); index++)
           values[index] = (float) embedding.get(index).asDouble();
-        if (dimension > 0 && values.length != dimension) continue;
+        if (enforceDimension && dimension > 0 && values.length != dimension) continue;
         vectors.add(values);
       }
       return vectors.size() == texts.size() ? List.copyOf(vectors) : List.of();

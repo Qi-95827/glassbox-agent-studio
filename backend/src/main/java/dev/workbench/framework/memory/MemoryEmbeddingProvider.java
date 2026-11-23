@@ -31,4 +31,18 @@ public interface MemoryEmbeddingProvider {
     for (String text : texts) result.add(embed(text));
     return List.copyOf(result);
   }
+
+  /** 主动探测端点是否真的可用；默认发一条极短文本，避免把“已保存”误报成“可用”。 */
+  default Probe probe() {
+    if (!isAvailable()) return new Probe(false, 0, "UNAVAILABLE");
+    try {
+      var vector = embed("embedding connectivity probe");
+      if (vector == null || vector.length == 0) return new Probe(false, 0, "EMPTY");
+      return new Probe(true, vector.length, "OK");
+    } catch (RuntimeException e) {
+      return new Probe(false, 0, "ERROR");
+    }
+  }
+
+  record Probe(boolean ok, int dimension, String status) {}
 }
