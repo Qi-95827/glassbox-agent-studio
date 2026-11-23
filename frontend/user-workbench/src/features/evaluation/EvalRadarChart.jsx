@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 import { googleTokens } from '../../theme/googleTheme';
 
-const SIZE = 360;
-const CENTER = 176;
-const RADIUS = 118;
+const WIDTH = 540;
+const HEIGHT = 340;
+const CENTER_X = WIDTH / 2;
+const CENTER_Y = HEIGHT / 2;
+const RADIUS = 112;
 const RINGS = [0.25, 0.5, 0.75, 1];
 
 function clamp(value) {
@@ -15,7 +17,7 @@ function clamp(value) {
 
 function point(index, total, ratio) {
   const angle = -Math.PI / 2 + (index * 2 * Math.PI) / total;
-  return [CENTER + Math.cos(angle) * RADIUS * ratio, CENTER + Math.sin(angle) * RADIUS * ratio];
+  return [CENTER_X + Math.cos(angle) * RADIUS * ratio, CENTER_Y + Math.sin(angle) * RADIUS * ratio];
 }
 
 function polygon(total, ratio) {
@@ -53,13 +55,13 @@ export default function EvalRadarChart({
   const labels = categories.map(category => category.label ?? category.code);
 
   return (
-    <Box sx={{ width: '100%', maxWidth: size + 80, mx: 'auto' }}>
+    <Box sx={{ width: '100%', maxWidth: size + 180, mx: 'auto' }}>
       <Box
         component="svg"
-        viewBox={`0 0 ${SIZE} ${SIZE}`}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
         aria-label={ariaLabel}
-        sx={{ width: '100%', height: 'auto', display: 'block' }}
+        sx={{ width: '100%', height: 'auto', display: 'block', overflow: 'visible' }}
       >
         {RINGS.map(ratio => (
           <polygon
@@ -76,8 +78,8 @@ export default function EvalRadarChart({
           return (
             <line
               key={category.code}
-              x1={CENTER}
-              y1={CENTER}
+              x1={CENTER_X}
+              y1={CENTER_Y}
               x2={x}
               y2={y}
               stroke="#E0E3E7"
@@ -92,7 +94,7 @@ export default function EvalRadarChart({
               key={`${label}-${index}`}
               x={x}
               y={y}
-              textAnchor={x < CENTER - 4 ? 'end' : x > CENTER + 4 ? 'start' : 'middle'}
+              textAnchor={x < CENTER_X - 4 ? 'end' : x > CENTER_X + 4 ? 'start' : 'middle'}
               dominantBaseline="middle"
               fontSize="10.5"
               fill="#5F6368"

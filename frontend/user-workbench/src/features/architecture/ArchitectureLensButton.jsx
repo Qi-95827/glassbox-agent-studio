@@ -80,6 +80,8 @@ export default function ArchitectureLensButton({ topic, label, size = 'small' })
             fontSize: 12.5,
             fontWeight: 500,
             textTransform: 'none',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
             color: '#1967D2',
             borderColor: '#D2E3FC',
             bgcolor: '#F8FAFF',
