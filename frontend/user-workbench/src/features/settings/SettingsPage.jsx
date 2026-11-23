@@ -19,6 +19,7 @@ import { evaluationApi } from '../../api/evaluations';
 import CostPricePanel from '../workflows/CostPricePanel';
 import ModelConnectionPanel from './ModelConnectionPanel';
 import McpServerPanel from './McpServerPanel';
+import RagEmbeddingPanel from './RagEmbeddingPanel';
 import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
@@ -112,6 +113,8 @@ export default function SettingsPage() {
           <ModelConnectionPanel />
 
           <McpServerPanel />
+
+          <RagEmbeddingPanel />
 
           <Box
             sx={{

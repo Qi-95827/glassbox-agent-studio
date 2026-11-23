@@ -11,6 +11,7 @@ import EmptyState from '../../components/EmptyState';
 import NewWorkspaceDialog from './NewWorkspaceDialog';
 import WorkspaceFileEditor from './WorkspaceFileEditor';
 import WorkspaceMemoryPanel from './WorkspaceMemoryPanel';
+import WorkspaceKnowledgePanel from './WorkspaceKnowledgePanel';
 import WorkspaceGitPanel from './WorkspaceGitPanel';
 import { googleTokens } from '../../theme/googleTheme';
 import { dateTime, shortId } from '../../utils/format';
@@ -242,6 +243,7 @@ export default function WorkspacesPage() {
                     <Tab value="overview" label={t('workspace.tab.overview')} />
                     <Tab value="files" label={t('workspace.tab.files')} />
                     <Tab value="memory" label={t('workspace.tab.memory')} />
+                    <Tab value="knowledge" label={t('workspace.tab.knowledge')} />
                     <Tab value="git" label={t('workspace.tab.git')} />
                   </Tabs>
                 </Box>
@@ -331,6 +333,7 @@ export default function WorkspacesPage() {
 
                   {tab === 'files' && <WorkspaceFileEditor workspaceId={selectedId} />}
                   {tab === 'memory' && <WorkspaceMemoryPanel workspaceId={selectedId} />}
+                  {tab === 'knowledge' && <WorkspaceKnowledgePanel workspaceId={selectedId} />}
                   {tab === 'git' && <WorkspaceGitPanel workspace={selected} />}
                 </Box>
               </>

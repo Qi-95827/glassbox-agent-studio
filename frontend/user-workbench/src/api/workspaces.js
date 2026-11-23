@@ -46,6 +46,11 @@ export const workspacesApi = {
     post(`/workspaces/${id}/memories/${memoryId}/ignore?version=${version}`),
   promoteMemory: (id, memoryId, version, payload) =>
     post(`/workspaces/${id}/memories/${memoryId}/promote?version=${version}`, payload),
+  knowledge: id => get(`/workspaces/${id}/knowledge`),
+  indexKnowledge: (id, payload) => post(`/workspaces/${id}/knowledge`, payload),
+  searchKnowledge: (id, q, limit = 5) =>
+    get(`/workspaces/${id}/knowledge/search?${new URLSearchParams({ q, limit: String(limit) })}`),
+  deleteKnowledge: (id, documentId) => del(`/workspaces/${id}/knowledge/${documentId}`),
   repositoryGrants: () => get('/admin/repositories'),
   grantRepository: payload => post('/admin/repositories', payload),
   revokeRepository: id => del(`/admin/repositories/${id}`)
