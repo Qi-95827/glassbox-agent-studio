@@ -48,9 +48,30 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
     int before = estimate(messages);
     int limit = Math.max(200, (int) Math.round(before / Math.max(0.3, Math.min(0.95, target))));
 
-    var request =
-        new CompactionRequest(messages, limit, 4, 2, 0.60, 0.78, 0.92);
-    var result = compactor.evaluateAndCompact(request);
+    boolean compactionEnabled = config == null || config.enableCompaction();
+    dev.workbench.framework.context.CompactionResult result;
+    if (compactionEnabled) {
+      var request = new CompactionRequest(messages, limit, 4, 2, 0.60, 0.78, 0.92);
+      result = compactor.evaluateAndCompact(request);
+    } else {
+      // 消融实验关闭压缩：原样透传消息，仅记录 L0 观测与真实超限风险。
+      var observeOnly =
+          new CompactionRequest(messages, Integer.MAX_VALUE / 4, 4, 2, 0.99, 0.99, 0.99);
+      var raw = compactor.evaluateAndCompact(observeOnly);
+      result =
+          new dev.workbench.framework.context.CompactionResult(
+              messages,
+              new dev.workbench.framework.context.ContextBreakdown(
+                  limit,
+                  before,
+                  before,
+                  raw.breakdown().segmentTokens(),
+                  dev.workbench.framework.context.CompactionTier.L0_OBSERVE_ONLY,
+                  0,
+                  0,
+                  List.of(),
+                  ""));
+    }
 
     var compactedText = new StringBuilder();
     for (var message : result.messages()) compactedText.append(message.content()).append('\n');

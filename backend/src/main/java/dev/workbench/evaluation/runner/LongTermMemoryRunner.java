@@ -76,7 +76,9 @@ public class LongTermMemoryRunner implements EvalCategoryRunner {
       }
 
       var matches =
-          retrieval.retrieve(workspaceId, new MemorySearchQuery(queryText, queryPaths, topK));
+          (config != null && !config.enableLongTermMemory())
+              ? List.<dev.workbench.framework.memory.MemoryMatch>of()
+              : retrieval.retrieve(workspaceId, new MemorySearchQuery(queryText, queryPaths, topK));
       var retrievedIds = matches.stream().map(match -> match.memoryId()).toList();
       long targetHits = retrievedIds.stream().filter(targetIds::contains).count();
       int candidateLeaks =
