@@ -175,8 +175,22 @@ public class EvalLabService {
             locale,
             now);
     runs.saveAndFlush(entity);
+    var securityContext =
+        org.springframework.security.core.context.SecurityContextHolder.getContext();
+    var capturedAuth = securityContext == null ? null : securityContext.getAuthentication();
     try {
-      executor.submit(() -> execute(id, sourceKind, sourceKey, selected, config, locale, owner));
+      executor.submit(
+          () -> {
+            var asyncContext =
+                org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+            if (capturedAuth != null) asyncContext.setAuthentication(capturedAuth);
+            org.springframework.security.core.context.SecurityContextHolder.setContext(asyncContext);
+            try {
+              execute(id, sourceKind, sourceKey, selected, config, locale, owner);
+            } finally {
+              org.springframework.security.core.context.SecurityContextHolder.clearContext();
+            }
+          });
     } catch (RuntimeException e) {
       entity.finish("FAILED", write(Map.of("error", "执行队列已满")), 0, 0, 0, "执行队列已满");
       runs.save(entity);

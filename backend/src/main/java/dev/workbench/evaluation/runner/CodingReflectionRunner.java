@@ -74,13 +74,15 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
     String runId = null;
     RunStatus status = RunStatus.BLOCKED;
     String runError = "";
+    String resolvedModelMode =
+        "byok".equalsIgnoreCase(config.modelMode()) ? "user" : config.modelMode();
     try {
       var request =
           CreateTaskRequest.builder()
               .goal(sample.prompt())
               .scenario("normal")
               .limits(maxRounds, maxTools, maxSeconds)
-              .modelMode(config.modelMode())
+              .modelMode(resolvedModelMode)
               .modelConnectionId(config.modelConnectionId())
               .workspace(workspace.id(), null)
               .writeEnabled(true)
@@ -118,7 +120,7 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
       // 文件不可读按未达成期望处理，不能虚增通过。
     }
 
-    boolean terminal = !status.canCancel();
+    boolean terminal = runId != null && runError.isBlank() && !status.canCancel();
     double cost = 0;
     int inputTokens = 0;
     int outputTokens = 0;
