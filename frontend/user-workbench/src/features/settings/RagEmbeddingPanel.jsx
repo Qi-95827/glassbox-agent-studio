@@ -66,12 +66,21 @@ export default function RagEmbeddingPanel() {
   const runProbe = async () => {
     setProbing(true);
     try {
+      // 测试必须针对当前屏幕上的值，而不是上一次保存的旧配置；先落盘再探测。
+      await ragEmbeddingApi.save({
+        enabled,
+        connectionId,
+        baseUrl,
+        model,
+        dimension: Number(dimension) || 0
+      });
+      await queryClient.invalidateQueries({ queryKey: ['rag-embedding'] });
       const result = await ragEmbeddingApi.probe();
       setProbe(result);
       if (result.ok) toast.success(t('ragEmbedding.probeOkShort'));
       else toast.warning(t('ragEmbedding.probeFailedShort'));
     } catch (error) {
-      setProbe({ ok: false, status: 'ERROR', message: error.message });
+      setProbe({ ok: false, status: 'ERROR', detail: error.message });
       toast.error(error.message);
     } finally {
       setProbing(false);

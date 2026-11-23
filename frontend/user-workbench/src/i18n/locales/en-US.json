@@ -1522,7 +1522,7 @@
   "ragEmbedding.statusEnvKey": "Standalone endpoint configured; using the server environment key",
   "ragEmbedding.statusMissingKey": "API key missing: reuse a model connection or set workbench.rag.embedding.api-key on the server",
   "ragEmbedding.dimensionHint": "Aliyun text-embedding-v3 defaults to 1024 dimensions; text-embedding-v4 supports 1536. The dimension must match the endpoint output.",
-  "ragEmbedding.probe": "Test connection",
+  "ragEmbedding.probe": "Save and test",
   "ragEmbedding.probeOk": "Connected: returned {actual} dimensions, configured {expected}.",
   "ragEmbedding.probeMismatch": "Endpoint reachable but returned {actual} dimensions, not the configured {expected}; update the dimension and retry.",
   "ragEmbedding.probeMissingKey": "API key missing, cannot test. Reuse a model connection or set workbench.rag.embedding.api-key on the server.",
