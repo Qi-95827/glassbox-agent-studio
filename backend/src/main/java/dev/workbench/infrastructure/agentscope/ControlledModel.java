@@ -138,11 +138,9 @@ public record ControlledModel(
                 if (context.compacted()) runtime.contextCompacted(context);
               }
             }
+            // 输入体积校验必须计入工具返回值：只统计正文会让超限输入直接打到供应商侧。
             StringBuilder inputText = new StringBuilder();
-            for (Msg message : effective) {
-              if (message.getTextContent() != null)
-                inputText.append(message.getTextContent()).append('\n');
-            }
+            for (Msg message : effective) inputText.append(expandBlocks(message)).append('\n');
             inputText.append(tools);
             runtime.verifyModelInput(inputText.toString());
             GenerateOptions constrained = constrainedOptions(options, runtime.maxOutputTokens());
@@ -230,55 +228,71 @@ public record ControlledModel(
     var result = new ArrayList<ContextMessage>(messages.size());
     for (int index = 0; index < messages.size(); index++) {
       var message = messages.get(index);
-      String toolCallId = null;
-      var text = new StringBuilder();
-      if (message.getContent() != null) {
-        for (ContentBlock block : message.getContent()) {
-          if (block instanceof TextBlock textBlock) {
-            if (textBlock.getText() != null) text.append(textBlock.getText());
-            continue;
-          }
-          if (block instanceof ToolUseBlock use) {
-            if (toolCallId == null) toolCallId = use.getId();
-            Object input = use.getInput();
-            String args = input == null ? "{}" : String.valueOf(TRACE_JSON.valueToTree(input));
-            text.append("[tool_use name=")
-                .append(use.getName())
-                .append(" id=")
-                .append(use.getId())
-                .append(" args=")
-                .append(args)
-                .append("]\n");
-            continue;
-          }
-          if (block instanceof ToolResultBlock toolResult) {
-            if (toolCallId == null) toolCallId = toolResult.getId();
-            text.append("[tool_result id=").append(toolResult.getId()).append("] ");
-            if (toolResult.getOutput() != null) {
-              for (ContentBlock output : toolResult.getOutput()) {
-                if (output instanceof TextBlock outputText && outputText.getText() != null)
-                  text.append(outputText.getText());
-                else text.append("[block ").append(output.getClass().getSimpleName()).append(']');
-              }
-            }
-            text.append('\n');
-            continue;
-          }
-          // 其他块（图片/思考等）保留类型标记，避免估算与玻璃盒完全失明。
-          text.append("[block ").append(block.getClass().getSimpleName()).append(']');
-        }
-      }
-      if (toolCallId == null && message.getTextContent() != null && text.isEmpty())
-        text.append(message.getTextContent());
       result.add(
           new ContextMessage(
               message.getRole() == null ? "USER" : message.getRole().name(),
               message.getName(),
-              text.toString(),
-              toolCallId,
+              expandBlocks(message),
+              toolCallIdOf(message),
               index));
     }
     return result;
+  }
+
+  /**
+   * 把一条消息的全部结构化块展开成可估算、可脱敏的文本。
+   *
+   * <p>压缩、输入体积校验与玻璃盒快照必须使用同一份展开结果：只取 {@code getTextContent()} 会漏掉 {@code tool_use} 的参数与 {@code
+   * tool_result} 的返回值，既低估体积也让快照失真。
+   */
+  private static String expandBlocks(Msg message) {
+    if (message.getContent() == null)
+      return message.getTextContent() == null ? "" : message.getTextContent();
+    var text = new StringBuilder();
+    for (ContentBlock block : message.getContent()) {
+      if (block instanceof TextBlock textBlock) {
+        if (textBlock.getText() != null) text.append(textBlock.getText());
+        continue;
+      }
+      if (block instanceof ToolUseBlock use) {
+        Object input = use.getInput();
+        String args = input == null ? "{}" : String.valueOf(TRACE_JSON.valueToTree(input));
+        text.append("[tool_use name=")
+            .append(use.getName())
+            .append(" id=")
+            .append(use.getId())
+            .append(" args=")
+            .append(args)
+            .append("]\n");
+        continue;
+      }
+      if (block instanceof ToolResultBlock toolResult) {
+        text.append("[tool_result id=").append(toolResult.getId()).append("] ");
+        if (toolResult.getOutput() != null) {
+          for (ContentBlock output : toolResult.getOutput()) {
+            if (output instanceof TextBlock outputText && outputText.getText() != null)
+              text.append(outputText.getText());
+            else text.append("[block ").append(output.getClass().getSimpleName()).append(']');
+          }
+        }
+        text.append('\n');
+        continue;
+      }
+      // 其他块（图片/思考等）保留类型标记，避免估算与玻璃盒完全失明。
+      text.append("[block ").append(block.getClass().getSimpleName()).append(']');
+    }
+    if (text.isEmpty() && message.getTextContent() != null) return message.getTextContent();
+    return text.toString();
+  }
+
+  /** 工具结果优先：一条消息同时含调用与结果时，结果 id 才是配对依据。 */
+  private static String toolCallIdOf(Msg message) {
+    if (message.getContent() == null) return null;
+    for (ContentBlock block : message.getContent())
+      if (block instanceof ToolResultBlock result && result.getId() != null) return result.getId();
+    for (ContentBlock block : message.getContent())
+      if (block instanceof ToolUseBlock use && use.getId() != null) return use.getId();
+    return null;
   }
 
   /**
@@ -301,13 +315,16 @@ public record ControlledModel(
       } catch (IllegalArgumentException e) {
         role = MsgRole.USER;
       }
-      var builder = Msg.builder().role(role).name(message.name()).textContent(message.content());
+      var builder = Msg.builder().role(role).name(message.name());
       if (role == MsgRole.TOOL && message.toolCallId() != null) {
+        // 工具结果必须以 ToolResultBlock 重建：既保持调用配对，也避免 textContent 再叠加一个 TextBlock。
         builder.content(
             ToolResultBlock.of(
                 message.toolCallId(),
                 message.name(),
                 TextBlock.builder().text(message.content()).build()));
+      } else {
+        builder.textContent(message.content());
       }
       result.add(builder.build());
     }
@@ -341,8 +358,8 @@ public record ControlledModel(
     var reqMessages = new ArrayList<GlassboxModels.PromptMessage>();
     if (messages != null) {
       for (Msg msg : messages) {
-        String text = msg.getTextContent();
-        if (text == null) text = "";
+        // 玻璃盒必须看到真实请求内容：工具调用参数与工具返回值同样是模型输入的一部分。
+        String text = expandBlocks(msg);
         var safe = SensitiveDataMasker.maskAndTruncate(text, 16_384);
         if (safe.truncated()) truncated = true;
         String role = msg.getRole() == null ? "USER" : msg.getRole().name();

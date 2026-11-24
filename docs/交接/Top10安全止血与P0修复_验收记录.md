@@ -546,3 +546,36 @@ mvn test
 | `ArchitectureGuardTest` | **5/5 通过** |
 
 **未实跑项**：未连接真实 MCP 服务器/真实用户审批 UI 做端到端回放（需要用户自己的 MCP 连接与交互），本次以单元测试锁定决策逻辑；未改前端，未执行前端门禁。
+---
+
+## Task 05/06 复核补修（源码复核发现的 3 处漏改）
+
+- **触发**：交付后逐行复核发现 Task 06 的 MCP 装配/审批链路与写路径作用域、Task 05 的输入校验与玻璃盒快照仍沿用旧实现。
+- **完成时间**：2026-11-24
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `infrastructure/agentscope/AgentScopeExecutor.java` | 抽出 `toolVersions(assemblyVersions, mcpRegistered)`：**只有真正注册了外部工具**才写 `ToolKind.MCP -> 1`，并用于 `AgentAssemblySnapshot.Components`；未装配 MCP 的节点不会暴露该工具（避免越权），已装配节点不再被 `beforeTool` 100% 拒绝 |
+| `infrastructure/agentscope/McpAgentTool.java` | 改调 `ToolGateway.execute` 的**带 `toolName` 重载**并显式传 `binding.exposedName()`（`mcp::<slug>::<tool>`），风险策略的 `startsWith("mcp::")` 才能真正命中，高危外部写操作必进 Gate 5.5 |
+| `infrastructure/agentscope/GatewayAgentTool.java` | 抽出 `writeTargets(inputPath, writePaths)`：多文件写入只取入参 `path`；单文件闭包才用节点**写**授权；**只读授权文件不再混入写入目标** |
+| `infrastructure/agentscope/ControlledModel.java` | 抽出 `expandBlocks(Msg)`/`toolCallIdOf(Msg)` 并复用于 `toContextMessages`、`verifyModelInput`（输入体积计入工具返回值）、`buildPayload`（玻璃盒呈现 `tool_use` 参数与 `tool_result` 输出）；`rebuild` 的 TOOL 分支改为 `if/else`，不再叠加多余 `TextBlock` |
+
+### 2. 必补测试
+
+| 测试类 | 用例数 | 覆盖 |
+| :--- | ---: | :--- |
+| `infrastructure/agentscope/McpAgentToolRiskChainTest`（新增） | 4 | 真实 `McpAgentTool → ToolGateway → ConservativeToolRiskPolicy`：高危写得到 `mcp::notes::create` + `HIGH` 并进入审批；低风险只读不进审批；缺参在本地被拒绝且不触达外部服务；指纹含工具名，不同工具同参数不互相拦截 |
+| `orchestration/McpApprovalLinkageTest`（新增） | 3 | 真实 `ToolGateway → 真实 ControlledAgentRuntime → 审批服务`：装配记录含 `MCP=1` 时 `beforeTool` 放行并按 `mcp::` 工具名 + HIGH 风险调用 `await`；装配记录无 `MCP` 时在 `beforeTool` 阶段即被拒绝且不触达审批 |
+| `infrastructure/agentscope/GatewayAgentToolWriteTargetsTest`（新增） | 4 | 只读授权含 `pom.xml`、本次写 `src/App.java` → `MEDIUM` 不误拦截；单文件闭包用写授权；写 `.env` → `HIGH`；无写授权时无目标 |
+| `agent/ControlledModelBlockExtractionTest`（扩展） | 6（+3） | `verifyModelInput` 计入工具输出；玻璃盒 payload 含 `tool_result` 输出与 `tool_use` 参数；重建的 TOOL 消息只有一个内容块 |
+
+### 3. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 640, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，完成于 2026-11-24 22:24:30） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| 迁移脚本 | 未改动 `db/migration/V1~V14`、`db/migration-pg/V1~V4` 任一字节 |

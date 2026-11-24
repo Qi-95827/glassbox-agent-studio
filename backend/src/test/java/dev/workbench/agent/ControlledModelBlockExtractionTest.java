@@ -89,6 +89,108 @@ class ControlledModelBlockExtractionTest {
   }
 
   @Test
+  void inputVerificationCountsToolOutputs() {
+    var captured = new AtomicReference<CompactionRequest>();
+    var messages =
+        List.of(
+            Msg.builder().role(MsgRole.USER).textContent("读取配置").build(),
+            toolUseMessage("call-v", "read_file", Map.of("path", "conf/app.properties")),
+            toolResultMessage("call-v", "唯一标记：tool-output-9f3c 的完整返回值"));
+    model(captured).stream(messages, List.of(), null).collectList().block();
+
+    var verify = org.mockito.ArgumentCaptor.forClass(String.class);
+    verify(runtime).verifyModelInput(verify.capture());
+    assertTrue(
+        verify.getValue().contains("tool-output-9f3c"), "输入体积校验必须计入工具返回值：" + verify.getValue());
+  }
+
+  @Test
+  void glassboxPayloadShowsToolOutputs() {
+    var captured = new AtomicReference<CompactionRequest>();
+    var messages =
+        List.of(
+            Msg.builder().role(MsgRole.USER).textContent("读取配置").build(),
+            toolUseMessage("call-g", "read_file", Map.of("path", "conf/app.properties")),
+            toolResultMessage("call-g", "唯一标记：glassbox-77aa 的工具输出"));
+    model(captured).stream(messages, List.of(), null).collectList().block();
+
+    var trace =
+        org.mockito.ArgumentCaptor.forClass(
+            dev.workbench.framework.trace.GlassboxModels.ModelCallPayload.class);
+    verify(runtime).modelTrace(trace.capture());
+    var rendered =
+        trace.getValue().requestMessages().stream()
+            .map(dev.workbench.framework.trace.GlassboxModels.PromptMessage::content)
+            .reduce("", (left, right) -> left + "\n" + right);
+    assertTrue(rendered.contains("glassbox-77aa"), "玻璃盒必须呈现工具返回值：" + rendered);
+    assertTrue(rendered.contains("tool_use"), "玻璃盒必须呈现工具调用参数：" + rendered);
+  }
+
+  @Test
+  void rebuiltToolResultHasExactlyOneContentBlock() {
+    var captured = new AtomicReference<CompactionRequest>();
+    when(delegate.getContextWindowSize()).thenReturn(100_000);
+    ContextCompactionHook hook =
+        request -> {
+          captured.set(request);
+          var updated = new ArrayList<ContextMessage>();
+          for (var message : request.messages()) {
+            if (message.toolResult()) {
+              updated.add(
+                  new ContextMessage(
+                      message.role(), message.name(), "[已卸载]", message.toolCallId()));
+              continue;
+            }
+            updated.add(message);
+          }
+          return new CompactionResult(
+              updated,
+              new ContextBreakdown(
+                  100_000,
+                  1_000,
+                  500,
+                  Map.of("TOOL_OUTPUTS", 500),
+                  dev.workbench.framework.context.CompactionTier.L1_TOOL_OFFLOAD,
+                  500,
+                  50,
+                  List.of("call-b"),
+                  "",
+                  List.of(),
+                  "",
+                  ""));
+        };
+    var controlled =
+        new ControlledModel(
+            delegate,
+            ModelMode.USER,
+            runtime,
+            new AtomicReference<>(),
+            error -> false,
+            hook,
+            CompactionScope.NONE,
+            new AtomicReference<>());
+    var messages =
+        List.of(
+            Msg.builder().role(MsgRole.USER).textContent("读取").build(),
+            toolUseMessage("call-b", "read_file", Map.of("path", "a.txt")),
+            toolResultMessage("call-b", "原始大段输出"));
+    var seen = new ArrayList<Msg>();
+    when(delegate.stream(anyList(), anyList(), any()))
+        .thenAnswer(
+            invocation -> {
+              seen.addAll(invocation.getArgument(0));
+              return Flux.just(ChatResponse.builder().build());
+            });
+
+    controlled.stream(messages, List.of(), null).collectList().block();
+
+    var rebuilt = seen.get(2);
+    assertEquals(
+        1, rebuilt.getContent().size(), "重建的工具结果只能有一个内容块，不能叠加 TextBlock：" + rebuilt.getContent());
+    assertNotNull(rebuilt.getFirstContentBlock(ToolResultBlock.class));
+  }
+
+  @Test
   void toolUseArgumentsAndToolResultOutputAreExtracted() {
     var captured = new AtomicReference<CompactionRequest>();
     var messages =

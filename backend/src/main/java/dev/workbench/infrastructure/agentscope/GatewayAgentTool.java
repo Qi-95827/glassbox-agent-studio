@@ -126,14 +126,27 @@ final class GatewayAgentTool<T> extends ToolBase {
    *
    * <p>只读调用不产生文件写入，直接返回空列表；写入调用把单文件闭包（授权清单即目标）与多文件入参 一并交给风险策略，避免只靠参数正文猜测目标。
    */
+  /**
+   * 收集本次调用的**真实写入目标**。
+   *
+   * <p>多文件写入用入参 {@code path} 定位本次目标；单文件闭包写入入参没有 path，才使用本次节点的写授权 路径。只读授权文件（如任务声明的 {@code
+   * pom.xml}）绝不能混入写入目标，否则普通代码写入会被 误判为高危并触发不必要的审批。
+   */
   private java.util.List<String> targetPaths(ToolEffect effect, Map<String, Object> input) {
     if (effect != ToolEffect.WRITE) return java.util.List.of();
-    var paths = new java.util.LinkedHashSet<String>();
-    if (context.writePaths() != null) paths.addAll(context.writePaths());
-    if (context.authorizedPaths() != null) paths.addAll(context.authorizedPaths());
-    if (input != null && input.get("path") instanceof String path && !path.isBlank())
-      paths.add(path);
-    return java.util.List.copyOf(paths);
+    Object path = input == null ? null : input.get("path");
+    return writeTargets(path instanceof String text ? text : null, context.writePaths());
+  }
+
+  /**
+   * 写入目标路径规则：多文件入参以 {@code path} 为准；单文件闭包才用节点写授权。
+   *
+   * <p>只读授权文件（任务声明的 {@code pom.xml}、{@code .env} 等）绝不能混入写入目标，否则一次普通代码 写入会被误判为高危并触发不必要的 Gate 5.5 审批。
+   */
+  static java.util.List<String> writeTargets(String inputPath, java.util.List<String> writePaths) {
+    if (inputPath != null && !inputPath.isBlank()) return java.util.List.of(inputPath);
+    if (writePaths == null || writePaths.isEmpty()) return java.util.List.of();
+    return java.util.List.copyOf(new java.util.LinkedHashSet<>(writePaths));
   }
 
   private static Map<String, Object> inputSchema(ToolSpecification<?> specification) {

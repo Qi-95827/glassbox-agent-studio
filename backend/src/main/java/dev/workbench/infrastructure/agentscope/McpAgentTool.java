@@ -54,8 +54,10 @@ final class McpAgentTool extends ToolBase {
     ToolEffect effect =
         "HIGH".equals(binding.riskLevel()) ? ToolEffect.WRITE : ToolEffect.READ_ONLY;
     var gateway = new ToolGateway(context.json(), context.runtime(), context.failure());
+    // 必须使用带 toolName 的重载：否则网关拿到的是枚举名 "MCP"，风险策略的 mcp:: 前缀判定失效。
     return gateway.execute(
         ToolKind.MCP,
+        binding.exposedName(),
         1,
         fingerprint(argsJson),
         argsJson,

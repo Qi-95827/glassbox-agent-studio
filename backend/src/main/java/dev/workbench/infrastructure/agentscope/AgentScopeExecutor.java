@@ -106,6 +106,23 @@ public class AgentScopeExecutor implements AgentExecutor {
   }
 
   /** 解析运行所属账号；仅供压缩上下文审计与 L1 产物隔离，解析失败不阻断执行。 */
+  /**
+   * 装配记录中的工具版本映射。
+   *
+   * <p>只有真正注册了外部工具的节点才写入 {@code ToolKind.MCP -> 1}：装配记录是运行时 {@code beforeTool}
+   * 的唯一授权依据，多写会让未装配的节点越权，少写则所有 MCP 调用都会被拒绝。
+   */
+  static java.util.Map<dev.workbench.domain.ToolKind, Integer> toolVersions(
+      java.util.Map<dev.workbench.domain.ToolKind, Integer> assemblyVersions,
+      boolean mcpRegistered) {
+    var versions =
+        new java.util.EnumMap<dev.workbench.domain.ToolKind, Integer>(
+            dev.workbench.domain.ToolKind.class);
+    if (assemblyVersions != null) versions.putAll(assemblyVersions);
+    if (mcpRegistered) versions.put(dev.workbench.domain.ToolKind.MCP, 1);
+    return java.util.Map.copyOf(versions);
+  }
+
   private String ownerScopeKey(String runId) {
     if (runId == null || runId.isBlank() || ownership == null) return null;
     var service = ownership.getIfAvailable();
@@ -195,6 +212,8 @@ public class AgentScopeExecutor implements AgentExecutor {
             : tools.assemblePrivate(assembly.privateTools(), toolContext);
     var mcpProvider = mcpProviders == null ? null : mcpProviders.getIfAvailable();
     var mcpManager = mcpClients == null ? null : mcpClients.getIfAvailable();
+    // 只有真正注册了外部工具的节点才在装配记录中暴露 ToolKind.MCP，否则运行时 beforeTool 会误判越权。
+    boolean mcpRegistered = false;
     if (mcpProvider != null && mcpManager != null && request.context().runId() != null) {
       for (var binding : mcpProvider.bindingsForRun(request.context().runId())) {
         String name = binding.exposedName();
@@ -208,10 +227,16 @@ public class AgentScopeExecutor implements AgentExecutor {
               "未装配外部工具 " + name + "：" + admission.reason());
           continue;
         }
-        if (toolkit.getTool(name) == null)
+        if (toolkit.getTool(name) == null) {
           toolkit.registerAgentTool(new McpAgentTool(binding, mcpManager, toolContext));
+          mcpRegistered = true;
+        }
       }
     }
+    if (mcpRegistered)
+      runtime.event(
+          dev.workbench.domain.EventType.TOOL_STARTED, "已装配外部 MCP 工具（版本 1），写操作仍须 Gate 5.5 审批。");
+    var toolVersions = toolVersions(assembly.toolVersions(), mcpRegistered);
     var selectedModel = models.select(effectiveRequest);
     if (!(selectedModel.client().nativeClient() instanceof Model nativeModel))
       throw new IllegalStateException(
@@ -255,7 +280,7 @@ public class AgentScopeExecutor implements AgentExecutor {
             null,
             MAX_FRAMEWORK_RETRIES,
             selectedSkills.stream().map(skill -> skill.reference()).toList(),
-            assembly.toolVersions(),
+            toolVersions,
             authorization,
             new AgentAssemblySnapshot.Input(
                 AgentAssemblySnapshot.sha256(goal), request.context().sources()),
