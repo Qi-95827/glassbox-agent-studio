@@ -23,6 +23,8 @@ final class UserModelConnectionFactory {
             .apiKey(connection.apiKey())
             .baseUrl(connection.baseUrl())
             .modelName(connection.modelName())
+            // 未设置窗口时 SDK 返回 0，生产链路会永久跳过四级压缩。
+            .contextWindowSize(ModelContextWindows.forModel(connection.modelName()))
             .stream(false)
             // 传输层禁止 302 自动跟随，防止已校验的公网 Base URL 被重定向到内网地址。
             .httpTransport(ModelHttpTransports.hardened(CONNECT_TIMEOUT))

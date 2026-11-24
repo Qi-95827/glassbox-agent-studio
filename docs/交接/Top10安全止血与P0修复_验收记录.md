@@ -396,3 +396,82 @@ mvn test
 1. **PostgreSQL 专项**：本机 Docker 守护进程未运行，`WORKBENCH_PG_TEST=true` 未执行；`V4` 索引脚本与「pgvector 下推不加载 embedding」的 PG 路径需在具备 PG 16 + pgvector 的环境验证。
 2. **前端门禁**：未改前端，未执行。
 3. **监控看板聚合**：`MonitoringDashboardService.timeSeries` 的 `O(B*N)` 嵌套循环与 `range=all` 全量拉取属于审计 `P-04` 的其余子项，不在本 Task 规格列举范围内，未改动。
+---
+
+## Task 05 · 修复生产链路四级上下文压缩失效与 OpenAI HTTP 400 协议破坏
+
+- **对应审计编号**：`F-01`
+- **完成时间**：2026-11-24
+
+### 1. 改动文件清单（严格限定本 Task 范围）
+
+**主代码**
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `framework/context/ContextMessage.java` | 新增 `originalIndex`（压缩后可精确还原原始 SDK 消息）与 `toolCall()` 判定；保留 4 参/2 参兼容构造 |
+| `framework/context/CompactionRequest.java` | 新增 `previousCheckpoint`（上一轮 L2 检查点）与 `withPreviousCheckpoint()`；保留 7/8/9/10 参兼容构造 |
+| `infrastructure/agentscope/ControlledModel.java` | `toContextMessages()` 完整遍历 `ContentBlock`：TextBlock 正文、ToolUseBlock 名称/参数 JSON、ToolResultBlock 输出文本；逐条记录原始下标。`rebuild()` 改为按下标精确复用原始 `Msg`（保留全部结构化块），被改写/新生成的消息才重建，工具结果带原 `callId`。压缩时带入/回写同一运行的结构化检查点；预算停止仍穿透不被吞掉 |
+| `infrastructure/agentscope/AgentScopeExecutor.java` | 为每次装配创建共享的检查点持有器 `AtomicReference<String>` |
+| `control/MultiTierContextCompactor.java` | ①`estimate()` 中英混排：ASCII 按 /4、非 ASCII 按 1.5 token/字符；②新增 `alignCut()`，L2/L3 切分点不得落在「assistant(tool_use)」与「TOOL 结果」之间；③L2 检查点与新通知只插入首段 SYSTEM 之后（首条 USER 之前），并替换旧检查点；④L3 新增已处理集合与「压缩后确实变小」判定，工具结果只缩短不删除、带 tool_use 的 assistant 不单删，杜绝单条消息空转 200 次；⑤L1 卸载提示删除不存在的幽灵工具名 `context_artifact_read`；⑥`previousCheckpointIndex` 兼容已提升到头部的检查点，避免叠加两个 |
+| `infrastructure/model/ModelContextWindows.java`（新增） | 上下文窗口推断：已知模型族（DeepSeek/Qwen/GLM/OpenAI/Claude 等）取保守上限，未知与自定义端点取可配置默认值 128000，支持 `workbench.model.context-window` 全局覆盖，**永不返回 0** |
+| `infrastructure/model/UserModelConnectionFactory.java`、`DeepSeekModelFactory.java` | 构建模型时显式设置 `contextWindowSize(...)`，生产链路不再永久跳过压缩 |
+
+**测试**
+
+| 文件 | 说明 |
+| :--- | :--- |
+| `.../control/MultiTierContextCompactorToolPairingTest.java`（新增） | 工具原子组、SYSTEM 位置、L3 终止、中文估算、检查点继承 5 例 |
+| `.../agent/ControlledModelBlockExtractionTest.java`（新增） | 块展开、按下标还原、改写结果保持配对 3 例 |
+| `.../infrastructure/model/ModelContextWindowsTest.java`（新增） | 窗口推断与配置覆盖 4 例 |
+| `MultiTierContextCompactorTest`、`MultiTierContextCompactorQueryAwareTest`（适配） | 检查点位置改为「首条 USER 之前」，断言改为按角色查找；未放宽语义 |
+
+### 2. 修复要点
+
+1. **结构化块不再丢失**：此前只取 `getTextContent()`，`tool_use` 的参数与 `tool_result` 的输出完全不可见，压缩既低估体积也看不到工具语义；现在完整展开并记录原始下标。
+2. **精准还原**：旧实现用「角色 + 正文」队列复用 `Msg`，两条相同正文会串位；现在按下标复用，改写消息才重建，工具结果仍带原 `callId`。
+3. **窗口非零**：`contextWindowSize` 从未设置 → SDK 返回 0 → 压缩整体跳过；现在按模型族给出保守上限，未知端点用可配置默认值。
+4. **中文估算**：中文按 1.5 token/字符，避免纯中文会话被低估 3~6 倍后只能靠供应商 400 兜底。
+5. **工具原子组**：L2/L3 的切分点与淘汰对象都遵守「调用 + 结果」不可分割，杜绝孤儿 `TOOL` 触发 400。
+6. **L3 不再空转**：已处理集合 + 体积收益判定，单条消息最多裁剪一次。
+7. **协议合规**：检查点与硬保护通知只出现在首条 USER 之前。
+8. **增量摘要**：同一运行内上一轮 L2 结构化检查点会被带入下一轮并合并，避免每轮从零重写。
+9. **无幽灵工具**：L1 提示只保留 Artifact 引用号，不再诱导模型调用不存在的工具。
+
+### 3. 红线自检
+
+| 红线 | 自检结论 |
+| :--- | :--- |
+| 1 双轨数据库架构 | 未涉及 |
+| 2 历史 Flyway 迁移 | 未改任何迁移脚本 |
+| 3 ArchUnit 守卫 | 5/5 通过；未新增顶层包；`framework/context` 只新增 record 组件 |
+| 4 评估与 UI 资产 | 未触碰 |
+| 5 前端产品设计 | 未改前端 |
+| 6 范围纪律 | 未改公开 API 路径；`ContextMessage`/`CompactionRequest` 均保留旧构造器 |
+| 7 假修复 | 无 `@Disabled`；两个既有测试的断言改为「按角色查找首条 USER」，语义未放宽 |
+| 8 单任务全量回归 | 全量 `mvn test` 全绿后继续 |
+| 9 未实跑项 | 未连真实 OpenAI/DeepSeek 端点验证 400 是否消失（需真实密钥）；见第 5 节 |
+| 10 敏感凭据 | 未读取/输出/提交 `config/*` 与 `data/` |
+| 11 git push | 仅本地提交 |
+| 12 代码质量 | 全部改动经 `google-java-format 1.28.0`；注释说明协议约束与降级边界 |
+
+### 4. 新增/修改测试类与核心正反例
+
+| 测试类 | 用例数 | 正常正例 | 异常/协议反例 |
+| :--- | ---: | :--- | :--- |
+| `MultiTierContextCompactorToolPairingTest` | 5 | L2 后每个 TOOL 都有匹配调用；L3 在逐步收紧的预算下最终触发；中文估算落在 1.2~2 倍字符数区间；带入旧检查点仍能压缩 | L2/L3 后不得出现孤儿 TOOL 或无结果调用；首条 USER 之后不得出现 SYSTEM；同一消息不得重复叠加 `[HardGuard excerpt]`；极小消息不可压缩时不得空转（通知至多 2 条） |
+| `ControlledModelBlockExtractionTest` | 3 | tool_use 名称/参数与 tool_result 输出都被提取，原始下标记录正确；相同正文的两条消息按各自对象还原 | 被改写的工具结果必须重建为带原 `callId` 的 `ToolResultBlock`，否则调用/结果失配 |
+| `ModelContextWindowsTest` | 4 | 已知模型族得到非零窗口；未知/自定义端点得到默认 128000 | 显式覆盖优先；`0`/负数配置被忽略，绝不返回 0 |
+
+### 5. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 612, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，3:56 min，完成于 2026-11-24 13:38:44） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| 本 Task 新增测试类 | `MultiTierContextCompactorToolPairingTest` 5、`ControlledModelBlockExtractionTest` 3、`ModelContextWindowsTest` 4 |
+
+**未实跑项**：
+1. 未用真实 OpenAI/DeepSeek 端点回放「工具配对破坏导致 HTTP 400」的场景（需要真实密钥与外网）；协议合规性由单元测试从消息序列层面守护。
+2. 未改动前端，未执行前端门禁。

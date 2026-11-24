@@ -15,6 +15,7 @@ import java.util.List;
  * @param focusQuery 当前任务目标/问题，用于 Query-Aware 摘录；为空时自动取最后一条 USER 消息
  * @param summarizer 可选 L2 结构化摘要实现；为空时降级为本地关键句与实体抽取
  * @param scope 运行归属、BYOK 连接与用量回调；后台线程没有会话，必须由运行上下文显式透传
+ * @param previousCheckpoint 上一轮 L2 产出的结构化检查点；同一运行内连续调用时带入，供增量合并
  */
 public record CompactionRequest(
     List<ContextMessage> messages,
@@ -26,7 +27,8 @@ public record CompactionRequest(
     double l3Threshold,
     String focusQuery,
     CompactionSummarizer summarizer,
-    CompactionScope scope) {
+    CompactionScope scope,
+    String previousCheckpoint) {
   public CompactionRequest {
     messages = messages == null ? List.of() : List.copyOf(messages);
     if (contextLimit < 1) throw new IllegalArgumentException("上下文窗口上限必须为正数。");
@@ -37,6 +39,36 @@ public record CompactionRequest(
         && l3Threshold < 1)) throw new IllegalArgumentException("压缩水位必须满足 0 < L1 < L2 < L3 < 1。");
     focusQuery = focusQuery == null ? "" : focusQuery.strip();
     scope = scope == null ? CompactionScope.NONE : scope;
+    previousCheckpoint =
+        previousCheckpoint == null || previousCheckpoint.isBlank()
+            ? ""
+            : previousCheckpoint.strip();
+  }
+
+  /** 兼容既有十参调用（尚未带入上一轮检查点）。 */
+  public CompactionRequest(
+      List<ContextMessage> messages,
+      int contextLimit,
+      int recencyTurns,
+      int offloadAfterTurns,
+      double l1Threshold,
+      double l2Threshold,
+      double l3Threshold,
+      String focusQuery,
+      CompactionSummarizer summarizer,
+      CompactionScope scope) {
+    this(
+        messages,
+        contextLimit,
+        recencyTurns,
+        offloadAfterTurns,
+        l1Threshold,
+        l2Threshold,
+        l3Threshold,
+        focusQuery,
+        summarizer,
+        scope,
+        "");
   }
 
   /** 兼容既有七参调用；目标问题由 {@link #of} 自动推导。 */
@@ -58,7 +90,8 @@ public record CompactionRequest(
         l3Threshold,
         lastUserMessage(messages),
         null,
-        CompactionScope.NONE);
+        CompactionScope.NONE,
+        "");
   }
 
   public CompactionRequest(
@@ -80,7 +113,8 @@ public record CompactionRequest(
         l3Threshold,
         focusQuery,
         null,
-        CompactionScope.NONE);
+        CompactionScope.NONE,
+        "");
   }
 
   public CompactionRequest(
@@ -103,7 +137,8 @@ public record CompactionRequest(
         l3Threshold,
         focusQuery,
         summarizer,
-        CompactionScope.NONE);
+        CompactionScope.NONE,
+        "");
   }
 
   public static CompactionRequest of(List<ContextMessage> messages, int contextLimit) {
@@ -117,14 +152,15 @@ public record CompactionRequest(
         0.92,
         lastUserMessage(messages),
         null,
-        CompactionScope.NONE);
+        CompactionScope.NONE,
+        "");
   }
 
   /** 生产装配使用：同时携带运行归属，避免后台线程回退到 LOCAL 默认连接。 */
   public static CompactionRequest of(
       List<ContextMessage> messages, int contextLimit, CompactionScope scope) {
     return new CompactionRequest(
-        messages, contextLimit, 4, 2, 0.60, 0.78, 0.92, lastUserMessage(messages), null, scope);
+        messages, contextLimit, 4, 2, 0.60, 0.78, 0.92, lastUserMessage(messages), null, scope, "");
   }
 
   /** 生产装配可注入真实摘要器，同时保留意图聚焦。 */
@@ -139,7 +175,8 @@ public record CompactionRequest(
         l3Threshold,
         focusQuery,
         value,
-        scope);
+        scope,
+        previousCheckpoint);
   }
 
   /** 绑定运行归属；未显式绑定时保持空上下文。 */
@@ -154,6 +191,23 @@ public record CompactionRequest(
         l3Threshold,
         focusQuery,
         summarizer,
+        value,
+        previousCheckpoint);
+  }
+
+  /** 带入同一运行上一轮的 L2 结构化检查点，供增量合并。 */
+  public CompactionRequest withPreviousCheckpoint(String value) {
+    return new CompactionRequest(
+        messages,
+        contextLimit,
+        recencyTurns,
+        offloadAfterTurns,
+        l1Threshold,
+        l2Threshold,
+        l3Threshold,
+        focusQuery,
+        summarizer,
+        scope,
         value);
   }
 

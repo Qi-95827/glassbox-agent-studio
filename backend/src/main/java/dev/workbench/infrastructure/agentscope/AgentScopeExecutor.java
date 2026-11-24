@@ -220,7 +220,9 @@ public class AgentScopeExecutor implements AgentExecutor {
                 request.context().runId(),
                 ownerScopeKey(request.context().runId()),
                 request.modelConnectionId(),
-                runtime::auxiliaryModelUsage));
+                runtime::auxiliaryModelUsage),
+            // 同一运行内的连续模型调用共享上一轮 L2 结构化检查点，供增量合并。
+            new java.util.concurrent.atomic.AtomicReference<>());
     var authorization =
         new AgentAssemblySnapshot.Authorization(
             1,

@@ -34,6 +34,8 @@ final class DeepSeekModelFactory {
           .apiKey(key)
           .baseUrl("https://api.deepseek.com")
           .modelName("deepseek-flash")
+          // 不设置窗口会让 SDK 返回 0，四级压缩被整体跳过；显式给出保守上限。
+          .contextWindowSize(ModelContextWindows.forModel("deepseek-flash"))
           .formatter(new DeepSeekFormatter())
           .stream(false)
           .generateOptions(GenerateOptions.builder().parallelToolCalls(false).build())

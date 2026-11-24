@@ -53,10 +53,16 @@ class MultiTierContextCompactorTest {
         result.breakdown().appliedTier() == CompactionTier.L2_SLIDING_SUMMARY
             || result.breakdown().appliedTier() == CompactionTier.L3_HARD_GUARD);
     assertTrue(result.messages().getFirst().content().contains("系统规则"));
-    assertTrue(result.messages().get(1).content().contains("任务目标"));
+    // 检查点插在首条 USER 之前；任务目标仍是第一条 USER 消息。
     assertTrue(
         result.messages().stream()
-            .anyMatch(message -> message.content().contains("上下文压缩检查点")));
+            .filter(message -> "USER".equals(message.role()))
+            .findFirst()
+            .orElseThrow()
+            .content()
+            .contains("任务目标"));
+    assertTrue(
+        result.messages().stream().anyMatch(message -> message.content().contains("上下文压缩检查点")));
     // 最近四轮完整保留：至少 4 条 Assistant 消息仍在尾部。
     long assistants =
         result.messages().stream().filter(message -> "ASSISTANT".equals(message.role())).count();
@@ -67,13 +73,11 @@ class MultiTierContextCompactorTest {
   void l3HardGuardNeverLeavesTheOldestToolPairsUnbounded() {
     var messages = conversation(20, 3_000);
     var result =
-        compactor.evaluateAndCompact(
-            new CompactionRequest(messages, 500, 4, 2, 0.60, 0.78, 0.92));
+        compactor.evaluateAndCompact(new CompactionRequest(messages, 500, 4, 2, 0.60, 0.78, 0.92));
     assertEquals(CompactionTier.L3_HARD_GUARD, result.breakdown().appliedTier());
     assertTrue(result.messages().size() < messages.size());
     assertTrue(
-        result.messages().stream()
-            .anyMatch(message -> message.content().contains("上下文硬保护")));
+        result.messages().stream().anyMatch(message -> message.content().contains("上下文硬保护")));
   }
 
   private static List<ContextMessage> conversation(int rounds, int toolChars) {

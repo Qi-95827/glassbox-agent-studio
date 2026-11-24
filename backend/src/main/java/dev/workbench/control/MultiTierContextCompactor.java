@@ -127,12 +127,23 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     return limit < 1 ? 0 : (double) tokens / limit;
   }
 
-  /** 与评测 Runner 同口径的保守 Token 估算（字符/4）。 */
+  /**
+   * 保守 Token 估算：ASCII 约 4 字符/token，非 ASCII（中文、全角标点）按 1.5 token/字符。
+   *
+   * <p>旧实现统一按字符/4 估算，一段纯中文会被低估 3~6 倍：水位迟迟不触发，真正超限时只能靠供应商 返回 400。中英混排按各自口径分别累加，宁可略微高估也不低估。
+   */
   static int estimate(List<ContextMessage> messages) {
     long total = 0;
     for (var message : messages) {
-      int chars = message.content() == null ? 0 : message.content().length();
-      total += Math.max(1, (chars + 3L) / 4L);
+      String content = message.content() == null ? "" : message.content();
+      long ascii = 0;
+      long wide = 0;
+      for (int index = 0; index < content.length(); index++) {
+        if (content.charAt(index) < 0x80) ascii++;
+        else wide++;
+      }
+      // 中文按 1.5 token/字符（(wide*3+1)/2 为四舍五入的整数写法）。
+      total += Math.max(1, (ascii + 3L) / 4L + (wide * 3L + 1L) / 2L);
     }
     return (int) Math.min(Integer.MAX_VALUE, Math.max(0, total));
   }
@@ -267,7 +278,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
         .append(original.content().length())
         .append(", lines=")
         .append(lines)
-        .append(", use context_artifact_read if needed]\n");
+        .append(", 可按 artifactRef 回查]\n");
     text.append("[ArtifactRef: ")
         .append(ref)
         .append(", 已保留最相关 ")
@@ -318,26 +329,63 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     int pinnedEnd = pinnedEnd(messages);
     int recencyStart = Math.max(pinnedEnd, roundStart(messages, request.recencyTurns()));
     if (recencyStart <= pinnedEnd) return SummaryResult.unchanged(messages);
+    // 切分点必须落在工具调用原子组的边界：绝不让 assistant(tool_use) 与其 TOOL 结果分处两侧。
+    recencyStart = Math.max(pinnedEnd, alignCut(messages, recencyStart));
 
     int previousIndex = previousCheckpointIndex(messages, pinnedEnd, recencyStart);
-    int middleStart = previousIndex < 0 ? pinnedEnd : previousIndex + 1;
+    int middleStart =
+        Math.max(pinnedEnd, alignCut(messages, previousIndex < 0 ? pinnedEnd : previousIndex + 1));
+    recencyStart = Math.max(middleStart, recencyStart);
     var middle = messages.subList(middleStart, recencyStart);
     String previous = previousIndex < 0 ? "" : messages.get(previousIndex).content();
-    if (middle.isEmpty() && previous.isBlank()) return SummaryResult.unchanged(messages);
+    // 同一运行上一轮的结构化检查点参与增量合并，避免每轮都从零重写。
+    String inherited = request.previousCheckpoint();
+    if (inherited != null && !inherited.isBlank())
+      previous = previous.isBlank() ? inherited : inherited + "\n\n" + previous;
+    if (middle.isEmpty()) return SummaryResult.unchanged(messages);
 
     String summary = summarize(request, focus, previous, middle);
     if (summary.isBlank()) summary = fallbackCheckpoint(focus, previous, middle);
     if (summary.isBlank()) return SummaryResult.unchanged(messages);
 
-    var updated = new ArrayList<ContextMessage>();
-    updated.addAll(messages.subList(0, previousIndex < 0 ? pinnedEnd : previousIndex));
-    updated.add(new ContextMessage("SYSTEM", null, summary, null));
+    // 检查点只能出现在首条 USER 之前：严格角色序列模型不接受中途插入 SYSTEM。
+    // 旧检查点必须一并替换掉（无论它已经在头部还是仍在中间），否则同一轮会出现两个检查点。
+    int prefixEnd = previousIndex < 0 ? middleStart : Math.max(previousIndex, pinnedEnd);
+    var head = new ArrayList<ContextMessage>(prefixEnd);
+    for (int index = 0; index < prefixEnd; index++) {
+      if (index == previousIndex) continue;
+      head.add(messages.get(index));
+    }
+    int insertAt = Math.min(leadingSystemEnd(messages), head.size());
+    head.add(insertAt, new ContextMessage("SYSTEM", null, summary, null));
+    var updated = new ArrayList<ContextMessage>(head);
     updated.addAll(messages.subList(recencyStart, messages.size()));
     return new SummaryResult(updated, summary, summary, true);
   }
 
+  /** 首段连续 SYSTEM 的结束位置；检查点与硬保护通知只能插在这里，保证首条 USER 之前没有新 SYSTEM。 */
+  private static int leadingSystemEnd(List<ContextMessage> messages) {
+    int index = 0;
+    while (index < messages.size() && "SYSTEM".equals(messages.get(index).role())) index++;
+    return index;
+  }
+
+  /**
+   * 把切分点左移到工具调用原子组的边界。
+   *
+   * <p>若切分点上正好是 TOOL 结果，说明它的 assistant(tool_use) 会被留在另一侧；左移直到该位置不再是 TOOL。这样任何一侧都只会包含完整的「调用 + 结果」组。
+   */
+  static int alignCut(List<ContextMessage> messages, int cut) {
+    int index = Math.max(0, Math.min(cut, messages.size()));
+    while (index > 0 && index < messages.size() && messages.get(index).toolResult()) index--;
+    return index;
+  }
+
   private static int previousCheckpointIndex(List<ContextMessage> messages, int from, int to) {
-    for (int index = to - 1; index >= from; index--) {
+    // 从列表头部开始找：上一轮可能已把检查点提升到首条 USER 之前，只从 pinnedEnd 起找会漏掉它，
+    // 从而在同一轮里叠加出第二个检查点。只有带检查点标记的 SYSTEM 才会命中。
+    for (int index = to - 1; index >= 0; index--) {
+      if (index < from && index >= leadingSystemEnd(messages)) continue;
       var message = messages.get(index);
       if ("SYSTEM".equals(message.role())
           && message.content() != null
@@ -506,17 +554,24 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     var working = new ArrayList<>(messages);
     int pinnedEnd = pinnedEnd(working);
     int recencyStart = Math.max(pinnedEnd, roundStart(working, 1));
+    recencyStart = Math.max(pinnedEnd, alignCut(working, recencyStart));
     if (recencyStart <= pinnedEnd) {
       recencyStart = working.size();
     }
     boolean changed = false;
     int safeLimit = Math.max(1, (int) (request.contextLimit() * 0.90));
+    // 已处理过的消息不再重复挑选：旧实现在单条消息上反复叠加前缀，体积不减时空转 200 次。
+    var processed =
+        java.util.Collections.newSetFromMap(
+            new java.util.IdentityHashMap<ContextMessage, Boolean>());
     for (int guard = 0; guard < 200 && estimate(working) > safeLimit; guard++) {
-      int candidate = lowestValueIndex(working, pinnedEnd, recencyStart, focus);
+      int candidate = lowestValueIndex(working, pinnedEnd, recencyStart, focus, processed);
       if (candidate < 0) break;
       var message = working.get(candidate);
-      if (message.toolCallId() != null) {
-        int remaining = Math.max(400, (safeLimit - estimate(working)) * 4);
+      int before = estimate(working);
+      if (message.toolResult()) {
+        // 工具结果只缩短不删除：删掉它会让对应的 assistant(tool_use) 变成孤儿并触发 400。
+        int remaining = Math.max(400, (safeLimit - before) * 4);
         var excerpt = selectExcerpts(message.content(), focus, Math.max(400, remaining));
         String content =
             "[HardGuard excerpt: chars="
@@ -525,10 +580,22 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
                 + excerpt.windows().size()
                 + " 段]\n"
                 + renderExcerptBody(excerpt);
-        working.set(
-            candidate,
-            new ContextMessage(message.role(), message.name(), content, message.toolCallId()));
+        var shrunk =
+            new ContextMessage(message.role(), message.name(), content, message.toolCallId());
+        working.set(candidate, shrunk);
+        if (estimate(working) >= before) {
+          // 已经足够短：还原并标记，继续处理下一条，绝不在同一条上反复叠加。
+          working.set(candidate, message);
+          processed.add(message);
+          continue;
+        }
+        processed.add(shrunk);
       } else {
+        if (message.toolCall()) {
+          // assistant(tool_use) 不能单删：它的结果消息会变成孤儿。
+          processed.add(message);
+          continue;
+        }
         working.remove(candidate);
         if (recencyStart > candidate) recencyStart--;
       }
@@ -540,7 +607,11 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
   }
 
   private static int lowestValueIndex(
-      List<ContextMessage> messages, int pinnedEnd, int recencyStart, String focus) {
+      List<ContextMessage> messages,
+      int pinnedEnd,
+      int recencyStart,
+      String focus,
+      java.util.Set<ContextMessage> processed) {
     int candidate = -1;
     double lowest = Double.MAX_VALUE;
     var inputs = new ArrayList<HybridRanker.Input>();
@@ -548,6 +619,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     for (int index = pinnedEnd; index < Math.min(recencyStart, messages.size()); index++) {
       var message = messages.get(index);
       if ("SYSTEM".equals(message.role())) continue;
+      if (processed.contains(message)) continue;
       if (message.content() == null || message.content().isBlank()) {
         offsets.add(index);
         inputs.add(new HybridRanker.Input("m" + index, "", 0));
@@ -580,7 +652,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
           && message.content() != null
           && message.content().contains(HARD_GUARD_MARK)) return;
     }
-    int at = Math.min(pinnedEnd(messages), messages.size());
+    int at = Math.min(leadingSystemEnd(messages), messages.size());
     messages.add(
         at,
         new ContextMessage(

@@ -6,7 +6,6 @@ import dev.workbench.framework.context.CompactionRequest;
 import dev.workbench.framework.context.CompactionTier;
 import dev.workbench.framework.context.ContextMessage;
 import java.util.ArrayList;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /** Phase 4：L1 Query-Aware 摘录、L2 增量锚点合并与 Artifact 引用。 */
@@ -65,8 +64,7 @@ class MultiTierContextCompactorQueryAwareTest {
         compactor.evaluateAndCompact(
             new CompactionRequest(messages, (int) (total / 0.92), 1, 1, 0.60, 0.80, 0.95));
     assertTrue(
-        first.messages().stream()
-            .anyMatch(message -> message.content().contains("cn-north-1")),
+        first.messages().stream().anyMatch(message -> message.content().contains("cn-north-1")),
         "首轮检查点必须保留区域事实");
 
     var extended = new ArrayList<>(first.messages());
@@ -102,7 +100,10 @@ class MultiTierContextCompactorQueryAwareTest {
       messages.add(new ContextMessage("ASSISTANT", "assistant " + index));
       messages.add(
           new ContextMessage(
-              "TOOL", "read_authorized_file", "line " + index + " " + "x".repeat(2_000), "pair-" + index));
+              "TOOL",
+              "read_authorized_file",
+              "line " + index + " " + "x".repeat(2_000),
+              "pair-" + index));
     }
     var result =
         compactor.evaluateAndCompact(
@@ -117,12 +118,10 @@ class MultiTierContextCompactorQueryAwareTest {
     }
     assertEquals(toolIds.size(), toolIds.stream().distinct().count(), "工具调用与结果保持成对唯一");
     assertTrue(
-        result.messages().stream()
-            .anyMatch(message -> message.content().contains("系统规则")),
+        result.messages().stream().anyMatch(message -> message.content().contains("系统规则")),
         "System 规则不得被裁剪");
     assertTrue(
-        result.messages().stream()
-            .anyMatch(message -> message.content().contains("【上下文硬保护】")));
+        result.messages().stream().anyMatch(message -> message.content().contains("【上下文硬保护】")));
   }
 
   private static String blob(int index, String needle, boolean inject) {
@@ -131,7 +130,10 @@ class MultiTierContextCompactorQueryAwareTest {
     int target = 1_200;
     while (builder.length() < 2_400) {
       if (inject && builder.length() >= target) builder.append(needle).append('\n');
-      builder.append("line ").append(builder.length()).append(": routine inspection without mutation\n");
+      builder
+          .append("line ")
+          .append(builder.length())
+          .append(": routine inspection without mutation\n");
     }
     return builder.substring(0, 2_400);
   }

@@ -25,7 +25,6 @@ import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolSchema;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
@@ -44,14 +43,15 @@ public record ControlledModel(
     AtomicReference<RuntimeException> failure,
     Predicate<Throwable> rateLimitRejection,
     ContextCompactionHook compactionHook,
-    CompactionScope compactionScope)
+    CompactionScope compactionScope,
+    AtomicReference<String> incrementalCheckpoint)
     implements Model {
   public ControlledModel(
       Model delegate,
       ModelMode mode,
       AgentRuntime runtime,
       AtomicReference<RuntimeException> failure) {
-    this(delegate, mode, runtime, failure, error -> false, null, CompactionScope.NONE);
+    this(delegate, mode, runtime, failure, error -> false, null, CompactionScope.NONE, null);
   }
 
   public ControlledModel(
@@ -60,7 +60,7 @@ public record ControlledModel(
       AgentRuntime runtime,
       AtomicReference<RuntimeException> failure,
       Predicate<Throwable> rateLimitRejection) {
-    this(delegate, mode, runtime, failure, rateLimitRejection, null, CompactionScope.NONE);
+    this(delegate, mode, runtime, failure, rateLimitRejection, null, CompactionScope.NONE, null);
   }
 
   public ControlledModel(
@@ -71,7 +71,33 @@ public record ControlledModel(
       Predicate<Throwable> rateLimitRejection,
       ContextCompactionHook compactionHook) {
     this(
-        delegate, mode, runtime, failure, rateLimitRejection, compactionHook, CompactionScope.NONE);
+        delegate,
+        mode,
+        runtime,
+        failure,
+        rateLimitRejection,
+        compactionHook,
+        CompactionScope.NONE,
+        null);
+  }
+
+  public ControlledModel(
+      Model delegate,
+      ModelMode mode,
+      AgentRuntime runtime,
+      AtomicReference<RuntimeException> failure,
+      Predicate<Throwable> rateLimitRejection,
+      ContextCompactionHook compactionHook,
+      CompactionScope compactionScope) {
+    this(
+        delegate,
+        mode,
+        runtime,
+        failure,
+        rateLimitRejection,
+        compactionHook,
+        compactionScope,
+        null);
   }
 
   public String getModelName() {
@@ -168,15 +194,22 @@ public record ControlledModel(
   /**
    * 调用四级压缩并把结果映射回 AgentScope 消息。
    *
-   * <p>未修改的消息复用原对象，保留 think/tool_use 等结构化块；被压缩的工具结果重建为带原 callId 的 ToolResultBlock，确保工具调用与结果仍然成对。
+   * <p>保留下来的消息按 {@code originalIndex} 精确复用原对象，{@code tool_use}/{@code tool_result} 等结构化
+   * 块不会丢失；只有被压缩器改写或新生成的文本才重建消息。上一轮 L2 检查点会被带入下一轮做增量合并。
    */
   private Compacted compact(List<Msg> messages) {
     try {
       var scope = compactionScope.withUsage(runtime::auxiliaryModelUsage);
-      var result =
-          compactionHook.compact(
-              CompactionRequest.of(
-                  toContextMessages(messages), delegate.getContextWindowSize(), scope));
+      String previous = incrementalCheckpoint == null ? "" : incrementalCheckpoint.get();
+      var request =
+          CompactionRequest.of(toContextMessages(messages), delegate.getContextWindowSize(), scope);
+      if (previous != null && !previous.isBlank())
+        request = request.withPreviousCheckpoint(previous);
+      var result = compactionHook.compact(request);
+      if (incrementalCheckpoint != null) {
+        String anchors = result.breakdown().structuredAnchors();
+        if (anchors != null && !anchors.isBlank()) incrementalCheckpoint.set(anchors);
+      }
       return new Compacted(rebuild(messages, result.messages()), result.breakdown());
     } catch (dev.workbench.framework.control.StopExecution stop) {
       // 预算/取消类停止信号不能被“压缩失败即降级”吞掉。
@@ -187,38 +220,79 @@ public record ControlledModel(
     }
   }
 
+  /**
+   * 把 SDK 消息完整展开为可压缩文本，并记录原始下标。
+   *
+   * <p>只取 {@code getTextContent()} 会丢掉 {@code ToolUseBlock} 的名称/参数与 {@code ToolResultBlock}
+   * 的返回值：上下文估算严重偏低、压缩看不到工具语义、玻璃盒快照也无法还原。
+   */
   private static List<ContextMessage> toContextMessages(List<Msg> messages) {
     var result = new ArrayList<ContextMessage>(messages.size());
-    for (var message : messages) {
-      String text = message.getTextContent() == null ? "" : message.getTextContent();
+    for (int index = 0; index < messages.size(); index++) {
+      var message = messages.get(index);
       String toolCallId = null;
-      var toolResult = message.getFirstContentBlock(ToolResultBlock.class);
-      if (toolResult != null) toolCallId = toolResult.getId();
-      if (toolCallId == null) {
-        var toolUse = message.getFirstContentBlock(ToolUseBlock.class);
-        if (toolUse != null) toolCallId = toolUse.getId();
+      var text = new StringBuilder();
+      if (message.getContent() != null) {
+        for (ContentBlock block : message.getContent()) {
+          if (block instanceof TextBlock textBlock) {
+            if (textBlock.getText() != null) text.append(textBlock.getText());
+            continue;
+          }
+          if (block instanceof ToolUseBlock use) {
+            if (toolCallId == null) toolCallId = use.getId();
+            Object input = use.getInput();
+            String args = input == null ? "{}" : String.valueOf(TRACE_JSON.valueToTree(input));
+            text.append("[tool_use name=")
+                .append(use.getName())
+                .append(" id=")
+                .append(use.getId())
+                .append(" args=")
+                .append(args)
+                .append("]\n");
+            continue;
+          }
+          if (block instanceof ToolResultBlock toolResult) {
+            if (toolCallId == null) toolCallId = toolResult.getId();
+            text.append("[tool_result id=").append(toolResult.getId()).append("] ");
+            if (toolResult.getOutput() != null) {
+              for (ContentBlock output : toolResult.getOutput()) {
+                if (output instanceof TextBlock outputText && outputText.getText() != null)
+                  text.append(outputText.getText());
+                else text.append("[block ").append(output.getClass().getSimpleName()).append(']');
+              }
+            }
+            text.append('\n');
+            continue;
+          }
+          // 其他块（图片/思考等）保留类型标记，避免估算与玻璃盒完全失明。
+          text.append("[block ").append(block.getClass().getSimpleName()).append(']');
+        }
       }
+      if (toolCallId == null && message.getTextContent() != null && text.isEmpty())
+        text.append(message.getTextContent());
       result.add(
           new ContextMessage(
               message.getRole() == null ? "USER" : message.getRole().name(),
               message.getName(),
-              text,
-              toolCallId));
+              text.toString(),
+              toolCallId,
+              index));
     }
     return result;
   }
 
+  /**
+   * 逐条还原压缩后的消息。
+   *
+   * <p>优先按下标复用原始 {@code Msg}（保留全部结构化块）；只有被改写或新生成的消息才重新构建， 并且工具结果会带原 {@code callId}
+   * 重建，确保调用与结果仍然成对。旧实现用「角色 + 正文」队列复用， 相同正文的相邻消息会串位。
+   */
   private static List<Msg> rebuild(List<Msg> original, List<ContextMessage> compacted) {
-    var reusable = new LinkedHashMap<String, java.util.ArrayDeque<Msg>>();
-    for (var message : original) {
-      String key = key(message.getRole() == null ? "" : message.getRole().name(), text(message));
-      reusable.computeIfAbsent(key, ignored -> new java.util.ArrayDeque<>()).add(message);
-    }
     var result = new ArrayList<Msg>(compacted.size());
     for (var message : compacted) {
-      var queue = reusable.get(key(message.role(), message.content()));
-      if (queue != null && !queue.isEmpty()) {
-        result.add(queue.removeFirst());
+      Integer index = message.originalIndex();
+      if (index != null && index >= 0 && index < original.size()) {
+        result.add(original.get(index));
         continue;
       }
       MsgRole role;
@@ -238,14 +312,6 @@ public record ControlledModel(
       result.add(builder.build());
     }
     return result;
-  }
-
-  private static String text(Msg message) {
-    return message.getTextContent() == null ? "" : message.getTextContent();
-  }
-
-  private static String key(String role, String text) {
-    return role + '\u0000' + text;
   }
 
   private record Compacted(List<Msg> messages, ContextBreakdown breakdown) {}
