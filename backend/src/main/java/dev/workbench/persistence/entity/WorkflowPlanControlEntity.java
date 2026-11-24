@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 运行级调试控制：执行模式（单步教学 / 并发）与节点断点集合。 */
 @Entity
@@ -17,7 +18,7 @@ public class WorkflowPlanControlEntity {
   @Column(name = "execution_mode", length = 30, nullable = false)
   private String executionMode;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "breakpoints_json", nullable = false)
   private String breakpointsJson;
 

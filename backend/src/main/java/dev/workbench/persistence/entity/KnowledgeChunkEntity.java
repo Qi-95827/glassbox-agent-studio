@@ -3,14 +3,15 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * 知识库分块与向量正文。
  *
- * <p>{@code content} 使用 TEXT/CLOB 保存原文片段；{@code embedding_json} 是跨库兼容的浮点数组，
- * PostgreSQL Profile 另有 {@code embedding_vec vector(1536)} 与 HNSW 索引用于下推检索。
+ * <p>{@code content} 使用 TEXT/CLOB 保存原文片段；{@code embedding_json} 是跨库兼容的浮点数组， PostgreSQL Profile 另有
+ * {@code embedding_vec vector(1536)} 与 HNSW 索引用于下推检索。
  */
 @Entity
 @Table(name = "knowledge_chunks")
@@ -31,14 +32,14 @@ public class KnowledgeChunkEntity {
   @Column(name = "section_title", length = 300)
   private String sectionTitle;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "content", nullable = false)
   private String content;
 
   @Column(name = "token_estimate", nullable = false)
   private int tokenEstimate;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "embedding_json")
   private String embeddingJson;
 

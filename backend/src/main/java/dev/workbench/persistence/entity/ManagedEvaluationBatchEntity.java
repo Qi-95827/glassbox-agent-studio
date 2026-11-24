@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 绑定实际数据集版本、评测配置与预算的批次。 */
 @Entity
@@ -23,7 +24,7 @@ public class ManagedEvaluationBatchEntity {
   @Column(name = "definition_sha256", nullable = false, length = 64)
   private String definitionSha256;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "config_json", nullable = false)
   private String configJson;
 

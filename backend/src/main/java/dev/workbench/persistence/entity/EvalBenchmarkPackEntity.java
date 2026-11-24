@@ -141,8 +141,7 @@ public class EvalBenchmarkPackEntity {
     this.updatedAt = at;
   }
 
-  public void downloaded(
-      String localPath, String sha256, long sizeBytes, String at) {
+  public void downloaded(String localPath, String sha256, long sizeBytes, String at) {
     this.status = "DOWNLOADED";
     this.localPath = localPath;
     this.sha256 = sha256;

@@ -3,11 +3,12 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 /** 四类入口的交付物、生效验收条件和提示。主键即 task_id，一个任务一份。 */
@@ -15,6 +16,7 @@ import org.springframework.data.domain.Persistable;
 @Table(name = "task_entry_policies")
 public class EntryPolicyEntity implements Persistable<String> {
   @Transient private boolean isNew = true;
+
   @Id
   @Column(name = "task_id", length = 36)
   private String taskId;
@@ -22,15 +24,15 @@ public class EntryPolicyEntity implements Persistable<String> {
   @Column(name = "policy_version", nullable = false)
   private int policyVersion;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "deliverables_json", nullable = false)
   private String deliverablesJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "acceptance_json", nullable = false)
   private String acceptanceJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "warnings_json")
   private String warningsJson;
 

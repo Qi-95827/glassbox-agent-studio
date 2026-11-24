@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 用户私有 MCP Server；headers/env 仅保存加密密文。 */
 @Entity
@@ -35,11 +36,11 @@ public class UserMcpServerEntity {
   @Column(name = "endpoint_url", length = 500)
   private String endpointUrl;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "headers_cipher")
   private String headersCipher;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "env_cipher")
   private String envCipher;
 

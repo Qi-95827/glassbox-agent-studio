@@ -3,12 +3,13 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
 import org.hibernate.annotations.Immutable;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 /** 不可变评测套件版本；发布后新增新版本，不覆盖历史定义。 */
@@ -28,7 +29,7 @@ public class EvaluationSuiteVersionEntity implements Persistable<String> {
   @Column(name = "version", nullable = false)
   private int version;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "definition_json", nullable = false)
   private String definitionJson;
 

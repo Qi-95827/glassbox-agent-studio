@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 单题真实执行轨迹、断言明细与双轨裁判结果。 */
 @Entity
@@ -47,23 +48,23 @@ public class EvalLabCaseResultEntity {
   @Column(name = "judge_score")
   private Double judgeScore;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "metrics_json", nullable = false)
   private String metricsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "assertions_json", nullable = false)
   private String assertionsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "judge_verdict_json")
   private String judgeVerdictJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "trace_snapshot_json")
   private String traceSnapshotJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "raw_output")
   private String rawOutput;
 

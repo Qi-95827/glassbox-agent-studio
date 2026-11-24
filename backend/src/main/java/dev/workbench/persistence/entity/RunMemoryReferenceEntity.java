@@ -52,15 +52,7 @@ public class RunMemoryReferenceEntity implements Persistable<RunMemoryReferenceE
 
   public RunMemoryReferenceEntity(
       String runId, int sequenceNo, String memoryId, int memoryVersion, MemoryCategory category) {
-    this(
-        runId,
-        sequenceNo,
-        memoryId,
-        memoryVersion,
-        category,
-        MemoryType.SEMANTIC,
-        0,
-        null);
+    this(runId, sequenceNo, memoryId, memoryVersion, category, MemoryType.SEMANTIC, 0, null);
   }
 
   public RunMemoryReferenceEntity(

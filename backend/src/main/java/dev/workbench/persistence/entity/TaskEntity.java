@@ -14,6 +14,7 @@ import org.springframework.data.domain.Persistable;
 @Table(name = "tasks")
 public class TaskEntity implements Persistable<String> {
   @Transient private boolean isNew = true;
+
   @Id
   @Column(name = "id", length = 36)
   private String id;

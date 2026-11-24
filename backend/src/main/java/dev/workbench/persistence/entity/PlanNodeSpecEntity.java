@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 已物化候选节点的文件范围、产出契约和验收条件；运行只能使用这里声明的读写集合。 */
 @Entity
@@ -23,19 +24,19 @@ public class PlanNodeSpecEntity {
   @Column(name = "candidate_sha256", nullable = false, length = 64)
   private String candidateSha256;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "read_files_json", nullable = false)
   private String readFilesJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "write_files_json", nullable = false)
   private String writeFilesJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "outputs_json", nullable = false)
   private String outputsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "acceptance_json", nullable = false)
   private String acceptanceJson;
 

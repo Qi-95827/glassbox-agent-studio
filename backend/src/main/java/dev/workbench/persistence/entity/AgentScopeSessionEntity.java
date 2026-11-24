@@ -4,24 +4,25 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
 import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.Objects;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * AgentScope 会话状态表 agentscope_sessions 的映射。
  *
- * <p>沿用框架原有复合键和 JSON 文本格式：session_id 是 {@code 用户命名空间:会话ID}，单值状态使用
- * item_index=0，列表状态每个元素一行，列表哈希另存为 {@code 状态键:_hash}。时间列由数据库默认值维护。
+ * <p>沿用框架原有复合键和 JSON 文本格式：session_id 是 {@code 用户命名空间:会话ID}，单值状态使用 item_index=0，列表状态每个元素一行，列表哈希另存为
+ * {@code 状态键:_hash}。时间列由数据库默认值维护。
  */
 @Entity
 @Table(name = "agentscope_sessions")
 public class AgentScopeSessionEntity {
   @EmbeddedId private Id id;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "state_data", nullable = false)
   private String stateData;
 
@@ -36,7 +37,8 @@ public class AgentScopeSessionEntity {
 
   protected AgentScopeSessionEntity() {}
 
-  public AgentScopeSessionEntity(String sessionId, String stateKey, int itemIndex, String data, long version) {
+  public AgentScopeSessionEntity(
+      String sessionId, String stateKey, int itemIndex, String data, long version) {
     this.id = new Id(sessionId, stateKey, itemIndex);
     this.stateData = data;
     this.version = version;

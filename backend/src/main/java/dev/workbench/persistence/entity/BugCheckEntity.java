@@ -3,11 +3,12 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 /** Bug 检测记录；逐用例结果单独存在 {@code bug_check_cases}。 */
@@ -35,7 +36,7 @@ public class BugCheckEntity implements Persistable<String> {
   @Column(name = "status", length = 30, nullable = false)
   private String status;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "output")
   private String output;
 

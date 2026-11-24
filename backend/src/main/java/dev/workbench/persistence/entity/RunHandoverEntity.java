@@ -10,8 +10,8 @@ import jakarta.persistence.Transient;
 import org.springframework.data.domain.Persistable;
 
 /**
- * 暂停运行的人工接手记录。每次接手新增一行；历史行保留，只有 ACTIVE 行可以交还。
- * evidence_invalidated 一旦在 RETURNED 行上为真，后续无改动接手不会清除重新验证要求。
+ * 暂停运行的人工接手记录。每次接手新增一行；历史行保留，只有 ACTIVE 行可以交还。 evidence_invalidated 一旦在 RETURNED
+ * 行上为真，后续无改动接手不会清除重新验证要求。
  */
 @Entity
 @Table(name = "run_handovers")
@@ -128,10 +128,7 @@ public class RunHandoverEntity implements Persistable<String> {
 
   /** 交还时记录当前指纹和是否失效；说明为空时保留原说明。 */
   public void markReturned(
-      String currentFingerprint,
-      boolean evidenceInvalidated,
-      String note,
-      String returnedAt) {
+      String currentFingerprint, boolean evidenceInvalidated, String note, String returnedAt) {
     this.status = "RETURNED";
     this.currentFingerprint = currentFingerprint;
     this.evidenceInvalidated = evidenceInvalidated;

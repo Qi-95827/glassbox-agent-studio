@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 待确认计划的一次候选调整；应用后保留历史版本供差异查看。 */
 @Entity
@@ -26,7 +27,7 @@ public class PlanAdjustmentEntity {
   @Column(name = "base_sha256", nullable = false, length = 64)
   private String baseSha256;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "proposal_json", nullable = false)
   private String proposalJson;
 

@@ -27,7 +27,7 @@ public class PrivateAgentVersionEntity {
   @Column(name = "description", nullable = false, length = 300)
   private String description;
 
-  @Column(name = "responsibility", nullable = false, columnDefinition = "CLOB")
+  @Column(name = "responsibility", nullable = false)
   private String responsibility;
 
   @Column(name = "output_requirements", length = 2000)
@@ -45,7 +45,7 @@ public class PrivateAgentVersionEntity {
   @Column(name = "model_strategy", nullable = false, length = 20)
   private String modelStrategy;
 
-  @Column(name = "components_json", nullable = false, columnDefinition = "CLOB")
+  @Column(name = "components_json", nullable = false)
   private String componentsJson;
 
   @Column(name = "spec_sha256", nullable = false, length = 64)

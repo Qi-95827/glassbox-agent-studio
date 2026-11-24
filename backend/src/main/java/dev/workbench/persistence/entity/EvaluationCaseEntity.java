@@ -43,12 +43,7 @@ public class EvaluationCaseEntity implements Persistable<String> {
   protected EvaluationCaseEntity() {}
 
   public EvaluationCaseEntity(
-      String id,
-      String batchId,
-      String caseCode,
-      int sequenceNo,
-      String status,
-      String updatedAt) {
+      String id, String batchId, String caseCode, int sequenceNo, String status, String updatedAt) {
     this.id = id;
     this.batchId = batchId;
     this.caseCode = caseCode;

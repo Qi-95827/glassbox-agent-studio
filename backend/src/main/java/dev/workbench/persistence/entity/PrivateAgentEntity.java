@@ -28,7 +28,7 @@ public class PrivateAgentEntity implements Persistable<String> {
   @Column(name = "description", nullable = false, length = 300)
   private String description;
 
-  @Column(name = "responsibility", nullable = false, columnDefinition = "CLOB")
+  @Column(name = "responsibility", nullable = false)
   private String responsibility;
 
   @Column(name = "output_requirements", length = 2000)

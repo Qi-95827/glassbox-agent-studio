@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * L1 上下文卸载产物：完整正文落盘，消息体内只保留 ArtifactRef 与高相关摘录。
@@ -27,14 +28,14 @@ public class ContextArtifactEntity {
   @Column(name = "title", nullable = false, length = 300)
   private String title;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "content", nullable = false)
   private String content;
 
   @Column(name = "char_count", nullable = false)
   private int charCount;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "outline_json")
   private String outlineJson;
 

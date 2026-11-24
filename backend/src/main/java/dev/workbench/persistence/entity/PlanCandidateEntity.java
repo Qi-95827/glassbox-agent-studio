@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * 运行创建前的规划候选。
@@ -44,7 +45,7 @@ public class PlanCandidateEntity {
   @Column(name = "input_sha256", nullable = false, length = 64)
   private String inputSha256;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "input_json", nullable = false)
   private String inputJson;
 
@@ -53,31 +54,31 @@ public class PlanCandidateEntity {
   private String workspaceFingerprint;
 
   /** 规划时每个授权文件的 SHA-256；确认运行时逐项复核。 */
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "file_versions_json")
   private String fileVersionsJson;
 
   @Column(name = "candidate_sha256", length = 64)
   private String candidateSha256;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "candidate_json")
   private String candidateJson;
 
   /** 已解析的节点 Agent 版本与选择理由；确认和执行不重新猜测。 */
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "agent_bindings_json")
   private String agentBindingsJson;
 
   /** 发起规划时冻结的 P1 短引用与精确版本；响应和确认不能改用更新版本。 */
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "agent_aliases_json")
   private String agentAliasesJson;
 
   @Column(name = "status", nullable = false, length = 20)
   private String status;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "errors_json")
   private String errorsJson;
 

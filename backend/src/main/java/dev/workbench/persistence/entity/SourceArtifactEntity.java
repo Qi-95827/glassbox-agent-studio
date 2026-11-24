@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 接入待确认任务的既有成果来源与版本证据。 */
 @Entity
@@ -35,11 +36,11 @@ public class SourceArtifactEntity {
   @Column(name = "summary", nullable = false, length = 500)
   private String summary;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "content")
   private String content;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "file_versions_json")
   private String fileVersionsJson;
 

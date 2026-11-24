@@ -9,7 +9,6 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
@@ -63,7 +62,7 @@ public class MemoryRecordEntity implements Persistable<String> {
   @Column(name = "path_patterns_json", nullable = false, length = 2000)
   private String pathPatternsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "embedding_json")
   private String embeddingJson;
 

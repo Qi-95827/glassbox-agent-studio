@@ -13,6 +13,7 @@ import org.springframework.data.domain.Persistable;
 @Table(name = "audit_events")
 public class AuditEventEntity implements Persistable<String> {
   @Transient private boolean isNew = true;
+
   @Id
   @Column(name = "id", length = 36, nullable = false)
   private String id;

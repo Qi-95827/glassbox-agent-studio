@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 任务创建时冻结的目录授权、排除规则和展开后的有效文件集合。 */
 @Entity
@@ -17,19 +18,19 @@ public class TaskWorkspaceScopeEntity {
   @Column(name = "workspace_id", nullable = false, length = 36)
   private String workspaceId;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "directory_scopes_json", nullable = false)
   private String directoryScopesJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "excluded_paths_json", nullable = false)
   private String excludedPathsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "explicit_files_json", nullable = false)
   private String explicitFilesJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "effective_files_json", nullable = false)
   private String effectiveFilesJson;
 

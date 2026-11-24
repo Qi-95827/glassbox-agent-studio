@@ -43,7 +43,7 @@ public class PlanNodeAgentBindingEntity implements Persistable<String> {
   @Column(name = "display_name", nullable = false, length = 120)
   private String displayName;
 
-  @Column(name = "components_json", columnDefinition = "CLOB")
+  @Column(name = "components_json")
   private String componentsJson;
 
   @Column(name = "created_at", nullable = false, length = 40)

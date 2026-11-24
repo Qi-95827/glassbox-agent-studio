@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 单次工具调用的入参、ToolGateway 安检明细与完整结果（脱敏后存储）。 */
 @Entity
@@ -17,15 +18,15 @@ public class ToolCallTraceEntity {
   @Column(name = "run_id", length = 36, nullable = false)
   private String runId;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "input_args_json")
   private String inputArgsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "gateway_checks_json")
   private String gatewayChecksJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "full_result")
   private String fullResult;
 

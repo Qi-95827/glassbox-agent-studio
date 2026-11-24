@@ -3,25 +3,39 @@ package dev.workbench.infrastructure.vector;
 import dev.workbench.framework.memory.MemoryVectorIndex;
 import java.util.List;
 import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * PostgreSQL + pgvector 记忆向量索引。
  *
- * <p>只有当 JDBC 元数据确认为 PostgreSQL 时启用；H2 默认测试自动走内存精确余弦。
- * 所有 SQL 都带 {@code workspace_id = ?} 与 {@code status = 'ACTIVE'}，从数据库层面杜绝跨工作区
- * 与候选记忆泄露。
+ * <p>只有当 JDBC 元数据确认为 PostgreSQL 时启用；H2 默认测试自动走内存精确余弦。 所有 SQL 都带 {@code workspace_id = ?} 与 {@code
+ * status = 'ACTIVE'}，从数据库层面杜绝跨工作区 与候选记忆泄露。
+ *
+ * <p>向量列固定为基线声明的维度（当前 {@code vector(1536)}）。模型维度不一致时写入会回滚外层事务， 因此先探测声明维度：不一致或数据库拒绝时只记 WARN
+ * 并跳过向量列，记忆正文与 {@code embedding_json} 仍然落库。召回查询可按配置放宽 HNSW 候选池。
  */
 @Component
 public class JdbcMemoryVectorIndex implements MemoryVectorIndex {
+  private static final Logger LOG = LoggerFactory.getLogger(JdbcMemoryVectorIndex.class);
+  private static final String TABLE = "memory_records";
+  private static final String VECTOR_COLUMN = "embedding_vec";
+
   private final JdbcTemplate jdbc;
   private final DataSource dataSource;
+  private final int efSearch;
   private volatile Boolean postgres;
+  private volatile int declaredDimension;
 
-  public JdbcMemoryVectorIndex(DataSource dataSource) {
+  public JdbcMemoryVectorIndex(
+      DataSource dataSource, @Value("${workbench.vector.hnsw.ef-search:100}") int efSearch) {
     this.dataSource = dataSource;
     this.jdbc = new JdbcTemplate(dataSource);
+    this.efSearch = efSearch;
   }
 
   @Override
@@ -45,28 +59,49 @@ public class JdbcMemoryVectorIndex implements MemoryVectorIndex {
   @Override
   public void store(String workspaceId, String memoryId, String modelName, float[] embedding) {
     if (!available() || embedding == null || embedding.length == 0) return;
-    jdbc.update(
-        "UPDATE memory_records SET embedding_vec = ?::vector, embedding_model = ?"
-            + " WHERE id = ? AND workspace_id = ? AND status = 'ACTIVE'",
-        literal(embedding),
-        modelName,
-        memoryId,
-        workspaceId);
+    int dimension = columnDimension();
+    if (dimension > 0 && dimension != embedding.length) {
+      LOG.warn(
+          "记忆向量维度与数据库列声明不一致，跳过向量列写入：期望 {}，实际 {}，模型 {}", dimension, embedding.length, modelName);
+      return;
+    }
+    try {
+      jdbc.update(
+          "UPDATE memory_records SET embedding_vec = ?::vector, embedding_model = ?"
+              + " WHERE id = ? AND workspace_id = ? AND status = 'ACTIVE'",
+          literal(embedding),
+          modelName,
+          memoryId,
+          workspaceId);
+    } catch (RuntimeException e) {
+      // 失败不能回滚外层记忆回填事务；embedding_json 仍可支撑内存余弦降级。
+      LOG.warn("记忆向量列写入失败，已保留 embedding_json 并降级为词法召回：{}", e.getMessage());
+    }
+  }
+
+  private int columnDimension() {
+    int cached = declaredDimension;
+    if (cached > 0) return cached;
+    synchronized (this) {
+      if (declaredDimension <= 0)
+        declaredDimension = PgVectorSupport.declaredDimension(jdbc, TABLE, VECTOR_COLUMN);
+      return declaredDimension;
+    }
   }
 
   @Override
-  public List<VectorHit> nearest(
-      String workspaceId, String modelName, float[] query, int limit) {
+  @Transactional(readOnly = true)
+  public List<VectorHit> nearest(String workspaceId, String modelName, float[] query, int limit) {
     if (!available() || query == null || query.length == 0) return List.of();
     try {
+      PgVectorSupport.applyEfSearch(jdbc, efSearch);
       String vector = literal(query);
       var rows =
           jdbc.query(
               "SELECT id, 1 - (embedding_vec <=> ?::vector) AS cosine FROM memory_records"
                   + " WHERE workspace_id = ? AND status = 'ACTIVE' AND embedding_model = ?"
                   + " AND embedding_vec IS NOT NULL ORDER BY embedding_vec <=> ?::vector LIMIT ?",
-              (rs, index) ->
-                  new VectorHit(rs.getString("id"), clamp(rs.getDouble("cosine"))),
+              (rs, index) -> new VectorHit(rs.getString("id"), clamp(rs.getDouble("cosine"))),
               vector,
               workspaceId,
               modelName,

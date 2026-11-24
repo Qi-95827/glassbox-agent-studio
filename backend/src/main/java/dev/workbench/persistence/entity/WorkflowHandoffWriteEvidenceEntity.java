@@ -4,10 +4,11 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
 import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.io.Serializable;
 import java.util.Objects;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "workflow_handoff_write_evidence")
@@ -17,7 +18,7 @@ public class WorkflowHandoffWriteEvidenceEntity {
   @Column(name = "tool_version", nullable = false)
   private Integer toolVersion;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "resource_version")
   private String resourceVersion;
 

@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 有界反思回边及其已触发次数；运行计划只允许审查节点回指直接上游。 */
 @Entity
@@ -29,7 +30,7 @@ public class PlanRevisionEdgeEntity {
   @Column(name = "revision_count", nullable = false)
   private int revisionCount;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "last_verdict_json")
   private String lastVerdictJson;
 

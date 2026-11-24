@@ -9,10 +9,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
 import org.springframework.data.domain.Persistable;
 
-/**
- * 推送或合并的交付请求。批准时绑定的远端地址摘要、源提交和待合入提交保留在行内，
- * 执行前由服务重新核对。
- */
+/** 推送或合并的交付请求。批准时绑定的远端地址摘要、源提交和待合入提交保留在行内， 执行前由服务重新核对。 */
 @Entity
 @Table(name = "git_delivery_requests")
 public class GitDeliveryRequestEntity implements Persistable<String> {

@@ -37,7 +37,7 @@ public class PrivateSkillEntity implements Persistable<String> {
   @Column(name = "output_contract", length = 1000)
   private String outputContract;
 
-  @Column(name = "content_md", nullable = false, columnDefinition = "CLOB")
+  @Column(name = "content_md", nullable = false)
   private String contentMd;
 
   @Column(name = "draft_sha256", nullable = false, length = 64)

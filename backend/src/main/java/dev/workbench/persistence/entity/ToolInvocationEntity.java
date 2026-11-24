@@ -2,8 +2,9 @@ package dev.workbench.persistence.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "tool_invocations")
@@ -26,7 +27,7 @@ public class ToolInvocationEntity extends InvocationEntity {
   @Column(name = "tool_version")
   private Integer toolVersion;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "resource_version")
   private String resourceVersion;
 

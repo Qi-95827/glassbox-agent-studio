@@ -34,7 +34,7 @@ public class WorkflowAttemptEntity {
   @Column(name = "revision_index", nullable = false)
   private int revisionIndex;
 
-  @Column(name = "critic_verdict_json", columnDefinition = "CLOB")
+  @Column(name = "critic_verdict_json")
   private String criticVerdictJson;
 
   protected WorkflowAttemptEntity() {}

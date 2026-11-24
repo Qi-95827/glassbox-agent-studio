@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 单次模型调用的完整请求与响应透视快照（脱敏后存储）。 */
 @Entity
@@ -17,26 +18,26 @@ public class ModelCallPayloadEntity {
   @Column(name = "run_id", length = 36, nullable = false)
   private String runId;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "request_messages_json")
   private String requestMessagesJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "request_tools_json")
   private String requestToolsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "response_content")
   private String responseContent;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "response_tool_calls_json")
   private String responseToolCallsJson;
 
   @Column(name = "truncated", nullable = false)
   private boolean truncated;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "context_breakdown_json")
   private String contextBreakdownJson;
 

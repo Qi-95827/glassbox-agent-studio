@@ -3,11 +3,12 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 /** 模拟 Bug 的原始描述、来源版本、提交序号、重复链和分诊结论。 */
@@ -29,15 +30,15 @@ public class BugIntakeEntity implements Persistable<String> {
   @Column(name = "source_version", nullable = false)
   private int sourceVersion;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "original_description", nullable = false)
   private String originalDescription;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "bug_description", nullable = false)
   private String bugDescription;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "expected_symptom", nullable = false)
   private String expectedSymptom;
 

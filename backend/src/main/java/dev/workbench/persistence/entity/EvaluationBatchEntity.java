@@ -3,11 +3,12 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 /** 评测批次；套件定义快照和实际预算配置随行保存。 */
@@ -32,7 +33,7 @@ public class EvaluationBatchEntity implements Persistable<String> {
   @Column(name = "finished_at", length = 40)
   private String finishedAt;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "definition_json")
   private String definitionJson;
 
@@ -42,7 +43,7 @@ public class EvaluationBatchEntity implements Persistable<String> {
   @Column(name = "suite_version")
   private Integer suiteVersion;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "config_json")
   private String configJson;
 

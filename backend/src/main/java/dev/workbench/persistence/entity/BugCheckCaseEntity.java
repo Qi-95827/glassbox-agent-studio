@@ -4,13 +4,14 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
 import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Lob;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
 import java.io.Serializable;
 import java.util.Objects;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 /** 检测的逐用例结果；复合主键与数据库一致，顺序号保留解析顺序。 */
@@ -27,7 +28,7 @@ public class BugCheckCaseEntity implements Persistable<BugCheckCaseEntity.Id> {
   @Column(name = "result", length = 30, nullable = false)
   private String result;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "message")
   private String message;
 

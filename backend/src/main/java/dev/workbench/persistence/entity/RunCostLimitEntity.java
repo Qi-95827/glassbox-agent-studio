@@ -44,11 +44,7 @@ public class RunCostLimitEntity {
   protected RunCostLimitEntity() {}
 
   public RunCostLimitEntity(
-      String runId,
-      long maxCostMicros,
-      String priceVersionId,
-      String createdAt,
-      String updatedAt) {
+      String runId, long maxCostMicros, String priceVersionId, String createdAt, String updatedAt) {
     this(runId, maxCostMicros, priceVersionId, null, createdAt, updatedAt);
   }
 

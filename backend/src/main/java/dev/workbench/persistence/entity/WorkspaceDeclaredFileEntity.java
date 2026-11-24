@@ -8,10 +8,7 @@ import jakarta.persistence.Table;
 import java.io.Serializable;
 import java.util.Objects;
 
-/**
- * 用户显式声明的补充文件。复合主键沿用 (workspace_id, path)；保存使用合并语义，
- * 同一路径再次声明时更新摘要、来源和时间。
- */
+/** 用户显式声明的补充文件。复合主键沿用 (workspace_id, path)；保存使用合并语义， 同一路径再次声明时更新摘要、来源和时间。 */
 @Entity
 @Table(name = "workspace_declared_files")
 public class WorkspaceDeclaredFileEntity {

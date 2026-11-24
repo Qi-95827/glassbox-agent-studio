@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** Eval Lab V2 批次：冻结实验配置、六维汇总与预算/耗时。 */
 @Entity
@@ -26,18 +27,18 @@ public class EvalLabRunEntity {
   @Column(name = "source_key", length = 80)
   private String sourceKey;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "categories_json", nullable = false)
   private String categoriesJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "config_json", nullable = false)
   private String configJson;
 
   @Column(name = "config_sha256", nullable = false, length = 64)
   private String configSha256;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "summary_json")
   private String summaryJson;
 
@@ -188,7 +189,8 @@ public class EvalLabRunEntity {
     this.totalDurationMs = Math.max(0, duration);
   }
 
-  public void finish(String status, String summaryJson, double cost, int tokens, long duration, String error) {
+  public void finish(
+      String status, String summaryJson, double cost, int tokens, long duration, String error) {
     this.status = status;
     this.summaryJson = summaryJson;
     this.totalCostUsd = Math.max(0, cost);

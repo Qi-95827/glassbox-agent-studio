@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 一次任务创建实际采用的规则路由与解释。 */
 @Entity
@@ -29,7 +30,7 @@ public class EntryRouteEntity {
   @Column(name = "template_version")
   private Integer templateVersion;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "explanation_json", nullable = false)
   private String explanationJson;
 

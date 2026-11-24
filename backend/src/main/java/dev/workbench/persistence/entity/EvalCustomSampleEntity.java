@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 自定义评测集的单个样本；setup / assertions / rubric 以 JSON 原样冻结。 */
 @Entity
@@ -26,19 +27,19 @@ public class EvalCustomSampleEntity {
   @Column(name = "title_en", length = 200)
   private String titleEn;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "prompt", nullable = false)
   private String prompt;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "setup_json", nullable = false)
   private String setupJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "assertions_json", nullable = false)
   private String assertionsJson;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "rubric_json", nullable = false)
   private String rubricJson;
 

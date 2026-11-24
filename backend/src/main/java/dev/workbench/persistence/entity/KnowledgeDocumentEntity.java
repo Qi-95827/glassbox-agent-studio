@@ -8,8 +8,8 @@ import jakarta.persistence.Table;
 /**
  * 工作区知识库文档。
  *
- * <p>以 {@code workspace_id + source_path + content_sha256} 去重；工作区归属是不可省略的检索边界，
- * 禁止跨工作区统计或召回。本文档不保存用户 API Key 或运行私密数据。
+ * <p>以 {@code workspace_id + source_path + content_sha256} 去重；工作区归属是不可省略的检索边界， 禁止跨工作区统计或召回。本文档不保存用户
+ * API Key 或运行私密数据。
  */
 @Entity
 @Table(name = "knowledge_documents")

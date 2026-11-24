@@ -222,3 +222,85 @@ mvn test
 | 本 Task 新增测试类 | `Task2IdorIntegrationTest` 5、`ContextArtifactOwnershipTest` 7、`ByokCompactionSummarizerTest` 5、`ControlledModelCompactionTest` 3、`LegacyKeyAccessTest` 6、`AuditActorTest` 4，全部 0 失败 |
 
 **未实跑项**：Task 02 不涉及数据库迁移与 pgvector，未运行 `WORKBENCH_PG_TEST=true`；未改动前端，未执行前端门禁。
+
+---
+
+## Task 03 · 修复 PostgreSQL + pgvector 运行期 JPA 崩溃与系统自检失败
+
+- **对应审计编号**：`F-02`
+- **完成时间**：2026-11-24
+
+### 1. 改动文件清单（严格限定本 Task 范围）
+
+**主代码**
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `backend/src/main/java/dev/workbench/persistence/entity/*.java`（33 个实体，69 处字段） | `@Lob` → `@JdbcTypeCode(SqlTypes.LONGVARCHAR)`；Hibernate 6 下同时兼容 H2 的 `CLOB` 与 PostgreSQL 的 `TEXT`，不再被 pgjdbc 当作 OID 大对象 |
+| `PlanNodeAgentBindingEntity`、`PrivateAgentEntity`、`PrivateAgentVersionEntity`、`PrivateSkillEntity`、`PrivateSkillVersionEntity`、`WorkflowAttemptEntity` | 移除硬编码 `columnDefinition = "CLOB"`（PostgreSQL 无此类型） |
+| `backend/src/main/java/dev/workbench/persistence/repository/SystemCatalogRepository.java` | 自检 SQL 改为 `LOWER(table_schema) = 'public'`，H2（`PUBLIC`）与 PostgreSQL（`public`）都能正确计数 |
+| `backend/src/main/java/dev/workbench/infrastructure/vector/PgVectorSupport.java`（新增） | 探测向量列声明维度、收敛 `hnsw.ef_search`、在事务内安全设置候选池 |
+| `backend/src/main/java/dev/workbench/infrastructure/vector/JdbcKnowledgeVectorIndex.java` | 写入前做维度一致校验；维度不一致或数据库拒绝时记 WARN 并跳过向量列，绝不回滚外层入库事务；召回支持 `hnsw.ef_search` |
+| `backend/src/main/java/dev/workbench/infrastructure/vector/JdbcMemoryVectorIndex.java` | 同上（记忆回填事务同样不能被向量写入打断） |
+| `backend/src/main/resources/db/migration-pg/V3__pg_legacy_migration_markers.sql`（新增） | 幂等补齐 `tool_budgets_v2`/`workflow_check_v1`/`workflow_plan_v1` 三条历史迁移标记，与 H2 保持一致 |
+
+**测试**
+
+| 文件 | 说明 |
+| :--- | :--- |
+| `.../infrastructure/vector/PgVectorSupportTest.java`（新增） | 维度探测、未知列处理、ef_search 收敛与失败降级 4 例 |
+| `.../infrastructure/vector/JdbcVectorIndexDegradationTest.java`（新增） | 写入/召回在 PG 方言故障下只降级不抛异常 3 例 |
+| `.../persistence/PostgresPgVectorIntegrationTest.java`（扩展） | 保留原 HNSW/隔离验证，新增迁移标记断言、`countPublicTables() > 10` 与 5 个实体 >10KB 中文长文本的 JPA 真实读写 |
+
+> **迁移编号说明**：Task 03 必须独立提交且 Flyway 版本号不可重复，因此本任务的 PG 历史标记使用
+> **`V3`**；原计划在 Task 04 落地的核心索引迁移顺延为 PG **`V4`**（H2 仍为 `V14`）。历史脚本
+> `db/migration/V1~V13`、`db/migration-pg/V1~V2` 一字节未改。
+
+### 2. 修复要点
+
+1. **长文本映射统一**：69 处 `@Lob String` 全部改为 `SqlTypes.LONGVARCHAR`，这是 Hibernate 6 下同时适配 H2 `CLOB` 与 PostgreSQL `TEXT` 的唯一稳妥写法；未改动任何历史迁移。
+2. **自检大小写**：`information_schema.tables` 的 schema 名在两种库中大小写不同，统一 `LOWER(...)` 比较，避免 PostgreSQL 恒判 0 表而 `SelfCheck` 报 FAIL。
+3. **向量写入安全降级**：写入前用 `pg_attribute + format_type` 读出列声明维度；不一致时 WARN 并保留 `embedding_json`；任何数据库异常都被限制在向量列，不打断文档入库与记忆回填事务。
+4. **召回质量**：`nearest()` 在只读事务内执行 `SET LOCAL hnsw.ef_search = N`（N 来自 `workbench.vector.hnsw.ef-search`，默认 100，收敛到 1~1000），缓解小工作区被 HNSW 过筛成 0 条的问题，且不污染连接池连接。
+
+### 3. 红线自检
+
+| 红线 | 自检结论 |
+| :--- | :--- |
+| 1 双轨数据库架构 | 保持 H2 默认 + PostgreSQL 16/pgvector 可选双轨；未引入独立向量库；未新增 `JdbcTemplate` 业务绕行（两个向量索引本就是既有 pgvector 通道） |
+| 2 历史 Flyway 迁移 | `db/migration/V1~V13`、`db/migration-pg/V1~V2` **一字节未改**；只新增 PG `V3` |
+| 3 ArchUnit 守卫 | 5/5 通过；未新增顶层包；实体仅新增 Hibernate 注解 |
+| 4 评估与 UI 资产 | 未触碰 |
+| 5 前端产品设计 | 未改前端 |
+| 6 范围纪律 | 未改公开 API；未顺手做索引/性能改造（留给 Task 04） |
+| 7 假修复 | 无 `@Disabled`/`@Ignore`；PG 测试保持环境变量门禁；没有把无法实跑的测试写成"已通过" |
+| 8 单任务全量回归 | 本 Task 全量 `mvn test` 全绿后才继续 |
+| 9 未实跑项 | 本机 Docker 守护进程未运行（`docker version` 报 `dockerDesktopLinuxEngine` 管道不存在），**PostgreSQL 集成测试未实跑** |
+| 10 敏感凭据 | 未读取/输出/提交 `config/*` 与 `data/` |
+| 11 git push | 仅本地提交 |
+| 12 代码质量 | 全部改动经 `google-java-format 1.28.0`；新增注释说明 H2/PG 差异与降级边界 |
+
+### 4. 新增/修改测试类与核心正反例
+
+| 测试类 | 用例数 | 正常正例 | 异常反例 |
+| :--- | ---: | :--- | :--- |
+| `PgVectorSupportTest` | 4 | `vector(1536)` 正确解析为 1536；合法 ef_search 原样返回 | 列类型为 `text`、列不存在、查询抛异常、传 null → 维度 0；ef_search 0/-20 收敛到 1、5000 收敛到 1000；`SET LOCAL` 失败不抛异常 |
+| `JdbcVectorIndexDegradationTest` | 3 | PG 方言下 `store`/`nearest` 全程不抛异常并返回空召回；H2 数据源始终 `available()=false` 且不发起任何语句 | 维度不匹配/扩展缺失（模拟连接拒绝所有语句）时只降级 |
+| `PostgresPgVectorIntegrationTest` | 3（环境变量门禁） | pgvector 扩展 + HNSW 索引 + V13 表 + 三条迁移标记；`countPublicTables()>10`；5 个实体 >10KB 中文长文本写入并原样回读 | 工作区级向量召回不得串工作区（原有用例保留） |
+
+### 5. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试（H2 默认档） | **Tests run: 584, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，4:01 min，完成于 2026-11-24 12:48:04） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| `FlywayMigrationCompatibilityTest` | Tests run: 4, Failures: 0, Errors: 0 |
+| PostgreSQL 专项 | **未实跑**：本机 Docker 守护进程未运行（`docker version` 连接 `npipe:////./pipe/dockerDesktopLinuxEngine` 失败），无法执行 `docker compose up -d` 与 `WORKBENCH_PG_TEST=true mvn -Dtest=PostgresPgVectorIntegrationTest test`；已在第 6 节如实标注 |
+
+### 6. 未实跑项与已知限制
+
+1. **PostgreSQL 集成测试未执行**：Docker Desktop 引擎未启动，`PostgresPgVectorIntegrationTest` 的 3 个用例（含新增的 JPA 长文本读写）处于环境变量门禁下被跳过（`Skipped` 计数包含该类的 3 例）。该类已按 postgres Profile 装配真实 Spring 上下文，需要具备 PG 16 + pgvector 的环境后执行：
+   `docker compose up -d` 然后 `$env:WORKBENCH_PG_TEST="true"; mvn "-Dtest=PostgresPgVectorIntegrationTest" test`
+2. **向量列维度仍固定为 1536**：本次按"维度不一致则跳过向量列、保留 `embedding_json`"实现安全降级，未改列定义（改列需要新的迁移与重建索引，属于 Task 04/后续演进范围）。
+3. **前端门禁**：未改动前端，未执行前端检查。

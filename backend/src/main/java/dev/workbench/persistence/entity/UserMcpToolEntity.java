@@ -3,8 +3,9 @@ package dev.workbench.persistence.entity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** 探测后缓存的 MCP 工具清单与单工具启停/风险。 */
 @Entity
@@ -23,7 +24,7 @@ public class UserMcpToolEntity {
   @Column(name = "description", length = 1000)
   private String description;
 
-  @Lob
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
   @Column(name = "input_schema_json")
   private String inputSchemaJson;
 
