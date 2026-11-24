@@ -45,8 +45,7 @@ class WorkspaceServiceTest {
             + " sha256 VARCHAR(64), source VARCHAR(30), created_at VARCHAR(40),"
             + " PRIMARY KEY(workspace_id,path))");
     TestJpa jpa = new TestJpa(source);
-    WorkspaceService service =
-        workspaceService(jpa, temp.resolve("workspaces").toString());
+    WorkspaceService service = workspaceService(jpa, temp.resolve("workspaces").toString());
     var workspace = service.create(repo.toString(), "main");
     assertEquals("用户未提交的内容", Files.readString(repo.resolve("demo.txt")));
     var before = service.read(workspace.id(), "demo.txt");
@@ -59,7 +58,12 @@ class WorkspaceServiceTest {
         IllegalStateException.class,
         () -> service.write(workspace.id(), "demo.txt", before.sha256(), "覆盖"));
     assertTrue(service.status(workspace.id()).diff().contains("工作区修改"));
-    var approvals = new ApprovalService(jpa.repository(ApprovalRepository.class), service);
+    var approvals =
+        new ApprovalService(
+            jpa.repository(ApprovalRepository.class),
+            service,
+            // 归属校验由专门的越权测试覆盖；这里只验证审批状态机本身。
+            org.mockito.Mockito.mock(dev.workbench.ownership.OwnershipService.class));
     var request = approvals.propose(workspace.id());
     service.write(workspace.id(), "demo.txt", modified.sha256(), "更新后的修改");
     assertThrows(
@@ -228,8 +232,7 @@ class WorkspaceServiceTest {
     assertFalse(second.isAlive());
     int successes = (resultA.get() != null ? 1 : 0) + (resultB.get() != null ? 1 : 0);
     assertEquals(1, successes, "同名并发创建只能有一个成功。");
-    assertTrue(
-        (errorA.get() == null) != (errorB.get() == null), "失败请求必须有明确异常。");
+    assertTrue((errorA.get() == null) != (errorB.get() == null), "失败请求必须有明确异常。");
     String winnerContent = resultA.get() != null ? contentA : contentB;
     Path raceFile = root.resolve("tests").resolve("test_race.py");
     assertEquals(winnerContent, Files.readString(raceFile));
@@ -247,9 +250,7 @@ class WorkspaceServiceTest {
     try {
       assertThrows(
           RuntimeException.class,
-          () ->
-              service.createSupplementTestFile(
-                  workspace.id(), "tests/test_retry.py", "retry\n"));
+          () -> service.createSupplementTestFile(workspace.id(), "tests/test_retry.py", "retry\n"));
       assertFalse(Files.exists(root.resolve("tests").resolve("test_retry.py")));
       assertTrue(Files.exists(root.resolve("tests").resolve("test_keep.py")));
     } finally {

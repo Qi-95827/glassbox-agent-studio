@@ -8,9 +8,7 @@ import dev.workbench.framework.agent.definition.AgentDefinition;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.agent.execution.AgentExecutor;
 import dev.workbench.framework.model.AgentModelRegistry;
-import dev.workbench.infrastructure.agentscope.ControlledModel;
 import dev.workbench.framework.tool.AgentToolContext;
-import dev.workbench.infrastructure.agentscope.AgentToolRegistry;
 import dev.workbench.workspace.AuthorizedFileSet;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
@@ -46,6 +44,9 @@ public class AgentScopeExecutor implements AgentExecutor {
   private final org.springframework.beans.factory.ObjectProvider<
           dev.workbench.infrastructure.mcp.McpClientManager>
       mcpClients;
+  private final org.springframework.beans.factory.ObjectProvider<
+          dev.workbench.ownership.OwnershipService>
+      ownership;
 
   @org.springframework.beans.factory.annotation.Autowired
   public AgentScopeExecutor(
@@ -65,7 +66,9 @@ public class AgentScopeExecutor implements AgentExecutor {
           mcpProviders,
       org.springframework.beans.factory.ObjectProvider<
               dev.workbench.infrastructure.mcp.McpClientManager>
-          mcpClients) {
+          mcpClients,
+      org.springframework.beans.factory.ObjectProvider<dev.workbench.ownership.OwnershipService>
+          ownership) {
     this.json = json;
     this.stateStore = stateStore;
     this.assemblyPlanner = assemblyPlanner;
@@ -77,6 +80,7 @@ public class AgentScopeExecutor implements AgentExecutor {
     this.memoryPorts = memoryPorts;
     this.mcpProviders = mcpProviders;
     this.mcpClients = mcpClients;
+    this.ownership = ownership;
   }
 
   /** 兼容只装配执行必需依赖的独立验证；语言资源使用内置中文默认。 */
@@ -97,7 +101,21 @@ public class AgentScopeExecutor implements AgentExecutor {
         new dev.workbench.control.MultiTierContextCompactor(),
         null,
         null,
+        null,
         null);
+  }
+
+  /** 解析运行所属账号；仅供压缩上下文审计与 L1 产物隔离，解析失败不阻断执行。 */
+  private String ownerScopeKey(String runId) {
+    if (runId == null || runId.isBlank() || ownership == null) return null;
+    var service = ownership.getIfAvailable();
+    if (service == null) return null;
+    try {
+      String taskId = service.taskIdOfRun(runId);
+      return service.owner(dev.workbench.ownership.OwnershipService.TASK, taskId).orElse(null);
+    } catch (RuntimeException e) {
+      return null;
+    }
   }
 
   /** 创建每次运行独立的框架 Agent；工具按角色及用户授权注册。 */
@@ -197,7 +215,12 @@ public class AgentScopeExecutor implements AgentExecutor {
             runtime,
             failure,
             selectedModel.rateLimitRejection(),
-            contextCompactor::evaluateAndCompact);
+            contextCompactor::evaluateAndCompact,
+            new dev.workbench.framework.context.CompactionScope(
+                request.context().runId(),
+                ownerScopeKey(request.context().runId()),
+                request.modelConnectionId(),
+                runtime::auxiliaryModelUsage));
     var authorization =
         new AgentAssemblySnapshot.Authorization(
             1,

@@ -59,8 +59,7 @@ class PlanCandidateConfirmationService {
     this.tx = tx;
   }
 
-  PlanCandidateService.Confirmed confirm(
-      String id, PlanCandidateService.ConfirmRequest request) {
+  PlanCandidateService.Confirmed confirm(String id, PlanCandidateService.ConfirmRequest request) {
     ExecutionScope scope = scopes.current();
     PlanCandidateEntity row = store.requireById(id, scope.ownerScopeKey());
     requireMatchingSummaries(row, request);
@@ -81,13 +80,14 @@ class PlanCandidateConfirmationService {
       connectionId =
           connections
               .defaultConnectionId()
-              .orElseThrow(
-                  () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"));
+              .orElseThrow(() -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"));
     if (requestedMode != ModelMode.USER) connectionId = null;
     var actualModes = actualModes(validated.nodes(), requestedMode);
     var actualModels = actualModels(actualModes, requestedMode);
-    if (request.maxCostMicros() != null
-        && actualModels.contains(ModelKind.USER_CONNECTION))
+    // 任一节点将使用宿主机全局 DeepSeek 密钥时，都要求当前账号具备该特权。
+    if (connections != null && actualModes.contains(ModelMode.DEEPSEEK))
+      connections.requireLegacyKeyAccess();
+    if (request.maxCostMicros() != null && actualModels.contains(ModelKind.USER_CONNECTION))
       throw new IllegalArgumentException("自带 Key 模型使用你自己的额度，平台费用硬预算仅适用于内置模型。");
     BudgetPricing pricing =
         request.maxCostMicros() == null
@@ -141,7 +141,10 @@ class PlanCandidateConfirmationService {
       WorkspaceAuthorizationService.Prepared prepared,
       BudgetPricing pricing,
       AtomicReference<String> alreadyCreated) {
-    var locked = store.lockById(id, scope.ownerScopeKey()).orElseThrow(() -> new org.springframework.dao.EmptyResultDataAccessException(1));
+    var locked =
+        store
+            .lockById(id, scope.ownerScopeKey())
+            .orElseThrow(() -> new org.springframework.dao.EmptyResultDataAccessException(1));
     if (locked.getRunId() != null) {
       alreadyCreated.set(locked.getRunId());
       return;
@@ -150,15 +153,8 @@ class PlanCandidateConfirmationService {
     workspaces.requireCurrent(locked, input);
     requireCurrentPlan(draft, input, locked);
     taskCreations.persistFromCandidate(
-        task,
-        UUID.fromString(runId),
-        limits,
-        "候选计划已确认并创建运行。",
-        plan,
-        prepared,
-        pricing);
-    if (store.consume(id, runId) != 1)
-      throw new IllegalStateException("候选已被其他确认消费，请刷新后查看运行。");
+        task, UUID.fromString(runId), limits, "候选计划已确认并创建运行。", plan, prepared, pricing);
+    if (store.consume(id, runId) != 1) throw new IllegalStateException("候选已被其他确认消费，请刷新后查看运行。");
   }
 
   private PlanCandidateService.Confirmed confirmed(String runId) {
@@ -203,10 +199,7 @@ class PlanCandidateConfirmationService {
       PlanCandidateDraft draft, PlanCandidateInput input, PlanCandidateEntity row) {
     var result =
         validator.validate(
-            draft,
-            input,
-            row.getOwnerScopeKey(),
-            store.readPlanning(row.getAgentAliasesJson()));
+            draft, input, row.getOwnerScopeKey(), store.readPlanning(row.getAgentAliasesJson()));
     if (!result.valid() || !row.getCandidateSha256().equals(result.candidateSha256()))
       throw new IllegalStateException("候选在当前 Agent 定义或计划规则下已失效，请重新生成。");
     return result;

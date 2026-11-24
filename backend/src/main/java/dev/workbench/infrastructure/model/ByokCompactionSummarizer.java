@@ -1,5 +1,6 @@
 package dev.workbench.infrastructure.model;
 
+import dev.workbench.framework.context.CompactionScope;
 import dev.workbench.framework.context.CompactionSummarizer;
 import dev.workbench.framework.context.ContextMessage;
 import dev.workbench.modelconnection.ModelConnectionService;
@@ -20,13 +21,17 @@ import org.springframework.stereotype.Component;
 /**
  * BYOK 模式下的 L2 结构化锚点摘要器。
  *
- * <p>复用用户默认模型连接，要求模型只输出四段强约束检查点；失败或连接不可用时返回空串，
- * 由压缩器降级为本地关键句抽取。输入正文有字符上限，避免摘要调用本身撑爆上下文。
+ * <p>只使用调用方显式透传的运行连接（{@link CompactionScope#modelConnectionId()}）：摘要运行在 Agent 工作线程，没有 HTTP
+ * 会话，任何「读取默认连接」的回退都会落到 {@code LOCAL} 账号，盗用他人的密钥与 额度并把敏感对话发往错误账号。没有连接时直接降级为本地规则摘要。
+ *
+ * <p>摘要调用本身产生的用量通过 {@link CompactionScope#usage()} 计入当前运行的费用台账，避免成为预算
+ * 之外的幽灵开销。输入正文有字符上限，避免摘要调用本身撑爆上下文。
  */
 @Component
 public class ByokCompactionSummarizer implements CompactionSummarizer {
   private static final int MAX_HISTORY_CHARS = 24_000;
   private static final int MAX_TOKENS = 900;
+  private static final Duration SUMMARY_TIMEOUT = Duration.ofSeconds(60);
 
   private final ModelConnectionService connections;
   private final boolean enabled;
@@ -38,24 +43,33 @@ public class ByokCompactionSummarizer implements CompactionSummarizer {
     this.enabled = enabled;
   }
 
+  /** 是否启用真实模型摘要；具体连接由每次调用显式传入，不能在这里探测默认连接。 */
   @Override
   public boolean isAvailable() {
-    if (!enabled) return false;
-    try {
-      return connections.defaultConnectionId().isPresent();
-    } catch (RuntimeException e) {
-      return false;
-    }
+    return enabled;
+  }
+
+  /**
+   * 无归属信息的旧调用：不做真实模型调用。
+   *
+   * <p>没有运行归属就无法确定该用谁的密钥，宁可降级为本地规则摘要，也不能回退到默认连接。
+   */
+  @Override
+  public String summarize(
+      String focusQuery, String previousCheckpoint, List<ContextMessage> messages) {
+    return "";
   }
 
   @Override
   public String summarize(
-      String focusQuery, String previousCheckpoint, List<ContextMessage> messages) {
+      CompactionScope scope,
+      String focusQuery,
+      String previousCheckpoint,
+      List<ContextMessage> messages) {
+    if (!enabled || scope == null || !scope.hasConnection()) return "";
     if (messages == null || messages.isEmpty()) return "";
     try {
-      var connectionId = connections.defaultConnectionId().orElse(null);
-      if (connectionId == null) return "";
-      var connection = connections.resolveForExecution(connectionId);
+      var connection = connections.resolveForExecution(scope.modelConnectionId());
       var model = UserModelConnectionFactory.model(connection);
       var instructions =
           """
@@ -70,9 +84,7 @@ public class ByokCompactionSummarizer implements CompactionSummarizer {
       var builder = new StringBuilder();
       builder.append("当前目标：").append(focusQuery == null ? "" : focusQuery).append("\n\n");
       if (previousCheckpoint != null && !previousCheckpoint.isBlank())
-        builder.append("上一轮检查点（需增量合并，不要重复列已确认事实）：\n")
-            .append(previousCheckpoint)
-            .append("\n\n");
+        builder.append("上一轮检查点（需增量合并，不要重复列已确认事实）：\n").append(previousCheckpoint).append("\n\n");
       builder.append("本轮新增历史：\n");
       for (var message : messages) {
         builder
@@ -88,14 +100,20 @@ public class ByokCompactionSummarizer implements CompactionSummarizer {
           List.of(
               Msg.builder().role(MsgRole.SYSTEM).textContent(instructions).build(),
               Msg.builder().role(MsgRole.USER).textContent(builder.toString()).build());
-      var options =
-          GenerateOptions.builder().maxTokens(MAX_TOKENS).maxCompletionTokens(MAX_TOKENS);
+      var options = GenerateOptions.builder().maxTokens(MAX_TOKENS).maxCompletionTokens(MAX_TOKENS);
       if (officialDeepSeek(connection)) {
         options.additionalBodyParams(Map.of("thinking", Map.of("type", "disabled")));
       }
       ChatResponse response =
-          model.stream(request, List.of(), options.build()).blockLast(Duration.ofSeconds(60));
+          model.stream(request, List.of(), options.build()).blockLast(SUMMARY_TIMEOUT);
       if (response == null) return "";
+      // 无论是否拿到用量都要记账：缺失用量记成“未知”，由费用台账按保守口径处理。
+      var usage = response.getUsage();
+      scope
+          .usage()
+          .record(
+              usage == null ? null : usage.getInputTokens(),
+              usage == null ? null : usage.getOutputTokens());
       String text =
           response.getContent() == null
               ? ""

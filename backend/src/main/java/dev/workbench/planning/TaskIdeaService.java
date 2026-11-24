@@ -68,6 +68,8 @@ public class TaskIdeaService {
         connectionId = connections.requireEnabledOwned(modelConnectionId);
       // 未显式选择时优先使用当前用户的默认自带 Key 连接；没有才回退本机密钥文件。
       else connectionId = connections.defaultConnectionId().orElse(null);
+      // 回退到宿主机全局密钥属于特权动作：多用户模式下普通用户必须使用自己的连接。
+      if (connectionId == null) connections.requireLegacyKeyAccess();
     }
     try {
       String instructions =
@@ -114,8 +116,7 @@ public class TaskIdeaService {
     boolean design = input.matches("(?s).*(设计方案|概要设计|只做设计|design doc|design only).*");
     boolean requirements =
         input.matches("(?s).*(梳理需求|需求文档|只做需求|requirements doc|requirements only).*");
-    boolean test =
-        input.matches("(?s).*(编写测试方案|设计测试|测试用例|test plan|test cases).*");
+    boolean test = input.matches("(?s).*(编写测试方案|设计测试|测试用例|test plan|test cases).*");
     TaskEntryKind kind =
         design
             ? TaskEntryKind.DESIGN
@@ -131,30 +132,35 @@ public class TaskIdeaService {
         input.length() > 500
             ? List.of(
                 english
-                    ? "The local rule used the first 500 characters as the goal. Add any important details beyond that."
+                    ? "The local rule used the first 500 characters as the goal. Add any important"
+                          + " details beyond that."
                     : "本地规则使用了原文的前 500 字作为目标。请补齐目标之外的重要细节。")
             : files.isEmpty()
                 ? List.of()
                 : List.of(
                     english
-                        ? "The standalone page uses self-contained HTML and opens directly in a browser."
+                        ? "The standalone page uses self-contained HTML and opens directly in a"
+                              + " browser."
                         : "独立网页采用自包含 HTML，可用浏览器直接打开。");
     List<String> acceptance =
         !files.isEmpty() && (input.contains("冒泡") || input.toLowerCase().contains("bubble"))
             ? List.of(
                 english
-                    ? "Given 5,1,4,2,8, the page renders five bars with the matching values and shows a message for invalid input."
+                    ? "Given 5,1,4,2,8, the page renders five bars with the matching values and"
+                          + " shows a message for invalid input."
                     : "输入 5,1,4,2,8，页面显示五根对应数值的柱状条，并提供非法输入提示。",
                 english
                     ? "Clicking Next compares pairs; swaps update the bars and mark both positions."
                     : "点击下一步逐对比较；发生交换时更新柱状条并标记两个位置。",
                 english
-                    ? "Auto-run can pause and resume, ends at the ascending result 1,2,4,5,8, and supports reset."
+                    ? "Auto-run can pause and resume, ends at the ascending result 1,2,4,5,8, and"
+                          + " supports reset."
                     : "自动运行可暂停和继续，最终显示升序结果 1,2,4,5,8；支持重置。")
             : files.isEmpty()
                 ? List.of(
                     english
-                        ? "Check each task goal item and record the result, supporting evidence and open questions in the delivery notes."
+                        ? "Check each task goal item and record the result, supporting evidence and"
+                              + " open questions in the delivery notes."
                         : "逐项对照任务目标，在交付说明中给出结果、对应证据和待确认事项。")
                 : List.of(
                     english
@@ -175,7 +181,8 @@ public class TaskIdeaService {
             ? List.of()
             : List.of(
                 english
-                    ? "Write the output to the authorized index.html and explain how to open it in the delivery notes."
+                    ? "Write the output to the authorized index.html and explain how to open it in"
+                          + " the delivery notes."
                     : "把产出写入授权的 index.html，交付说明中提供打开方式。"),
         acceptance,
         assumptions,

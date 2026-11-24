@@ -5,9 +5,9 @@ import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.context.ContextBreakdown;
-import dev.workbench.framework.trace.GlassboxModels;
 import dev.workbench.framework.tool.ToolApprovalDecision;
 import dev.workbench.framework.tool.ToolRiskAssessment;
+import dev.workbench.framework.trace.GlassboxModels;
 import java.util.UUID;
 
 /** 框架适配层向项目运行控制器报告调用，不能绕过限制。 */
@@ -64,4 +64,11 @@ public interface AgentRuntime {
 
   /** 记录单次工具调用的入参、ToolGateway 安检明细与完整结果。 */
   default void toolTrace(UUID callId, GlassboxModels.ToolCallTrace trace) {}
+
+  /**
+   * 后台辅助模型调用（如 L2 上下文摘要）产生的用量。
+   *
+   * <p>这类调用不经过主模型调用的开始/结算配对，必须单独入口记账，否则会绕过运行费用与 Token 限制。
+   */
+  default void auxiliaryModelUsage(Integer inputTokens, Integer outputTokens) {}
 }

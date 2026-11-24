@@ -23,7 +23,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * 候选生成：保存生成请求、异步调用模型、自修复式校验与结算，以及生成中状态的收口（取消、启动中断、停机）。
  *
- * <p>生成请求先持久化再异步调用模型，页面轮询状态。候选只做建议：服务端校验通过才进入 READY，任何状态都不会创建任务、运行、节点、工作区或工具授权。取消与结算都使用状态条件更新，晚到的模型响应不能覆盖用户取消或新输入造成的过期。
+ * <p>生成请求先持久化再异步调用模型，页面轮询状态。候选只做建议：服务端校验通过才进入
+ * READY，任何状态都不会创建任务、运行、节点、工作区或工具授权。取消与结算都使用状态条件更新，晚到的模型响应不能覆盖用户取消或新输入造成的过期。
  */
 class PlanCandidateGenerationService {
   private static final String DEFAULT_INSTRUCTIONS =
@@ -213,7 +214,10 @@ class PlanCandidateGenerationService {
     // 取消成功时同时中断仍在排队或执行中的任务；模型适配应尽快结束，晚到结果仍由条件结算拒绝。
     var task = pending.remove(id);
     if (task != null) task.cancel(true);
-    return store.view(store.findById(id).orElseThrow(() -> new org.springframework.dao.EmptyResultDataAccessException(1)));
+    return store.view(
+        store
+            .findById(id)
+            .orElseThrow(() -> new org.springframework.dao.EmptyResultDataAccessException(1)));
   }
 
   /** 上一个进程遗留的生成中候选在启动时转为中断，不伪造成功。 */
@@ -328,8 +332,7 @@ class PlanCandidateGenerationService {
       } else if ("RECOMMEND".equals(input.agentMode())) {
         var recommendations =
             privateAgents.recommendations(ownerScopeKey, input.candidateAgentIds());
-        if (recommendations.isEmpty())
-          errors.add("本次勾选的私有 Agent 没有可用的已发布推荐版本，请重新选择。");
+        if (recommendations.isEmpty()) errors.add("本次勾选的私有 Agent 没有可用的已发布推荐版本，请重新选择。");
         for (int index = 0; index < recommendations.size(); index++) {
           var recommendation = recommendations.get(index);
           aliases.put(
@@ -380,7 +383,8 @@ class PlanCandidateGenerationService {
       value.put("candidateAgents", candidates);
       value.put(
           "agentSelectionRule",
-          "Only choose a candidateAgents ref when it fits the node role and read-only capability; return it as node.agentRef.");
+          "Only choose a candidateAgents ref when it fits the node role and read-only capability;"
+              + " return it as node.agentRef.");
     }
     if (planning != null && !planning.errors().isEmpty())
       value.put("agentSelectionErrors", planning.errors());

@@ -1,5 +1,6 @@
 package dev.workbench.workspace;
 
+import dev.workbench.ownership.OwnershipService;
 import dev.workbench.persistence.entity.ApprovalEntity;
 import dev.workbench.persistence.repository.ApprovalRepository;
 import java.util.LinkedHashMap;
@@ -13,10 +14,13 @@ import org.springframework.stereotype.Service;
 public class ApprovalService {
   private final ApprovalRepository rows;
   private final WorkspaceService workspaces;
+  private final OwnershipService ownership;
 
-  public ApprovalService(ApprovalRepository rows, WorkspaceService workspaces) {
+  public ApprovalService(
+      ApprovalRepository rows, WorkspaceService workspaces, OwnershipService ownership) {
     this.rows = rows;
     this.workspaces = workspaces;
+    this.ownership = ownership;
   }
 
   public synchronized List<Map<String, Object>> list(String workspaceId) {
@@ -29,8 +33,7 @@ public class ApprovalService {
       } catch (RuntimeException e) {
         valid = false;
       }
-      if (!valid)
-        rows.updateStatus(row.getId(), "STALE", dev.workbench.domain.WorkbenchTime.now());
+      if (!valid) rows.updateStatus(row.getId(), "STALE", dev.workbench.domain.WorkbenchTime.now());
     }
     return rows.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId).stream()
         .map(ApprovalService::map)
@@ -42,13 +45,13 @@ public class ApprovalService {
         id = dev.workbench.domain.WorkbenchIds.newId(),
         now = dev.workbench.domain.WorkbenchTime.now();
     rows.save(new ApprovalEntity(id, workspaceId, fingerprint, "PENDING", now, now));
-    return map(
-        rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
+    return map(rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
   }
 
   public synchronized Map<String, Object> decide(String id, Decision decision) {
-    ApprovalEntity row =
-        rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1));
+    ApprovalEntity row = rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1));
+    // 审批单标识本身不是授权凭证：先按审批所属工作区校验当前操作人的归属，再处理状态。
+    ownership.requireWorkspace(row.getWorkspaceId());
     if (!"PENDING".equals(row.getStatus())) throw new IllegalStateException("该审查已处理，请重新发起。");
     if (decision == Decision.APPROVE) {
       String current;
@@ -67,8 +70,7 @@ public class ApprovalService {
         id,
         decision == Decision.APPROVE ? "APPROVED" : "REJECTED",
         dev.workbench.domain.WorkbenchTime.now());
-    return map(
-        rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
+    return map(rows.findById(id).orElseThrow(() -> new EmptyResultDataAccessException(1)));
   }
 
   /** 保持原查询返回的大写列名和字符串值，HTTP 与报告继续按原字段读取。 */

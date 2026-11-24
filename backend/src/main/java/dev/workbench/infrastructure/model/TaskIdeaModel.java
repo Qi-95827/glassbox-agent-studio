@@ -29,10 +29,15 @@ public class TaskIdeaModel {
     return draft(instructions, idea, null);
   }
 
-  /** 指定用户连接时使用其自带的 Key；未指定时沿用本地 DeepSeek 密钥文件兜底。 */
+  /** 指定用户连接时使用其自带的 Key；未指定时回退本地 DeepSeek 密钥文件（受特权校验约束）。 */
   public String draft(String instructions, String idea, String connectionId) {
+    boolean hasConnection = connectionId != null && !connectionId.isBlank();
+    if (!hasConnection && connections != null) {
+      // 读取宿主机全局密钥属于特权动作：多用户模式下普通用户必须使用自己的连接。
+      connections.requireLegacyKeyAccess();
+    }
     var model =
-        connectionId == null || connectionId.isBlank()
+        !hasConnection
             ? DeepSeekModelFactory.deepSeekModel()
             : UserModelConnectionFactory.model(
                 java.util.Objects.requireNonNull(connections, "未配置用户模型连接服务。")

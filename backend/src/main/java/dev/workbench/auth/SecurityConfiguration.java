@@ -17,50 +17,57 @@ import org.springframework.security.web.util.matcher.RequestMatcher;
 /**
  * Spring Security 过滤器链与会话桥接。
  *
- * <p>本地账号仍由 AuthService 与会话解析，AuthenticationFilter 把已认证用户写入 Spring Security
- * 上下文；CSRF 使用 Spring Security 的 Cookie token。初始化前和未登录请求不强制 token，以便迁移与
- * 登录入口；初始化后的状态修改请求必须携带 X-XSRF-TOKEN。
+ * <p>本地账号仍由 AuthService 与会话解析，AuthenticationFilter 把已认证用户写入 Spring Security 上下文；CSRF 使用 Spring
+ * Security 的 Cookie token。初始化前和未登录请求不强制 token，以便迁移与 登录入口；初始化后的状态修改请求必须携带 X-XSRF-TOKEN。
  */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfiguration {
   private static final Set<String> PUBLIC =
-      Set.of(
-          "/api/auth/status",
-          "/api/auth/initialize",
-          "/api/auth/login",
-          "/api/auth/csrf");
+      Set.of("/api/auth/status", "/api/auth/initialize", "/api/auth/login", "/api/auth/csrf");
 
   @Bean
-  SecurityFilterChain securityFilterChain(
-      HttpSecurity http, AuthService auth, UserRepository users) throws Exception {
+  SecurityFilterChain securityFilterChain(HttpSecurity http, AuthService auth, UserRepository users)
+      throws Exception {
     var authentication = new AuthenticationFilter(auth, users);
     http.csrf(
             csrf ->
                 csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                     .requireCsrfProtectionMatcher(new SessionCsrfMatcher(auth)))
-        .authorizeHttpRequests(requests -> requests.anyRequest().permitAll())
+        .authorizeHttpRequests(
+            requests ->
+                requests
+                    // 运维端点会暴露全库聚合指标与健康细节，必须收口到管理员。
+                    .requestMatchers("/actuator/**")
+                    .hasRole("ADMIN")
+                    .anyRequest()
+                    .permitAll())
         .sessionManagement(
             sessions -> sessions.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
         .requestCache(cache -> cache.disable())
         .formLogin(form -> form.disable())
         .httpBasic(basic -> basic.disable())
         .logout(logout -> logout.disable())
-        .addFilterBefore(authentication, org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class)
+        .addFilterBefore(
+            authentication,
+            org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
+                .class)
         .exceptionHandling(
             errors ->
                 errors
                     .authenticationEntryPoint(
                         (request, response, failure) -> {
                           response.setStatus(401);
-                          response.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+                          response.setCharacterEncoding(
+                              java.nio.charset.StandardCharsets.UTF_8.name());
                           response.setContentType(MediaType.APPLICATION_JSON_VALUE);
                           response.getWriter().write("{\"message\":\"请先登录。\"}");
                         })
                     .accessDeniedHandler(
                         (request, response, failure) -> {
                           response.setStatus(403);
-                          response.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+                          response.setCharacterEncoding(
+                              java.nio.charset.StandardCharsets.UTF_8.name());
                           response.setContentType(MediaType.APPLICATION_JSON_VALUE);
                           response.getWriter().write("{\"message\":\"请求校验失败，请刷新页面后重试。\"}");
                         }));

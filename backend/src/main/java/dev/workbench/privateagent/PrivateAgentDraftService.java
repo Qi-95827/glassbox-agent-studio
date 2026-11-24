@@ -36,6 +36,7 @@ public class PrivateAgentDraftService {
   private final ExecutionScopeResolver scopes;
   private final ObjectMapper json;
   private final TaskIdeaModel taskIdeas;
+  private final dev.workbench.modelconnection.ModelConnectionService connections;
 
   public PrivateAgentDraftService(
       PrivateSkillRepository skills,
@@ -44,7 +45,8 @@ public class PrivateAgentDraftService {
       PrivateToolVersionRepository toolVersions,
       ExecutionScopeResolver scopes,
       ObjectMapper json,
-      TaskIdeaModel taskIdeas) {
+      TaskIdeaModel taskIdeas,
+      dev.workbench.modelconnection.ModelConnectionService connections) {
     this.skills = skills;
     this.skillVersions = skillVersions;
     this.tools = tools;
@@ -52,6 +54,19 @@ public class PrivateAgentDraftService {
     this.scopes = scopes;
     this.json = json;
     this.taskIdeas = taskIdeas;
+    this.connections = connections;
+  }
+
+  /**
+   * 模型草稿使用当前账号自己的模型连接。
+   *
+   * <p>没有自有连接时，只有管理员或单机本地模式才允许回退宿主机全局 DeepSeek 密钥；普通用户必须 先配置自己的连接，否则只能改用本地规则草稿。
+   */
+  private String connectionId() {
+    if (connections == null) return null;
+    var own = connections.defaultConnectionId().orElse(null);
+    if (own == null) connections.requireLegacyKeyAccess();
+    return own;
   }
 
   /** 从设计思路生成可编辑草稿；默认本地规则，也可显式调用已配置模型。 */
@@ -65,8 +80,7 @@ public class PrivateAgentDraftService {
     String strategy =
         mode == null || mode.isBlank() ? "LOCAL" : mode.strip().toUpperCase(Locale.ROOT);
     if ("LOCAL".equals(strategy)) return localDraft(idea.strip());
-    if (!"MODEL".equals(strategy))
-      throw new IllegalArgumentException("草稿生成方式必须为本地规则或模型生成。");
+    if (!"MODEL".equals(strategy)) throw new IllegalArgumentException("草稿生成方式必须为本地规则或模型生成。");
     String text;
     try {
       var availableSkills =
@@ -84,7 +98,9 @@ public class PrivateAgentDraftService {
         var row = availableSkills.get(index);
         String alias = "S" + (index + 1);
         var version =
-            skillVersions.findBySkillIdAndVersion(row.getId(), row.getCurrentVersion()).orElse(null);
+            skillVersions
+                .findBySkillIdAndVersion(row.getId(), row.getCurrentVersion())
+                .orElse(null);
         if (version == null) continue;
         skillAliases.put(alias, row);
         skillSummary
@@ -134,12 +150,10 @@ public class PrivateAgentDraftService {
               + skillSummary
               + "可用工具：\n"
               + toolSummary;
-      text = taskIdeas.draft(instructions, idea.strip());
+      text = taskIdeas.draft(instructions, idea.strip(), connectionId());
       ModelDraft raw = json.readValue(text, ModelDraft.class);
       List<String> questions =
-          raw.openQuestions() == null
-              ? new ArrayList<>()
-              : new ArrayList<>(raw.openQuestions());
+          raw.openQuestions() == null ? new ArrayList<>() : new ArrayList<>(raw.openQuestions());
       var suggestedSkills = new ArrayList<ComponentRef>();
       if (raw.skillRefs() != null)
         for (String alias : raw.skillRefs()) {

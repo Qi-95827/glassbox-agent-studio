@@ -19,4 +19,20 @@ public interface CompactionSummarizer {
    * @param messages 本轮新增的中间历史（不含固定锚点与最近成对轮次）
    */
   String summarize(String focusQuery, String previousCheckpoint, List<ContextMessage> messages);
+
+  /**
+   * 带运行归属的摘要调用。
+   *
+   * <p>生产链路必须走这个重载：摘要发生在 Agent 工作线程，没有 HTTP 会话，只有显式的 {@link CompactionScope} 才能告诉我们该用哪个 BYOK
+   * 连接、属于哪个运行，避免回退到 {@code LOCAL} 默认连接而盗用他人密钥。默认实现忽略归属，供只关心文本的轻量实现使用。
+   *
+   * @param scope 运行归属、模型连接与用量回调
+   */
+  default String summarize(
+      CompactionScope scope,
+      String focusQuery,
+      String previousCheckpoint,
+      List<ContextMessage> messages) {
+    return summarize(focusQuery, previousCheckpoint, messages);
+  }
 }

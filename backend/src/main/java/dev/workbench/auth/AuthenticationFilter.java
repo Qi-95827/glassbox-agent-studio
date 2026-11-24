@@ -33,7 +33,9 @@ public class AuthenticationFilter extends OncePerRequestFilter {
           "/api/admin/",
           "/api/external-actions",
           // 全平台唯一的向量化端点配置：普通用户改写它即可外带服务端密钥或盗用他人 BYOK 连接。
-          "/api/rag-embedding");
+          "/api/rag-embedding",
+          // 可管理评测数据集是平台级共享资产：普通用户改写它即可向他人评测注入样本。
+          "/api/evaluation-datasets");
 
   private final AuthService auth;
   private final UserRepository users;
@@ -48,7 +50,9 @@ public class AuthenticationFilter extends OncePerRequestFilter {
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
     String path = request.getRequestURI();
-    if (!path.startsWith("/api/") || PUBLIC.contains(path) || !auth.initialized()) {
+    // 运维端点同样需要真实身份（角色由 SecurityConfiguration 校验），否则管理员会话永远落到匿名分支。
+    boolean secured = path.startsWith("/api/") || path.startsWith("/actuator/");
+    if (!secured || PUBLIC.contains(path) || !auth.initialized()) {
       chain.doFilter(request, response);
       return;
     }

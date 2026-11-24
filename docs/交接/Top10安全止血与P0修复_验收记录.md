@@ -118,3 +118,107 @@ mvn test
 2. **前端门禁**：本 Task 未改动 `frontend/user-workbench/`，未执行 `npm run format:check && lint && test && build`。
 3. **DNS 重绑定残余风险**：保存时校验通过后，连接建立前会再次解析并校验，但校验与真实连接之间仍存在解析结果不同的理论窗口；彻底消除需把已校验 IP 锁定到套接字层，本次未实现，已通过禁用自动重定向缩小影响面并在代码注释中标注。
 4. **后端文案装配既有问题**：仓库未配置 `spring.messages.basename=i18n/messages`，运行期 `LocalizedMessages` 取不到 `i18n/messages` 资源包时会回退为 key 本身；该缺陷先于本次任务存在且不在 Top 10 清单内，本次仅保证新增 key 在中英两套资源包中齐全（由 `OutboundMessagesTest` 守护），未擅自改动全局国际化装配。
+
+---
+
+## Task 02 · 全量补齐 6 处 IDOR 归属校验、宿主机遗留密钥隔离、Actuator 鉴权与真实审计人
+
+- **对应审计编号**：`S-04`、`S-08`（鉴权/Origin）、`S-11`、`S-14`（审计人）
+- **完成时间**：2026-11-24
+
+### 1. 改动文件清单（严格限定本 Task 范围）
+
+**新增主代码**
+
+| 文件 | 职责 |
+| :--- | :--- |
+| `backend/src/main/java/dev/workbench/framework/context/CompactionScope.java` | 压缩调用的运行归属上下文：`runId` + `ownerScopeKey` + `modelConnectionId` + 用量回调 |
+| `backend/src/main/java/dev/workbench/framework/context/CompactionUsageSink.java` | 后台辅助模型调用（L2 摘要）的用量回调端口 |
+
+**修改主代码**
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `workspace/ApprovalService.java` | `decide()` 先按审批所属工作区执行 `ownership.requireWorkspace()`（IDOR 1） |
+| `control/ContextArtifactService.java` | 回查前校验 `runId` 非空并 `ownership.requireRun()`；历史无归属产物按不存在处理（IDOR 2） |
+| `persistence/artifact/JpaContextArtifactStore.java` | 引用改为「归属 + 运行 + 标题 + 内容」派生，跨用户/跨运行不再共享；无 `runId` 不落盘 |
+| `control/MultiTierContextCompactor.java` | `persistArtifact()` 透传真实 `runId`/`ownerScopeKey`；L2 摘要改为带归属调用；无存储时确定性引用也带归属 |
+| `framework/context/ContextArtifactStore.java` | `Artifact` 增加 `ownerScopeKey` 字段并说明隔离要求 |
+| `framework/context/CompactionRequest.java`、`CompactionSummarizer.java` | 增加可选 `scope`（含 `modelConnectionId`/`ownerScopeKey`）与带归属的摘要重载，保留旧构造器兼容 |
+| `framework/agent/execution/AgentRuntime.java` | 新增 `auxiliaryModelUsage()`：后台辅助调用用量单独记账，不干扰主调用配对 |
+| `orchestration/ControlledAgentRuntime.java` | 实现辅助用量记账：`CostService.reserve/settle` 计入运行费用台账，超支触发 `StopExecution` |
+| `infrastructure/agentscope/ControlledModel.java` | 压缩请求携带运行归属与用量回调；预算停止不再被“压缩失败即降级”吞掉 |
+| `infrastructure/agentscope/AgentScopeExecutor.java` | 从运行上下文解析 `runId`/归属键/连接并构造 `CompactionScope` |
+| `infrastructure/model/ByokCompactionSummarizer.java` | 只用显式透传的运行连接；无连接时直接降级，绝不读取默认 `LOCAL` 连接；摘要用量回传运行台账 |
+| `planning/EntryPlanningController.java` | `taskRoute()` 增加 `ownership.requireTask()`（IDOR 3） |
+| `auth/AuthenticationFilter.java` | `ADMIN_ONLY` 增加 `/api/evaluation-datasets`；运维端点同样解析会话身份 |
+| `evaluation/ManagedEvaluationDatasetService.java` | 写入类方法补 `auth.requireAdmin()`；`fromFailure()` 校验运行归属；`publish()` 用服务端登录名覆盖请求体发布者（IDOR 4） |
+| `evaluation/EvalLabController.java` | Hub `download`/`import` 仅管理员，`GET /hub` 目录浏览保持只读公开（IDOR 5） |
+| `auth/SecurityConfiguration.java` | `/actuator/**` 显式要求 `ROLE_ADMIN` |
+| `app/LocalOriginFilter.java` | `@Order(HIGHEST_PRECEDENCE)` 并覆盖 `/actuator/` |
+| `orchestration/RunCreationService.java`、`planning/PlanCandidateConfirmationService.java` | 使用宿主机全局 DeepSeek 密钥前调用 `requireLegacyKeyAccess()` |
+| `infrastructure/model/TaskIdeaModel.java`、`DeepSeekPlanCandidateModel.java` | 在没有自有连接、真正读取宿主机密钥的位置做特权校验（把策略放在密文读取点，避免误伤测试替身） |
+| `planning/TaskIdeaService.java`、`privateagent/PrivateAgentDraftService.java`、`planning/PlanCandidateGenerationService.java` | 优先绑定当前用户自有连接；无连接时按特权校验决定是否允许回退 |
+| `modelconnection/ModelConnectionService.java` | 新增 `legacyKeyAllowed()` / `requireLegacyKeyAccess()`；`list()` 对普通用户隐藏宿主机全局密钥条目 |
+| `audit/AuditService.java` | 操作人改为真实登录账号；无会话后台动作记 `system`，单机模式记 `local-user` |
+
+**测试**
+
+| 文件 | 说明 |
+| :--- | :--- |
+| `.../auth/Task2IdorIntegrationTest.java`（新增） | 真实过滤器链下的 5 组越权/权限场景 |
+| `.../modelconnection/LegacyKeyAccessTest.java`（新增） | 宿主机密钥权限 6 例 |
+| `.../audit/AuditActorTest.java`（新增） | 审计操作人 4 例 |
+| `.../control/ContextArtifactOwnershipTest.java`（新增） | 产物隔离与回查归属 7 例 |
+| `.../infrastructure/model/ByokCompactionSummarizerTest.java`（新增） | 摘要连接归属与用量回传 5 例 |
+| `.../agent/ControlledModelCompactionTest.java`（新增） | 压缩上下文透传与预算停止 3 例 |
+| `WorkbenchIntegrationTest`、`BugDockerIntegrationTest`、`WorkspaceServiceTest`、`PrivateAgentDraftModelIntegrationTest`（适配） | 仅为新增依赖/新签名补参数与管理员身份，未放宽任何原断言 |
+
+### 2. 修复要点
+
+1. **六处 IDOR 全部收口**：审批决策、上下文产物、任务路由、评测数据集、Hub 导入口、异步压缩，均先解析真实归属再动数据；引用/标识不再被当作授权凭证。
+2. **产物按运行隔离**：`art-*` 引用由「归属 + 运行 + 内容」派生，不同用户即使卸载完全相同正文也不会共用记录；没有 `runId` 的历史记录不再可读。
+3. **压缩不再回退 `LOCAL`**：`CompactionRequest` 携带运行归属，`ControlledModel` 从运行上下文透传，`ByokCompactionSummarizer` 只认显式连接；无连接时降级本地规则摘要。
+4. **摘要用量计入台账**：`AgentRuntime.auxiliaryModelUsage()` → `CostService.reserve/settle`，超支时抛 `StopExecution` 并穿透压缩降级。
+5. **宿主机全局密钥隔离**：`legacyKeyAllowed()` 仅管理员或已领取历史的账号可用；任务创建、候选确认、计划生成、想法草稿、私有 Agent 草稿五条入口全部加校验；列表中隐藏该条目。
+6. **运维端点与来源校验**：`/actuator/**` 需 `ROLE_ADMIN`（未登录 401、普通用户 403、管理员 200）；`LocalOriginFilter` 提到最高优先级并覆盖运维路径。
+7. **真实审计人**：有会话记账号名，无会话后台动作记 `system`，单机未初始化记 `local-user`。
+
+### 3. 红线自检
+
+| 红线 | 自检结论 |
+| :--- | :--- |
+| 1 双轨数据库架构 | 未新增任何独立向量库与 `JdbcTemplate`；未改双轨配置 |
+| 2 历史 Flyway 迁移 | **未新增、未修改任何迁移脚本**（本次无需表结构变更：产物隔离通过引用派生实现） |
+| 3 ArchUnit 守卫 | 5/5 通过；未新增顶层包；`framework.context` 新增类仅依赖 framework 自身 |
+| 4 评估与 UI 资产 | 6 个 Hub `packId`、雷达图、`PublicQaRunner` 均未触碰 |
+| 5 前端产品设计 | 未改前端任何文件 |
+| 6 范围纪律 | 未改公开 API 路径/兼容字段；`AuditService.record` 签名保持不变 |
+| 7 假修复 | 无 `@Disabled`/`@Ignore`；4 个既有测试仅为新增依赖补参数/管理员身份，断言未放宽 |
+| 8 单任务全量回归 | 本 Task 全量 `mvn test` 全绿后才继续 |
+| 9 未实跑项 | 见第 5 节 |
+| 10 敏感凭据 | 未读取/输出/提交 `config/*` 与 `data/`；宿主机密钥相关测试全部使用权限判定，不触发真实外部调用 |
+| 11 git push | 仅本地提交 |
+| 12 代码质量 | 全部改动经 `google-java-format 1.28.0`；注释说明前提与边界 |
+
+### 4. 新增/修改测试类与核心正反例
+
+| 测试类 | 用例数 | 正常正例 | 攻击/异常反例 |
+| :--- | ---: | :--- | :--- |
+| `Task2IdorIntegrationTest` | 5 | 工作区所有者本人可批准；本人可读任务路由与产物；管理员可访问 Actuator；管理员登录名可读 | 他人审批 403 且状态仍 `PENDING`；他人任务路由 403；他人产物 403；无 `runId` 产物 404；普通用户评测数据集/Hub 导入 403；管理员引用他人运行仍 403 且不写库；未登录 Actuator 401、普通用户 403；普通用户 `deepseek` 任务 403 且不创建运行 |
+| `ContextArtifactOwnershipTest` | 7 | 同一运行同一归属重复卸载幂等复用；归属者回查成功 | 不同运行/不同账号同内容引用不同；无运行归属不落盘；历史无 `runId` 404；他人运行 403；非法引用不查库 |
+| `ByokCompactionSummarizerTest` | 5 | 使用运行连接完成摘要并回传 11/5 Token，请求携带该连接的 Bearer | 旧三参调用、无连接 scope、停用连接都不发起模型调用；`defaultConnectionId()` 从未被调用（证明无 `LOCAL` 回退）；关闭开关时不调用 |
+| `ControlledModelCompactionTest` | 3 | 压缩请求携带 `runId`/归属/连接；用量回调落到 `runtime.auxiliaryModelUsage` | 压缩抛出的 `StopExecution` 穿透且不派发模型调用；旧构造器保持空归属 |
+| `LegacyKeyAccessTest` | 6 | 单机模式、管理员、已领取历史账号可用 | 普通用户、后台无会话线程被拒；列表中看不到宿主机密钥条目 |
+| `AuditActorTest` | 4 | 登录账号名入库；单机模式 `local-user` | 初始化后无会话记 `system`；超长说明截断到 1000 且 `outcome` 默认 `RECORDED` |
+
+### 5. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 575, Failures: 0, Errors: 0, Skipped: 14** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，3:57 min，完成于 2026-11-24 12:32:06） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| 本 Task 新增测试类 | `Task2IdorIntegrationTest` 5、`ContextArtifactOwnershipTest` 7、`ByokCompactionSummarizerTest` 5、`ControlledModelCompactionTest` 3、`LegacyKeyAccessTest` 6、`AuditActorTest` 4，全部 0 失败 |
+
+**未实跑项**：Task 02 不涉及数据库迁移与 pgvector，未运行 `WORKBENCH_PG_TEST=true`；未改动前端，未执行前端门禁。

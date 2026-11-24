@@ -161,7 +161,7 @@ public class ModelConnectionService {
             true,
             true,
             "用于教学和快速体验，不产生真实模型费用。"));
-    if (Files.exists(LEGACY_DEEPSEEK_KEY)) {
+    if (Files.exists(LEGACY_DEEPSEEK_KEY) && legacyKeyAllowed()) {
       builtIns.add(
           new ConnectionView(
               "legacy-deepseek",
@@ -346,6 +346,26 @@ public class ModelConnectionService {
     return connections
         .findFirstByOwnerUserIdAndDefaultFlagTrueAndEnabledTrueOrderByCreatedAtAsc(ownerId())
         .map(UserModelConnectionEntity::getId);
+  }
+
+  /**
+   * 当前操作人是否可以使用宿主机遗留明文密钥 {@code config/deepseek-api-key.txt}。
+   *
+   * <p>该文件是全平台唯一的全局凭据：多用户模式下普通用户借它发起模型调用，等于白用管理员的额度， 且请求内容会发往与本人无关的账号。只有管理员或已显式领取历史数据的账号可以使用；
+   * 尚未初始化账号的单机本地模式保持历史行为。
+   */
+  @Transactional(readOnly = true)
+  public boolean legacyKeyAllowed() {
+    if (!auth.initialized()) return true;
+    return auth.current()
+        .map(user -> "ADMIN".equals(user.getRole()) || user.isLegacyClaimed())
+        .orElse(false);
+  }
+
+  /** 即将使用宿主机全局模型时调用；无权限则直接拒绝并给出可操作提示。 */
+  public void requireLegacyKeyAccess() {
+    if (legacyKeyAllowed()) return;
+    throw new AuthService.AccessDeniedException("宿主机全局 DeepSeek 密钥仅限管理员使用，请先在设置中配置并启用你自己的模型连接。");
   }
 
   /** 运行时解析：连接标识来自已校验并冻结的任务，不再读取浏览器会话。 */

@@ -1,18 +1,18 @@
 package dev.workbench.infrastructure.agentscope;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.domain.EventType;
+import dev.workbench.domain.ModelKind;
+import dev.workbench.domain.ModelMode;
+import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.context.CompactionRequest;
-import dev.workbench.framework.context.CompactionResult;
+import dev.workbench.framework.context.CompactionScope;
 import dev.workbench.framework.context.ContextBreakdown;
 import dev.workbench.framework.context.ContextCompactionHook;
 import dev.workbench.framework.context.ContextMessage;
 import dev.workbench.framework.model.ModelRateLimitException;
 import dev.workbench.framework.trace.GlassboxModels;
 import dev.workbench.framework.trace.SensitiveDataMasker;
-import dev.workbench.domain.EventType;
-import dev.workbench.domain.ModelKind;
-import dev.workbench.domain.ModelMode;
-import dev.workbench.framework.agent.execution.AgentRuntime;
 import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -31,21 +31,27 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import reactor.core.publisher.Flux;
 
-/** AgentScope Model 包装器：每次真实请求前执行预算检查、四级上下文压缩并记录用量。 */
+/**
+ * AgentScope Model 包装器：每次真实请求前执行预算检查、四级上下文压缩并记录用量。
+ *
+ * <p>{@code compactionScope} 携带当前运行标识、BYOK 连接与用量回调：压缩发生在后台线程，没有 HTTP 会话，只有显式透传才能避免 L2 摘要回退到 {@code
+ * LOCAL} 默认连接而盗用他人密钥与额度。
+ */
 public record ControlledModel(
     Model delegate,
     ModelMode mode,
     AgentRuntime runtime,
     AtomicReference<RuntimeException> failure,
     Predicate<Throwable> rateLimitRejection,
-    ContextCompactionHook compactionHook)
+    ContextCompactionHook compactionHook,
+    CompactionScope compactionScope)
     implements Model {
   public ControlledModel(
       Model delegate,
       ModelMode mode,
       AgentRuntime runtime,
       AtomicReference<RuntimeException> failure) {
-    this(delegate, mode, runtime, failure, error -> false, null);
+    this(delegate, mode, runtime, failure, error -> false, null, CompactionScope.NONE);
   }
 
   public ControlledModel(
@@ -54,7 +60,18 @@ public record ControlledModel(
       AgentRuntime runtime,
       AtomicReference<RuntimeException> failure,
       Predicate<Throwable> rateLimitRejection) {
-    this(delegate, mode, runtime, failure, rateLimitRejection, null);
+    this(delegate, mode, runtime, failure, rateLimitRejection, null, CompactionScope.NONE);
+  }
+
+  public ControlledModel(
+      Model delegate,
+      ModelMode mode,
+      AgentRuntime runtime,
+      AtomicReference<RuntimeException> failure,
+      Predicate<Throwable> rateLimitRejection,
+      ContextCompactionHook compactionHook) {
+    this(
+        delegate, mode, runtime, failure, rateLimitRejection, compactionHook, CompactionScope.NONE);
   }
 
   public String getModelName() {
@@ -97,7 +114,8 @@ public record ControlledModel(
             }
             StringBuilder inputText = new StringBuilder();
             for (Msg message : effective) {
-              if (message.getTextContent() != null) inputText.append(message.getTextContent()).append('\n');
+              if (message.getTextContent() != null)
+                inputText.append(message.getTextContent()).append('\n');
             }
             inputText.append(tools);
             runtime.verifyModelInput(inputText.toString());
@@ -150,15 +168,19 @@ public record ControlledModel(
   /**
    * 调用四级压缩并把结果映射回 AgentScope 消息。
    *
-   * <p>未修改的消息复用原对象，保留 think/tool_use 等结构化块；被压缩的工具结果重建为带原 callId 的
-   * ToolResultBlock，确保工具调用与结果仍然成对。
+   * <p>未修改的消息复用原对象，保留 think/tool_use 等结构化块；被压缩的工具结果重建为带原 callId 的 ToolResultBlock，确保工具调用与结果仍然成对。
    */
   private Compacted compact(List<Msg> messages) {
     try {
+      var scope = compactionScope.withUsage(runtime::auxiliaryModelUsage);
       var result =
           compactionHook.compact(
-              CompactionRequest.of(toContextMessages(messages), delegate.getContextWindowSize()));
+              CompactionRequest.of(
+                  toContextMessages(messages), delegate.getContextWindowSize(), scope));
       return new Compacted(rebuild(messages, result.messages()), result.breakdown());
+    } catch (dev.workbench.framework.control.StopExecution stop) {
+      // 预算/取消类停止信号不能被“压缩失败即降级”吞掉。
+      throw stop;
     } catch (RuntimeException ignored) {
       // 压缩适配失败时保留原请求；预算检查仍会阻止超限输入。
       return null;
@@ -248,10 +270,7 @@ public record ControlledModel(
 
   /** 提取发给模型的消息切片、工具 Schema 以及原始响应/工具决策，脱敏后供玻璃盒透视使用。 */
   private static GlassboxModels.ModelCallPayload buildPayload(
-      List<Msg> messages,
-      List<ToolSchema> tools,
-      ChatResponse response,
-      ContextBreakdown context) {
+      List<Msg> messages, List<ToolSchema> tools, ChatResponse response, ContextBreakdown context) {
     boolean truncated = false;
     var reqMessages = new ArrayList<GlassboxModels.PromptMessage>();
     if (messages != null) {

@@ -20,16 +20,29 @@ public class EvalLabController {
   private final EvalBenchmarkHubService hub;
   private final EvalCustomDatasetService datasets;
   private final EvalCompareService comparisons;
+  private final dev.workbench.auth.AuthService auth;
 
   public EvalLabController(
       EvalLabService lab,
       EvalBenchmarkHubService hub,
       EvalCustomDatasetService datasets,
-      EvalCompareService comparisons) {
+      EvalCompareService comparisons,
+      dev.workbench.auth.AuthService auth) {
     this.lab = lab;
     this.hub = hub;
     this.datasets = datasets;
     this.comparisons = comparisons;
+    this.auth = auth;
+  }
+
+  /**
+   * Benchmark Hub 题包是全平台共享的只读目录：普通用户可以浏览与预览，但下载覆盖、离线导入会写入 所有用户共用的题库文件，必须收口到管理员。
+   *
+   * <p>尚未初始化账号的单机本地模式没有用户体系，保持既有本地能力。
+   */
+  private void requireAdmin() {
+    if (!auth.initialized()) return;
+    auth.requireAdmin();
   }
 
   public record Created(String id) {}
@@ -74,16 +87,18 @@ public class EvalLabController {
     return hub.list();
   }
 
-  /** 在线下载；URL 白名单、大小与 SHA-256 均在服务层强制校验。 */
+  /** 在线下载；URL 白名单、大小与 SHA-256 均在服务层强制校验。仅管理员可执行。 */
   @PostMapping("/hub/{packId}/download")
   public EvalBenchmarkHubService.ImportResult download(@PathVariable String packId) {
+    requireAdmin();
     return hub.download(packId);
   }
 
-  /** 网络受限时的离线 JSONL 导入，与在线下载走同一适配器。 */
+  /** 网络受限时的离线 JSONL 导入，与在线下载走同一适配器。仅管理员可执行。 */
   @PostMapping("/hub/{packId}/import")
   public EvalBenchmarkHubService.ImportResult importPack(
       @PathVariable String packId, @RequestBody EvalBenchmarkHubService.ImportRequest request) {
+    requireAdmin();
     return hub.importJsonl(packId, request == null ? null : request.jsonl());
   }
 

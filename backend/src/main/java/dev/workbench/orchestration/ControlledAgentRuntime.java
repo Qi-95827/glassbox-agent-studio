@@ -7,14 +7,14 @@ import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.control.RunControl;
-import dev.workbench.framework.trace.GlassboxModels;
 import dev.workbench.framework.tool.ToolApprovalDecision;
 import dev.workbench.framework.tool.ToolRiskAssessment;
-import dev.workbench.task.CostService;
+import dev.workbench.framework.trace.GlassboxModels;
 import dev.workbench.store.AgentAssemblyRecordService;
 import dev.workbench.store.GlassboxTraceStore;
 import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.store.RunStateStore;
+import dev.workbench.task.CostService;
 import dev.workbench.tool.ToolApprovalService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.Objects;
@@ -223,6 +223,28 @@ final class ControlledAgentRuntime implements AgentRuntime {
     return costReservation.outputTokenUpperBound();
   }
 
+  /**
+   * 后台辅助调用（如 L2 上下文摘要）的用量计入当前运行的费用台账。
+   *
+   * <p>不复用 {@link #beforeModel}/{@link #modelResult}：那对方法维护当前 Agent 的调用开始/结算配对，
+   * 摘要调用与主调用并不成对，复用会错位关闭主调用的用量。这里单独预留并结算，只影响费用账本。
+   */
+  @Override
+  public void auxiliaryModelUsage(Integer input, Integer output) {
+    if (costs == null) return;
+    var reservation = costs.reserve(runId, auxiliaryModelKind());
+    if (reservation == null || reservation.id() == null) return;
+    var settlement = costs.settle(reservation, input, output);
+    if (settlement.overBudgetMicros() > 0)
+      throw new dev.workbench.framework.control.StopExecution(
+          dev.workbench.domain.StopCause.COST_LIMIT, "上下文摘要调用的实际费用已超出硬预算，已停止后续调用。");
+  }
+
+  /** 辅助调用按当前装配的模型来源计价；装配尚未完成时按内置模拟模型处理。 */
+  private ModelKind auxiliaryModelKind() {
+    return assembly == null ? ModelKind.MOCK : ModelKind.forMode(assembly.model().mode());
+  }
+
   @Override
   public void verifyModelInput(String input) {
     Integer bound = costReservation.inputTokenUpperBound();
@@ -233,11 +255,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
       costReservation = CostService.Reservation.NONE;
       throw new dev.workbench.framework.control.StopExecution(
           dev.workbench.domain.StopCause.COST_LIMIT,
-          "模型输入可能超过价格版本的 Token 上界："
-              + bytes
-              + " 字节 > "
-              + bound
-              + "；本次调用未派发。");
+          "模型输入可能超过价格版本的 Token 上界：" + bytes + " 字节 > " + bound + "；本次调用未派发。");
     }
   }
 
@@ -257,8 +275,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
     if (assembly == null || !Objects.equals(assembly.tools().get(tool), version))
       throw new IllegalStateException("工具版本与本次 Agent 装配记录不一致。");
     if (authorization != null)
-      authorization.requireCurrent(
-          runs.runSnapshot(runId).taskId().toString());
+      authorization.requireCurrent(runs.runSnapshot(runId).taskId().toString());
     return control.beginTool(agentId, tool, version, fingerprint, nodePolicy);
   }
 
@@ -271,8 +288,10 @@ final class ControlledAgentRuntime implements AgentRuntime {
   public void event(EventType type, String message) {
     var ref = evidence.eventRefForAgent(runId, agentId);
     // 调用标识只在服务端已创建对应记录后写入；旧调用或拒绝前事件保持空值。
-    if (type == EventType.MODEL_STARTED) ref = ref.withModelCall(control.currentModelCallId(agentId));
-    else if (type == EventType.MODEL_FINISHED) ref = ref.withModelCall(control.lastModelCallId(agentId));
+    if (type == EventType.MODEL_STARTED)
+      ref = ref.withModelCall(control.currentModelCallId(agentId));
+    else if (type == EventType.MODEL_FINISHED)
+      ref = ref.withModelCall(control.lastModelCallId(agentId));
     else if (type == EventType.TOOL_STARTED
         || type == EventType.TOOL_FINISHED
         || type == EventType.TOOL_REJECTED)
@@ -313,20 +332,13 @@ final class ControlledAgentRuntime implements AgentRuntime {
     if (approvals == null || nodePolicy == null)
       return ToolApprovalDecision.reject("当前运行没有可用的动态审批通道，高危工具不会自动执行。");
     return approvals.await(
-        runId,
-        nodePolicy.nodeId(),
-        agentId,
-        toolName,
-        version,
-        argsJson,
-        risk,
-        control::check);
+        runId, nodePolicy.nodeId(), agentId, toolName, version, argsJson, risk, control::check);
   }
 
   @Override
-  public void contextCompacted(dev.workbench.framework.context.ContextBreakdown breakdown) {    if (breakdown == null || !breakdown.compacted()) return;
-    boolean english =
-        dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
+  public void contextCompacted(dev.workbench.framework.context.ContextBreakdown breakdown) {
+    if (breakdown == null || !breakdown.compacted()) return;
+    boolean english = dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
     String message =
         english
             ? "Context "
@@ -351,7 +363,9 @@ final class ControlledAgentRuntime implements AgentRuntime {
         runId,
         EventType.CONTEXT_COMPACTED,
         message,
-        evidence.eventRefForAgent(runId, agentId).withModelCall(control.currentModelCallId(agentId)));
+        evidence
+            .eventRefForAgent(runId, agentId)
+            .withModelCall(control.currentModelCallId(agentId)));
   }
 
   @Override

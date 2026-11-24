@@ -12,8 +12,8 @@ import org.springframework.stereotype.Component;
 /**
  * L1 卸载产物落盘实现。
  *
- * <p>以内容 SHA-256 前 16 位生成确定性引用，重复卸载同一正文不会产生无界重复数据；
- * 只保存工具正文与结构化大纲，不保存密钥。
+ * <p>引用由「归属 + 运行 + 内容 SHA-256」共同派生：同一运行内重复卸载同一正文不会产生无界重复数据，
+ * 而不同用户或不同运行即使内容完全相同也会得到不同引用，杜绝凭内容哈希跨账号读取他人工具正文。 只保存工具正文与结构化大纲，不保存密钥。
  */
 @Component
 public class JpaContextArtifactStore implements ContextArtifactStore {
@@ -31,7 +31,12 @@ public class JpaContextArtifactStore implements ContextArtifactStore {
   @Override
   public String save(Artifact artifact) {
     if (artifact == null || artifact.content() == null) return null;
-    String id = reference(artifact.content(), artifact.title());
+    if (artifact.runId() == null || artifact.runId().isBlank()) {
+      // 没有运行归属的产物无法通过回查接口做归属校验，直接不落盘，避免产生不可审计的孤儿正文。
+      return null;
+    }
+    String id =
+        reference(artifact.ownerScopeKey(), artifact.runId(), artifact.content(), artifact.title());
     if (artifacts.existsById(id)) return id;
     try {
       artifacts.save(
@@ -50,15 +55,22 @@ public class JpaContextArtifactStore implements ContextArtifactStore {
     }
   }
 
-  /** 确定性引用：内容哈希 + 标题，不含用户 ID 或路径明文。 */
-  static String reference(String content, String title) {
+  /** 确定性引用：归属 + 运行 + 标题 + 内容哈希，不含用户 ID 或路径明文。 */
+  static String reference(String ownerScopeKey, String runId, String content, String title) {
+    String seed =
+        (ownerScopeKey == null ? "" : ownerScopeKey)
+            + '\u0000'
+            + (runId == null ? "" : runId)
+            + '\u0000'
+            + (title == null ? "" : title)
+            + '\u0000'
+            + (content == null ? "" : content);
     try {
       var digest =
-          MessageDigest.getInstance("SHA-256")
-              .digest((title + "\n" + content).getBytes(StandardCharsets.UTF_8));
+          MessageDigest.getInstance("SHA-256").digest(seed.getBytes(StandardCharsets.UTF_8));
       return "art-" + HexFormat.of().formatHex(digest).substring(0, 16);
     } catch (Exception e) {
-      return "art-" + Integer.toHexString((title + content).hashCode());
+      return "art-" + Integer.toHexString(seed.hashCode());
     }
   }
 }

@@ -2,6 +2,7 @@ package dev.workbench.control;
 
 import dev.workbench.framework.context.CompactionRequest;
 import dev.workbench.framework.context.CompactionResult;
+import dev.workbench.framework.context.CompactionScope;
 import dev.workbench.framework.context.CompactionSummarizer;
 import dev.workbench.framework.context.CompactionTier;
 import dev.workbench.framework.context.ContextArtifactStore;
@@ -27,10 +28,9 @@ import org.springframework.stereotype.Component;
 /**
  * 工业级四级上下文压缩（Query-Aware + Artifact 卸载 + 增量锚点摘要）。
  *
- * <p><b>L0</b> 只做精确分桶；<b>L1</b> 把超长工具输出完整落盘为 Artifact，并依据当前目标问题
- * 选出最相关段落留在消息体，彻底废除“死留头 200 + 尾 100 字”；<b>L2</b> 保留固定 System 锚点与最近
- * 成对轮次，把中间历史压缩为可增量合并的四段结构化检查点；<b>L3</b> 仅在仍超限时按相关性从低到高
- * 淘汰正文，绝不删除 System 规则、结构化锚点，也绝不拆散 {@code tool_call}/{@code tool_result} 成对关系。
+ * <p><b>L0</b> 只做精确分桶；<b>L1</b> 把超长工具输出完整落盘为 Artifact，并依据当前目标问题 选出最相关段落留在消息体，彻底废除“死留头 200 + 尾 100
+ * 字”；<b>L2</b> 保留固定 System 锚点与最近 成对轮次，把中间历史压缩为可增量合并的四段结构化检查点；<b>L3</b> 仅在仍超限时按相关性从低到高 淘汰正文，绝不删除
+ * System 规则、结构化锚点，也绝不拆散 {@code tool_call}/{@code tool_result} 成对关系。
  */
 @Component
 public class MultiTierContextCompactor implements ContextCompactionPolicy {
@@ -76,7 +76,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     String retainedPreview = "";
 
     if (ratio(before, limit) >= request.l1Threshold()) {
-      var result = offloadToolOutputs(working, request.offloadAfterTurns(), focus);
+      var result = offloadToolOutputs(working, request.offloadAfterTurns(), focus, request.scope());
       if (result.changed()) {
         working = result.messages();
         offloaded.addAll(result.ids());
@@ -177,8 +177,9 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
       return request.focusQuery().strip();
     for (int index = messages.size() - 1; index >= 0; index--) {
       var message = messages.get(index);
-      if ("USER".equals(message.role()) && message.content() != null && !message.content().isBlank())
-        return message.content().strip();
+      if ("USER".equals(message.role())
+          && message.content() != null
+          && !message.content().isBlank()) return message.content().strip();
     }
     return "";
   }
@@ -188,7 +189,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
   // ---------------------------------------------------------------------------
 
   private OffloadResult offloadToolOutputs(
-      List<ContextMessage> messages, int keepTurns, String focus) {
+      List<ContextMessage> messages, int keepTurns, String focus, CompactionScope scope) {
     int keepFrom = roundStart(messages, keepTurns);
     var updated = new ArrayList<ContextMessage>(messages.size());
     var ids = new ArrayList<String>();
@@ -203,7 +204,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
           && message.content().length() > L1_MIN_CHARS) {
         String id = message.toolCallId() == null ? "tool-result-" + index : message.toolCallId();
         var excerpt = selectExcerpts(message.content(), focus, excerptBudget(message.content()));
-        String ref = persistArtifact(message, id, excerpt);
+        String ref = persistArtifact(message, id, excerpt, scope);
         String replacement = renderOffloaded(message, id, ref, excerpt);
         updated.add(new ContextMessage(message.role(), message.name(), replacement, id));
         ids.add(id);
@@ -221,7 +222,8 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     return Math.max(600, Math.min(6_000, content.length() / 5));
   }
 
-  private String persistArtifact(ContextMessage message, String toolCallId, Excerpt excerpt) {
+  private String persistArtifact(
+      ContextMessage message, String toolCallId, Excerpt excerpt, CompactionScope scope) {
     String title = message.name() == null ? "tool-output" : message.name();
     String outlineJson = outlineJson(excerpt);
     for (var store : artifactStores) {
@@ -229,10 +231,17 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
       String ref =
           store.save(
               new ContextArtifactStore.Artifact(
-                  null, toolCallId, title, message.content(), outlineJson));
+                  scope.runId(),
+                  scope.ownerScopeKey(),
+                  toolCallId,
+                  title,
+                  message.content(),
+                  outlineJson));
       if (ref != null && !ref.isBlank()) return ref;
     }
-    return deterministicReference(message.content(), title + toolCallId);
+    // 没有可用存储时仍要生成确定性引用，但种子必须带上运行与归属，避免跨用户撞同一引用。
+    return deterministicReference(
+        message.content(), title + toolCallId + scope.runId() + scope.ownerScopeKey());
   }
 
   private static String deterministicReference(String content, String seed) {
@@ -327,8 +336,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     return new SummaryResult(updated, summary, summary, true);
   }
 
-  private static int previousCheckpointIndex(
-      List<ContextMessage> messages, int from, int to) {
+  private static int previousCheckpointIndex(List<ContextMessage> messages, int from, int to) {
     for (int index = to - 1; index >= from; index--) {
       var message = messages.get(index);
       if ("SYSTEM".equals(message.role())
@@ -339,17 +347,14 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
   }
 
   private String summarize(
-      CompactionRequest request,
-      String focus,
-      String previous,
-      List<ContextMessage> middle) {
+      CompactionRequest request, String focus, String previous, List<ContextMessage> middle) {
     var candidate =
         request.summarizer() != null && request.summarizer().isAvailable()
             ? request.summarizer()
             : firstAvailable();
     if (candidate == null) return "";
     try {
-      String text = candidate.summarize(focus, previous, middle);
+      String text = candidate.summarize(request.scope(), focus, previous, middle);
       if (text == null || text.isBlank()) return "";
       return normalizeCheckpoint(text);
     } catch (RuntimeException e) {
@@ -383,28 +388,38 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
         String line = raw.strip();
         if (line.isBlank() || line.length() < 4) continue;
         String lower = line.toLowerCase(Locale.ROOT);
-        if (line.endsWith("?") || line.endsWith("？")
-            || line.contains("待办") || lower.contains("todo") || lower.contains("next step")
-            || line.contains("未解决") || line.contains("下一步")) {
+        if (line.endsWith("?")
+            || line.endsWith("？")
+            || line.contains("待办")
+            || lower.contains("todo")
+            || lower.contains("next step")
+            || line.contains("未解决")
+            || line.contains("下一步")) {
           addLimited(questions, line);
-        } else if (line.contains("禁止") || line.contains("不得") || line.contains("必须")
-            || line.contains("仅允许") || line.contains("只能") || lower.contains("must")
-            || lower.contains("never") || lower.contains("constraint")) {
+        } else if (line.contains("禁止")
+            || line.contains("不得")
+            || line.contains("必须")
+            || line.contains("仅允许")
+            || line.contains("只能")
+            || lower.contains("must")
+            || lower.contains("never")
+            || lower.contains("constraint")) {
           addLimited(constraints, line);
         } else if (PATH_PATTERN.matcher(line).find()
-            || line.contains("修改") || line.contains("写入") || line.contains("创建")
-            || lower.contains("changed") || lower.contains("written")
+            || line.contains("修改")
+            || line.contains("写入")
+            || line.contains("创建")
+            || lower.contains("changed")
+            || lower.contains("written")
             || "TOOL".equals(role)) {
           addLimited(states, line);
-        } else if (NUMBER_PATTERN.matcher(line).find()
-            || line.length() >= 12) {
+        } else if (NUMBER_PATTERN.matcher(line).find() || line.length() >= 12) {
           addLimited(facts, line);
         }
       }
     }
     var mergedFacts = merge(sections.get("confirmed_facts"), rankByFocus(facts, focus), 8);
-    var mergedConstraints =
-        merge(sections.get("active_constraints"), constraints, 8);
+    var mergedConstraints = merge(sections.get("active_constraints"), constraints, 8);
     var mergedStates = merge(sections.get("file_and_tool_state"), states, 8);
     var mergedQuestions = merge(sections.get("open_questions"), questions, 8);
     var text = new StringBuilder(CHECKPOINT_MARK).append('\n');
@@ -462,8 +477,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     return order.stream().map(lines::get).toList();
   }
 
-  private static List<String> merge(
-      List<String> previous, List<String> next, int limit) {
+  private static List<String> merge(List<String> previous, List<String> next, int limit) {
     var result = new LinkedHashSet<String>();
     if (previous != null) {
       for (String line : previous) if (!line.isBlank()) result.add(line.strip());
@@ -522,8 +536,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     }
     if (!changed) return HardGuardResult.unchanged(messages);
     ensureHardGuardNotice(working);
-    return new HardGuardResult(
-        working, HARD_GUARD_MARK + "已按相关性从低到高淘汰旧正文；成对工具关系与结构化锚点保持不变。", true);
+    return new HardGuardResult(working, HARD_GUARD_MARK + "已按相关性从低到高淘汰旧正文；成对工具关系与结构化锚点保持不变。", true);
   }
 
   private static int lowestValueIndex(
@@ -548,8 +561,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     for (int position = 0; position < inputs.size(); position++) {
       int index = offsets.get(position);
       var message = messages.get(index);
-      double score =
-          ranked.containsKey("m" + index) ? ranked.get("m" + index).bm25() : 0;
+      double score = ranked.containsKey("m" + index) ? ranked.get("m" + index).bm25() : 0;
       score += structuralBoost(message.content()) * 0.35;
       // 空正文优先淘汰；工具结果只缩短不删除。
       if (message.content() == null || message.content().isBlank()) score = -1;
@@ -572,11 +584,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     messages.add(
         at,
         new ContextMessage(
-            "SYSTEM",
-            null,
-            HARD_GUARD_MARK
-                + "中间历史已按相关性裁剪；任务锚点、结构化检查点与最近一轮完整消息保持不变。",
-            null));
+            "SYSTEM", null, HARD_GUARD_MARK + "中间历史已按相关性裁剪；任务锚点、结构化检查点与最近一轮完整消息保持不变。", null));
   }
 
   // ---------------------------------------------------------------------------
@@ -601,7 +609,9 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
             .append('\n');
       }
       String value = text.toString();
-      return value.length() <= L1_PREVIEW_CHARS ? value : value.substring(0, L1_PREVIEW_CHARS - 1) + "…";
+      return value.length() <= L1_PREVIEW_CHARS
+          ? value
+          : value.substring(0, L1_PREVIEW_CHARS - 1) + "…";
     }
   }
 
@@ -707,7 +717,8 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
       String lower = line.toLowerCase(Locale.ROOT);
       boolean heading = line.matches("^#{1,6}\\s+.+") || line.matches("^[=~-]{3,}$");
       boolean code =
-          line.matches("^(public|private|protected|static|class|interface|record|def|function|export|const|let)\\b.*")
+          line.matches(
+                  "^(public|private|protected|static|class|interface|record|def|function|export|const|let)\\b.*")
               || line.contains("=>")
               || line.endsWith("{");
       boolean signal =
@@ -725,10 +736,8 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     if (PATH_PATTERN.matcher(content).find()) score += 0.35;
     if (EXCEPTION_PATTERN.matcher(content).find()) score += 0.45;
     if (NUMBER_PATTERN.matcher(content).find()) score += 0.15;
-    if (content.contains("TODO") || content.contains("待办") || content.contains("未解决"))
-      score += 0.2;
-    if (content.contains("禁止") || content.contains("不得") || content.contains("必须"))
-      score += 0.2;
+    if (content.contains("TODO") || content.contains("待办") || content.contains("未解决")) score += 0.2;
+    if (content.contains("禁止") || content.contains("不得") || content.contains("必须")) score += 0.2;
     return Math.min(1, score);
   }
 
@@ -775,8 +784,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     }
   }
 
-  private record HardGuardResult(
-      List<ContextMessage> messages, String preview, boolean changed) {
+  private record HardGuardResult(List<ContextMessage> messages, String preview, boolean changed) {
     static HardGuardResult unchanged(List<ContextMessage> messages) {
       return new HardGuardResult(messages, "", false);
     }

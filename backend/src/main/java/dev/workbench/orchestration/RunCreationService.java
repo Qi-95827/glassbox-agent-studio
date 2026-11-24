@@ -71,8 +71,7 @@ final class RunCreationService {
       throw new IllegalArgumentException(
           dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.goal"));
     }
-    draft.scenario =
-        Scenario.fromCode(request.scenario() == null ? "normal" : request.scenario());
+    draft.scenario = Scenario.fromCode(request.scenario() == null ? "normal" : request.scenario());
     String connectionId =
         request.modelConnectionId() == null ? null : request.modelConnectionId().strip();
     String requested =
@@ -100,9 +99,10 @@ final class RunCreationService {
         draft.modelConnectionId =
             connections
                 .defaultConnectionId()
-                .orElseThrow(
-                    () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"));
+                .orElseThrow(() -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"));
     }
+    // 使用宿主机全局 DeepSeek 密钥属于特权动作：多用户模式下普通用户必须走自己的连接。
+    if (draft.mode == ModelMode.DEEPSEEK) connections.requireLegacyKeyAccess();
   }
 
   private void resolveWorkspace(CreateTaskRequest request, Draft draft) {
@@ -119,16 +119,14 @@ final class RunCreationService {
       throw new IllegalArgumentException("请使用文件列表或单文件字段，不能同时指定。");
     draft.writeEnabled = Boolean.TRUE.equals(request.writeEnabled());
     draft.memoryEnabled = Boolean.TRUE.equals(request.memoryEnabled());
-    draft.bugId =
-        request.bugId() == null || request.bugId().isBlank() ? null : request.bugId();
+    draft.bugId = request.bugId() == null || request.bugId().isBlank() ? null : request.bugId();
     if (draft.bugId != null
         && (draft.workspaceId == null
             || bugs.list().stream().noneMatch(b -> b.id().equals(draft.bugId))))
       throw new IllegalArgumentException("模拟 Bug 必须关联有效工作区。");
     draft.directoryScopes =
         request.directoryScopes() == null ? List.of() : request.directoryScopes();
-    draft.excludedPaths =
-        request.excludedPaths() == null ? List.of() : request.excludedPaths();
+    draft.excludedPaths = request.excludedPaths() == null ? List.of() : request.excludedPaths();
     draft.maxCostMicros = request.maxCostMicros();
     if (draft.mode == ModelMode.USER && draft.maxCostMicros != null)
       throw new IllegalArgumentException("自带 Key 模型使用你自己的额度，平台费用硬预算仅适用于内置模型。");
@@ -137,12 +135,10 @@ final class RunCreationService {
     if (!draft.excludedPaths.isEmpty() && draft.directoryScopes.isEmpty())
       throw new IllegalArgumentException("排除规则必须配合目录授权使用。");
     if (draft.workspaceId == null) {
-      if (draft.fileScope != null
-          || draft.hasFileList
-          || draft.writeEnabled
-          || draft.memoryEnabled)
+      if (draft.fileScope != null || draft.hasFileList || draft.writeEnabled || draft.memoryEnabled)
         throw new IllegalArgumentException(
-          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.workspaceRequired"));
+            dev.workbench.framework.i18n.LocalizedMessages.get(
+                "validation.task.workspaceRequired"));
       return;
     }
     authorizeWorkspace(request, draft);
@@ -217,8 +213,7 @@ final class RunCreationService {
   private void readEntry(CreateTaskRequest request, Draft draft) {
     draft.constraints = validatedItems(request.constraints(), "约束");
     draft.acceptance = validatedItems(request.acceptanceCriteria(), "验收条件");
-    draft.entryKind =
-        request.entryKind() == null ? TaskEntryKind.GENERAL : request.entryKind();
+    draft.entryKind = request.entryKind() == null ? TaskEntryKind.GENERAL : request.entryKind();
     draft.entryValidation =
         switch (draft.entryKind) {
           case REQUIREMENT, DESIGN, CODE, TEST ->
@@ -284,8 +279,7 @@ final class RunCreationService {
     draft.reviewPlan = Boolean.TRUE.equals(request.reviewPlan());
     WorkflowTemplate template =
         draft.selectedTemplate == null ? null : workflows.template(draft.selectedTemplate);
-    if (draft.reviewPlan && template == null)
-      throw new IllegalArgumentException("只有动态模板支持执行前确认。");
+    if (draft.reviewPlan && template == null) throw new IllegalArgumentException("只有动态模板支持执行前确认。");
     if (template == null && request.nodeBudgets() != null && !request.nodeBudgets().isEmpty())
       throw new IllegalArgumentException("只有动态模板支持节点预算。");
     if (template != null) {
@@ -328,12 +322,8 @@ final class RunCreationService {
       boolean english = dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(draft.locale);
       createdMessage =
           draft.reviewPlan
-              ? english
-                  ? "Workflow plan saved and awaiting user confirmation."
-                  : "工作流计划已保存，等待用户确认。"
-              : english
-                  ? "Workflow plan saved and awaiting execution."
-                  : "工作流计划已保存，等待执行。";
+              ? english ? "Workflow plan saved and awaiting user confirmation." : "工作流计划已保存，等待用户确认。"
+              : english ? "Workflow plan saved and awaiting execution." : "工作流计划已保存，等待执行。";
       taskCreations.persist(
           draft.task,
           java.util.UUID.fromString(draft.runId),

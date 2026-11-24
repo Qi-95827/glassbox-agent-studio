@@ -2,12 +2,12 @@ package dev.workbench.privateagent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.AgentRole;
 import dev.workbench.domain.ModelMode;
 import dev.workbench.framework.agent.assembly.AgentAssemblyPlanner;
 import dev.workbench.framework.agent.definition.AgentDefinitionRef;
+import dev.workbench.framework.agent.definition.AgentRoleRegistry;
 import dev.workbench.infrastructure.model.TaskIdeaModel;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -58,6 +58,11 @@ class PrivateAgentDraftModelIntegrationTest {
           SEEN_INSTRUCTIONS.set(instructions);
           return MODEL_JSON;
         }
+
+        @Override
+        public String draft(String instructions, String idea, String connectionId) {
+          return draft(instructions, idea);
+        }
       };
     }
   }
@@ -74,12 +79,7 @@ class PrivateAgentDraftModelIntegrationTest {
                 components
                     .createSkill(
                         new PrivateComponentModels.SkillRequest(
-                            "草稿建议 Skill",
-                            "模型可见 Skill",
-                            null,
-                            null,
-                            null,
-                            "# 指导"))
+                            "草稿建议 Skill", "模型可见 Skill", null, null, null, "# 指导"))
                     .id())
             .id();
     var tool =
@@ -95,16 +95,10 @@ class PrivateAgentDraftModelIntegrationTest {
     components.updateSkill(
         skill,
         new PrivateComponentModels.SkillRequest(
-            "未发布 Skill 名称",
-            "未发布摘要",
-            null,
-            null,
-            null,
-            "# 未发布正文"));
+            "未发布 Skill 名称", "未发布摘要", null, null, null, "# 未发布正文"));
     components.updateTool(
         tool,
-        new PrivateComponentModels.ToolRequest(
-            "未发布工具名称", "未发布工具说明", "SEARCH", List.of(".css")));
+        new PrivateComponentModels.ToolRequest("未发布工具名称", "未发布工具说明", "SEARCH", List.of(".css")));
 
     var draft = components.draftFromIdea("检查前端可访问性，并给出覆盖范围", "MODEL");
     assertTrue(SEEN_INSTRUCTIONS.get().contains("草稿建议 Skill v1"));
@@ -151,7 +145,8 @@ class PrivateAgentDraftModelIntegrationTest {
     assertEquals("deepseek", published.modelMode());
     assertEquals("FIXED", components.agentVersions(created.id()).getFirst().modelStrategy());
     assertEquals("deepseek", components.agentVersions(created.id()).getFirst().modelMode());
-    assertEquals(1, components.agentVersions(created.id()).getFirst().skills().getFirst().version());
+    assertEquals(
+        1, components.agentVersions(created.id()).getFirst().skills().getFirst().version());
     assertEquals(1, components.agentVersions(created.id()).getFirst().tools().getFirst().version());
 
     var assembly =

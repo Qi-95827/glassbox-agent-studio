@@ -36,6 +36,10 @@ public class DeepSeekPlanCandidateModel implements PlanCandidateModel {
         modelConnectionId == null || modelConnectionId.isBlank()
             ? null
             : connections.resolveForExecution(modelConnectionId);
+    if (connection == null) {
+      // 没有自有连接时这里会读取宿主机全局密钥文件：多用户模式下普通用户必须被拒绝。
+      connections.requireLegacyKeyAccess();
+    }
     var model =
         connection == null
             ? DeepSeekModelFactory.deepSeekModel()

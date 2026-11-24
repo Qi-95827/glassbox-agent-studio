@@ -3,11 +3,12 @@ package dev.workbench.evaluation;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.audit.AuditService;
-import dev.workbench.domain.RunSnapshot;
+import dev.workbench.auth.AuthService;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.orchestration.CreateTaskRequest;
 import dev.workbench.orchestration.RunService;
+import dev.workbench.ownership.OwnershipService;
 import dev.workbench.persistence.entity.EvaluationDatasetSampleEntity;
 import dev.workbench.persistence.entity.EvaluationDatasetVersionEntity;
 import dev.workbench.persistence.entity.ManagedEvaluationBatchEntity;
@@ -25,15 +26,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -53,6 +50,8 @@ public class ManagedEvaluationDatasetService {
   private final TaskRecordService tasks;
   private final ObjectMapper json;
   private final AuditService audit;
+  private final AuthService auth;
+  private final OwnershipService ownership;
   private final ExecutorService executor;
   private final RunCompletionWaiter completionWaiter;
 
@@ -66,6 +65,8 @@ public class ManagedEvaluationDatasetService {
       TaskRecordService tasks,
       ObjectMapper json,
       AuditService audit,
+      AuthService auth,
+      OwnershipService ownership,
       @org.springframework.beans.factory.annotation.Qualifier("evaluationExecutor")
           ExecutorService executor,
       RunCompletionWaiter completionWaiter) {
@@ -78,8 +79,27 @@ public class ManagedEvaluationDatasetService {
     this.tasks = tasks;
     this.json = json;
     this.audit = audit;
+    this.auth = auth;
+    this.ownership = ownership;
     this.executor = executor;
     this.completionWaiter = completionWaiter;
+  }
+
+  /**
+   * 多用户模式下数据集是平台级共享资产：普通用户改写它即可向他人评测注入样本。
+   *
+   * <p>尚未初始化账号的单机本地模式没有用户体系，保持既有本地能力。
+   */
+  private void requireAdmin() {
+    if (!auth.initialized()) return;
+    auth.requireAdmin();
+  }
+
+  /** 发布者一律取服务端当前登录账号；请求体自报的发布者不可信。 */
+  private String currentActor() {
+    return auth.current()
+        .map(dev.workbench.persistence.entity.UserEntity::getUsername)
+        .orElse(AuditService.LOCAL_ACTOR);
   }
 
   @PreDestroy
@@ -97,6 +117,7 @@ public class ManagedEvaluationDatasetService {
   /** 新增或更新草稿；code 不变时保留原记录并递增版本。 */
   @Transactional
   public Sample upsert(String datasetKey, SampleInput input) {
+    requireAdmin();
     key(datasetKey);
     validate(input);
     String time = Instant.now().toString();
@@ -136,6 +157,7 @@ public class ManagedEvaluationDatasetService {
 
   @Transactional
   public void delete(String datasetKey, String code) {
+    requireAdmin();
     key(datasetKey);
     var existing =
         samples
@@ -147,6 +169,9 @@ public class ManagedEvaluationDatasetService {
   /** 发布不可变版本；空数据集和定义摘要重复都拒绝。 */
   @Transactional
   public Published publish(String datasetKey, String publishedBy) {
+    requireAdmin();
+    // 请求体里的 publishedBy 只是历史兼容字段：发布者以服务端会话为准，避免伪造发布人。
+    String actor = currentActor();
     key(datasetKey);
     var rows = samples.findByDatasetKeyOrderByCodeAsc(datasetKey);
     if (rows.isEmpty()) throw new IllegalStateException("数据集没有可发布样本。");
@@ -181,7 +206,10 @@ public class ManagedEvaluationDatasetService {
     }
     String sha = sha(definition);
     int version =
-        versions.findFirstByDatasetKeyOrderByVersionDesc(datasetKey).map(row -> row.getVersion() + 1).orElse(1);
+        versions
+            .findFirstByDatasetKeyOrderByVersionDesc(datasetKey)
+            .map(row -> row.getVersion() + 1)
+            .orElse(1);
     var saved =
         versions.saveAndFlush(
             new EvaluationDatasetVersionEntity(
@@ -191,7 +219,7 @@ public class ManagedEvaluationDatasetService {
                 definition,
                 sha,
                 snapshot.size(),
-                publishedBy == null ? AuditService.LOCAL_ACTOR : publishedBy,
+                actor,
                 Instant.now().toString()));
     audit.record(
         "EVALUATION_DATASET_PUBLISH",
@@ -199,7 +227,8 @@ public class ManagedEvaluationDatasetService {
         datasetKey + "@" + version,
         "PUBLISHED",
         "样本 " + snapshot.size() + "；摘要 " + sha);
-    return new Published(saved.getId(), datasetKey, version, sha, snapshot.size(), saved.getCreatedAt());
+    return new Published(
+        saved.getId(), datasetKey, version, sha, snapshot.size(), saved.getCreatedAt());
   }
 
   public List<Published> versions(String datasetKey) {
@@ -221,11 +250,14 @@ public class ManagedEvaluationDatasetService {
   @Transactional
   public Sample fromFailure(
       String datasetKey, String runId, boolean confirmedRedaction, String requestedCode) {
+    requireAdmin();
     key(datasetKey);
     if (!confirmedRedaction) throw new IllegalArgumentException("必须确认已脱敏并同意录入数据集。");
+    if (runId == null || runId.isBlank()) throw new IllegalArgumentException("缺少来源运行标识。");
+    // 运行标识不是授权凭证：先校验归属，避免用他人失败运行的目标与证据填充数据集。
+    ownership.requireRun(runId);
     var run = records.runSnapshot(runId);
-    if (run.status() == RunStatus.COMPLETED)
-      throw new IllegalArgumentException("成功运行不能作为失败案例录入。");
+    if (run.status() == RunStatus.COMPLETED) throw new IllegalArgumentException("成功运行不能作为失败案例录入。");
     if (run.status().canCancel()) throw new IllegalStateException("运行尚未结算，不能录入。");
     TaskDefinition task = tasks.taskDefinition(run.taskId().toString());
     String code =
@@ -273,6 +305,7 @@ public class ManagedEvaluationDatasetService {
 
   /** 启动批次：绑定发布版本、配置和预算；每个样本都保留关联运行。 */
   public Batch start(String datasetKey, Integer version, BatchConfig config) {
+    requireAdmin();
     key(datasetKey);
     var resolved =
         (version == null
@@ -318,11 +351,7 @@ public class ManagedEvaluationDatasetService {
       batch.finish("FAILED", Instant.now().toString());
       batches.save(batch);
       audit.record(
-          "EVALUATION_DATASET_BATCH",
-          "EVALUATION_BATCH",
-          batch.getId(),
-          "FAILED",
-          "执行队列已满");
+          "EVALUATION_DATASET_BATCH", "EVALUATION_BATCH", batch.getId(), "FAILED", "执行队列已满");
       throw new IllegalStateException("评测执行队列已满，批次已标记失败，请稍后重试。", e);
     }
     audit.record(
@@ -430,9 +459,7 @@ public class ManagedEvaluationDatasetService {
 
   public Batch detail(String batchId) {
     var batch =
-        batches
-            .findById(batchId)
-            .orElseThrow(() -> new IllegalArgumentException("评测批次不存在。"));
+        batches.findById(batchId).orElseThrow(() -> new IllegalArgumentException("评测批次不存在。"));
     var items =
         cases.findByBatchIdOrderBySampleCodeAsc(batchId).stream()
             .map(
@@ -464,8 +491,7 @@ public class ManagedEvaluationDatasetService {
       var node = json.readTree(definition);
       var list = node.get("samples");
       return json.convertValue(
-          list,
-          json.getTypeFactory().constructCollectionType(List.class, SampleInput.class));
+          list, json.getTypeFactory().constructCollectionType(List.class, SampleInput.class));
     } catch (JsonProcessingException e) {
       throw new IllegalStateException("已发布的数据集定义无效。", e);
     }
@@ -482,10 +508,11 @@ public class ManagedEvaluationDatasetService {
     if (!List.of("normal", "fail", "repeat").contains(input.scenario()))
       throw new IllegalArgumentException("样本场景无效。");
     if (!List.of("COMPLETED", "FAILED", "LIMITED", "BLOCKED", "CANCELLED")
-        .contains(input.expectedStatus()))
-      throw new IllegalArgumentException("预期状态无效。");
-    if (input.maxRounds() < 1 || input.maxRounds() > 20 || input.maxTools() < 0 || input.maxTools() > 20)
-      throw new IllegalArgumentException("样本预算超出允许范围。");
+        .contains(input.expectedStatus())) throw new IllegalArgumentException("预期状态无效。");
+    if (input.maxRounds() < 1
+        || input.maxRounds() > 20
+        || input.maxTools() < 0
+        || input.maxTools() > 20) throw new IllegalArgumentException("样本预算超出允许范围。");
   }
 
   private static String redact(String text) {
@@ -558,7 +585,12 @@ public class ManagedEvaluationDatasetService {
       String updatedAt) {}
 
   public record Published(
-      String id, String datasetKey, int version, String definitionSha256, int sampleCount, String createdAt) {}
+      String id,
+      String datasetKey,
+      int version,
+      String definitionSha256,
+      int sampleCount,
+      String createdAt) {}
 
   public record BatchConfig(Integer maxRounds, Integer maxTools, Integer maxSeconds) {
     public static BatchConfig defaults() {

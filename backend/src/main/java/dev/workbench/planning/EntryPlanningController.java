@@ -1,13 +1,8 @@
 package dev.workbench.planning;
 
-import dev.workbench.planning.EntryRouteService;
 import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.planning.PlanProposalService;
-import dev.workbench.planning.RecoveryLeaseService;
 import dev.workbench.store.RunStateStore;
 import dev.workbench.store.TaskRecordService;
-import dev.workbench.planning.RunSnapshotService;
-import dev.workbench.planning.SourceArtifactService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.util.List;
 import org.springframework.web.bind.annotation.*;
@@ -68,6 +63,7 @@ public class EntryPlanningController {
 
   @GetMapping("/tasks/{taskId}/entry-route")
   Object taskRoute(@PathVariable String taskId) {
+    ownership.requireTask(taskId);
     return routes.find(taskId);
   }
 

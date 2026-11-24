@@ -115,10 +115,11 @@ class BugDockerIntegrationTest {
     assertEquals(BugService.CheckStatus.FAILURES_OBSERVED, matched.status(), matched.output());
     assertTrue(matched.output().contains("synthetic-local v1"));
     assertTrue(matched.output().contains("预期现象"));
-    var matchedTarget = matched.cases().stream()
-        .filter(test -> "test_calc.TestCalc.test_add".equals(test.testId()))
-        .findFirst()
-        .orElseThrow();
+    var matchedTarget =
+        matched.cases().stream()
+            .filter(test -> "test_calc.TestCalc.test_add".equals(test.testId()))
+            .findFirst()
+            .orElseThrow();
     assertEquals(UnittestResults.Outcome.FAILED, matchedTarget.outcome());
     assertTrue(matchedTarget.message().contains("AssertionError: 1 != 3"));
 
@@ -177,10 +178,11 @@ class BugDockerIntegrationTest {
     assertEquals(UnittestResults.Outcome.FAILED, mixedTarget.outcome());
     assertTrue(mixedTarget.message().contains("1 != 4"));
     assertFalse(mixedTarget.message().contains("1 != 3"));
-    var other = mixedCheck.cases().stream()
-        .filter(test -> "test_calc.TestCalc.test_other".equals(test.testId()))
-        .findFirst()
-        .orElseThrow();
+    var other =
+        mixedCheck.cases().stream()
+            .filter(test -> "test_calc.TestCalc.test_other".equals(test.testId()))
+            .findFirst()
+            .orElseThrow();
     assertTrue(other.message().contains("1 != 3"));
 
     // 相似名称：只有 test_add_extra 失败，完整标识不能前缀匹配。
@@ -201,8 +203,7 @@ class BugDockerIntegrationTest {
     assertEquals(
         BugService.CheckStatus.TARGET_NOT_EXECUTED, similarCheck.status(), similarCheck.output());
     assertTrue(
-        similarCheck.cases().stream()
-            .anyMatch(test -> test.testId().endsWith(".test_add_extra")));
+        similarCheck.cases().stream().anyMatch(test -> test.testId().endsWith(".test_add_extra")));
     assertTrue(
         similarCheck.cases().stream()
             .noneMatch(test -> "test_calc.TestCalc.test_add".equals(test.testId())));
@@ -224,8 +225,7 @@ class BugDockerIntegrationTest {
                     + "        self.assertEqual(add(2,1),3)\n"
                     + "    def test_ok(self):\n"
                     + "        self.assertEqual(add(2,1),1)\n"));
-    var skippedReproduction =
-        bugs.run("MOCK-PY-001", skipped.id(), BugService.CheckKind.REPRODUCE);
+    var skippedReproduction = bugs.run("MOCK-PY-001", skipped.id(), BugService.CheckKind.REPRODUCE);
     assertEquals(
         BugService.CheckStatus.TARGET_SKIPPED,
         skippedReproduction.status(),
@@ -283,7 +283,11 @@ class BugDockerIntegrationTest {
             jpa.repository(WorkspaceDeclaredFileRepository.class),
             root);
     ApprovalService approvals =
-        new ApprovalService(jpa.repository(ApprovalRepository.class), workspaces);
+        new ApprovalService(
+            jpa.repository(ApprovalRepository.class),
+            workspaces,
+            // 归属校验由专门的越权测试覆盖；这里只验证 Bug 容器的复现/回归逻辑。
+            org.mockito.Mockito.mock(dev.workbench.ownership.OwnershipService.class));
     TransactionTemplate tx =
         new TransactionTemplate(
             jpa.repository(org.springframework.transaction.PlatformTransactionManager.class));

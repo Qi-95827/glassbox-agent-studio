@@ -12,35 +12,36 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.app.WorkbenchApplication;
+import dev.workbench.delivery.ExecutionViewService;
 import dev.workbench.domain.AgentRole;
+import dev.workbench.domain.CaseStatus;
 import dev.workbench.domain.EventType;
+import dev.workbench.domain.Handoff;
 import dev.workbench.domain.HandoffDirection;
 import dev.workbench.domain.HandoffSource;
 import dev.workbench.domain.InvocationStatus;
+import dev.workbench.domain.MemoryCategory;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
-import dev.workbench.domain.CaseStatus;
 import dev.workbench.evaluation.EvaluationRepository;
 import dev.workbench.evaluation.EvaluationService;
 import dev.workbench.evaluation.EvaluationStatus;
 import dev.workbench.framework.agent.assembly.AgentAssemblyPlanner;
-import dev.workbench.observability.EventQueryService;
 import dev.workbench.framework.model.AgentModelRegistry;
 import dev.workbench.framework.workflow.check.SystemCheckRef;
 import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.planning.PlanService;
-import dev.workbench.delivery.ExecutionViewService;
-import dev.workbench.domain.MemoryCategory;
+import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
 import dev.workbench.memory.MemoryService;
+import dev.workbench.observability.EventQueryService;
 import dev.workbench.observability.MonitoringService;
 import dev.workbench.observability.RunMetricsService;
 import dev.workbench.orchestration.CreateTaskRequest;
-import dev.workbench.domain.Handoff;
 import dev.workbench.orchestration.RunService;
+import dev.workbench.planning.PlanService;
 import dev.workbench.report.HtmlReportService;
 import dev.workbench.store.RunRecordService;
 import dev.workbench.task.WorkflowExecutionService;
@@ -75,16 +76,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
-import dev.workbench.delivery.ExecutionViewService;
-import dev.workbench.domain.RunLimits;
-import dev.workbench.domain.TaskEntryKind;
-import dev.workbench.planning.PlanService;
-import dev.workbench.infrastructure.agentscope.AgentScopeModelClient;
-import dev.workbench.domain.CaseStatus;
-import dev.workbench.domain.Handoff;
-import dev.workbench.domain.MemoryCategory;
-import dev.workbench.domain.MemoryStatus;
-import dev.workbench.store.RunRecordService;
 
 @AutoConfigureMockMvc
 @AutoConfigureObservability
@@ -2226,7 +2217,13 @@ class WorkbenchIntegrationTest {
         unknown + 2,
         meters.get("workbench.checkpoint.skipped").tag("reason", "UNKNOWN").gauge().value());
     String body =
-        mvc.perform(get("/actuator/prometheus"))
+        mvc.perform(
+                get("/actuator/prometheus")
+                    // 运维端点已收口到管理员：用显式管理员身份读取指标，断言内容不变。
+                    .with(
+                        org.springframework.security.test.web.servlet.request
+                            .SecurityMockMvcRequestPostProcessors.user("admin")
+                            .roles("ADMIN")))
             .andExpect(status().isOk())
             .andReturn()
             .getResponse()
@@ -2287,7 +2284,12 @@ class WorkbenchIntegrationTest {
             .value();
     assertEquals(3, after - before);
     String body =
-        mvc.perform(get("/actuator/prometheus"))
+        mvc.perform(
+                get("/actuator/prometheus")
+                    .with(
+                        org.springframework.security.test.web.servlet.request
+                            .SecurityMockMvcRequestPostProcessors.user("admin")
+                            .roles("ADMIN")))
             .andExpect(status().isOk())
             .andExpect(content().string(containsString("workbench_model_tokens_unknown_calls")))
             .andExpect(content().string(containsString("workbench_runs")))
