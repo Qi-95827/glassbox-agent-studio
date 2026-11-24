@@ -1,6 +1,8 @@
 package dev.workbench.modelconnection;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.auth.AuthService;
+import dev.workbench.framework.outbound.OutboundUrlGuard;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -11,9 +13,12 @@ import org.springframework.stereotype.Service;
 /**
  * 可选的 Embedding 端点运行时设置。
  *
- * <p>只在本地 {@code data/rag-embedding-settings.json} 保存连接标识、Base URL、模型名与维度，
- * <b>绝不保存 API Key</b>。复用 BYOK 连接时由 {@link ModelConnectionService} 在调用瞬间解密。
- * 文件不存在或未启用时完全回落到 application.properties，默认不改变 H2 测试路径。
+ * <p>只在本地 {@code data/rag-embedding-settings.json} 保存连接标识、Base URL、模型名与维度， <b>绝不保存 API Key</b>。复用
+ * BYOK 连接时由 {@link ModelConnectionService} 在调用瞬间解密。 文件不存在或未启用时完全回落到 application.properties，默认不改变 H2
+ * 测试路径。
+ *
+ * <p>该配置对整个部署只有一份，属于平台级设置：多用户模式下只有管理员可以修改；所选 {@code connectionId}
+ * 必须是当前操作人自己已启用的连接，避免借全局配置解密并使用他人密钥。
  */
 @Service
 public class RagEmbeddingSettings {
@@ -26,6 +31,9 @@ public class RagEmbeddingSettings {
   private final String defaultModel;
   private final int defaultDimension;
   private final String apiKey;
+  private final ModelConnectionService connections;
+  private final AuthService auth;
+  private final OutboundUrlGuard guard;
 
   public RagEmbeddingSettings(
       @Value("${workbench.rag.embedding.settings-file:data/rag-embedding-settings.json}")
@@ -35,7 +43,10 @@ public class RagEmbeddingSettings {
       @Value("${workbench.rag.embedding.base-url:}") String defaultBaseUrl,
       @Value("${workbench.rag.embedding.model:}") String defaultModel,
       @Value("${workbench.rag.embedding.dimension:1536}") int defaultDimension,
-      @Value("${workbench.rag.embedding.api-key:}") String apiKey) {
+      @Value("${workbench.rag.embedding.api-key:}") String apiKey,
+      ModelConnectionService connections,
+      AuthService auth,
+      OutboundUrlGuard guard) {
     this.file = Path.of(file).toAbsolutePath().normalize();
     this.defaultEnabled = defaultEnabled;
     this.defaultConnectionId = safe(defaultConnectionId);
@@ -43,6 +54,9 @@ public class RagEmbeddingSettings {
     this.defaultModel = safe(defaultModel);
     this.defaultDimension = Math.max(0, defaultDimension);
     this.apiKey = safe(apiKey);
+    this.connections = connections;
+    this.auth = auth;
+    this.guard = guard == null ? OutboundUrlGuard.strict() : guard;
   }
 
   public record Config(
@@ -85,6 +99,7 @@ public class RagEmbeddingSettings {
 
   public synchronized View save(Update update) {
     if (update == null) throw new IllegalArgumentException("Embedding 设置不能为空。");
+    requireAdmin();
     var current = current();
     boolean enabled = update.enabled() == null ? current.enabled() : update.enabled();
     String connectionId = text(update.connectionId(), current.connectionId());
@@ -94,11 +109,23 @@ public class RagEmbeddingSettings {
         update.dimension() == null ? current.dimension() : Math.max(0, update.dimension());
     if (enabled && connectionId.isBlank() && (baseUrl.isBlank() || model.isBlank()))
       throw new IllegalArgumentException("请选择已保存的模型连接，或同时填写 Base URL 与模型名。");
-    if (!baseUrl.isBlank() && !(baseUrl.startsWith("https://") || baseUrl.startsWith("http://")))
-      throw new IllegalArgumentException("Embedding Base URL 必须以 http:// 或 https:// 开头。");
+    if (!connectionId.isBlank())
+      // 只允许引用当前操作人自己已启用的连接；否则会出现跨账号解密并使用他人密钥。
+      connections.requireEnabledOwned(connectionId);
+    if (!baseUrl.isBlank()) guard.validate(baseUrl);
     var next = new Config(enabled, connectionId, stripSlash(baseUrl), model, dimension);
     write(next);
     return view();
+  }
+
+  /**
+   * 平台级设置只允许管理员修改。
+   *
+   * <p>尚未初始化账号的单机本地模式没有用户体系，保持既有本地可用性；初始化之后普通用户一律拒绝。
+   */
+  private void requireAdmin() {
+    if (!auth.initialized()) return;
+    auth.requireAdmin();
   }
 
   private Config read() {

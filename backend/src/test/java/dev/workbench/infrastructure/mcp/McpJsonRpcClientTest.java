@@ -19,7 +19,8 @@ class McpJsonRpcClientTest {
     server.createContext(
         "/mcp",
         exchange -> {
-          String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+          String body =
+              new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
           var node = json.readTree(body);
           String method = node.path("method").asText("");
           String response;
@@ -64,7 +65,8 @@ class McpJsonRpcClientTest {
             new HttpMcpTransport(
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/mcp",
                 Map.of("X-Test", "1"),
-                Duration.ofSeconds(5)),
+                Duration.ofSeconds(5),
+                dev.workbench.framework.outbound.OutboundUrlGuard.allowLocalLoopback()),
             json)) {
       assertEquals(1, client.listTools().size());
       var tool = client.listTools().getFirst();

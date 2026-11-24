@@ -1,6 +1,7 @@
 package dev.workbench.infrastructure.mcp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.framework.outbound.OutboundUrlGuard;
 import dev.workbench.framework.secret.SecretCipher;
 import dev.workbench.persistence.entity.UserMcpServerEntity;
 import java.time.Duration;
@@ -20,26 +21,31 @@ public class McpClientManager {
   private final ExecutorService executor;
   private final List<String> allowedCommands;
   private final Duration timeout;
+  private final OutboundUrlGuard guard;
   private final SecretCipher cipher = SecretCipher.shared();
   private final Map<String, Holder> clients = new ConcurrentHashMap<>();
 
   public McpClientManager(
       ObjectMapper json,
       @Qualifier("mcpExecutor") ExecutorService executor,
+      OutboundUrlGuard guard,
       @Value("${workbench.mcp.allowed-commands:node,npx,python,python3,uvx,docker}")
           String allowedCommands,
       @Value("${workbench.mcp.timeout-seconds:30}") long timeoutSeconds) {
     this.json = json;
     this.executor = executor;
+    this.guard = guard == null ? OutboundUrlGuard.strict() : guard;
     this.allowedCommands =
-        Arrays.stream(allowedCommands.split(",")).map(String::strip).filter(s -> !s.isBlank()).toList();
+        Arrays.stream(allowedCommands.split(","))
+            .map(String::strip)
+            .filter(s -> !s.isBlank())
+            .toList();
     this.timeout = Duration.ofSeconds(Math.max(1, timeoutSeconds));
   }
 
   public McpJsonRpcClient client(UserMcpServerEntity server) {
     String key = server.getId() + ":" + server.getUpdatedAt();
-    return clients
-        .compute(
+    return clients.compute(
             key,
             (ignored, existing) -> {
               if (existing != null) return existing;
@@ -69,12 +75,14 @@ public class McpClientManager {
   }
 
   public void evict(String serverId) {
-    clients.entrySet().removeIf(
-        entry -> {
-          if (!entry.getKey().startsWith(serverId + ":")) return false;
-          entry.getValue().client.close();
-          return true;
-        });
+    clients
+        .entrySet()
+        .removeIf(
+            entry -> {
+              if (!entry.getKey().startsWith(serverId + ":")) return false;
+              entry.getValue().client.close();
+              return true;
+            });
   }
 
   private McpJsonRpcClient build(UserMcpServerEntity server) throws Exception {
@@ -84,17 +92,13 @@ public class McpClientManager {
       Map<String, String> environment = decryptMap(server.getEnvCipher());
       return new McpJsonRpcClient(
           new StdioMcpTransport(
-              server.getCommand(),
-              args,
-              environment,
-              allowedCommands,
-              executor,
-              timeout),
+              server.getCommand(), args, environment, allowedCommands, executor, timeout),
           json);
     }
     if ("STREAMABLE_HTTP".equals(transport)) {
       return new McpJsonRpcClient(
-          new HttpMcpTransport(server.getEndpointUrl(), decryptMap(server.getHeadersCipher()), timeout),
+          new HttpMcpTransport(
+              server.getEndpointUrl(), decryptMap(server.getHeadersCipher()), timeout, guard),
           json);
     }
     throw new IllegalArgumentException("不支持的 MCP 传输类型：" + server.getTransport());

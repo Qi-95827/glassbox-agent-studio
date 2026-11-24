@@ -1,20 +1,29 @@
 package dev.workbench.infrastructure.mcp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.auth.AuthService;
 import dev.workbench.domain.ExecutionScopeResolver;
 import dev.workbench.domain.WorkbenchIds;
 import dev.workbench.domain.WorkbenchTime;
+import dev.workbench.framework.outbound.OutboundUrlGuard;
 import dev.workbench.framework.secret.SecretCipher;
 import dev.workbench.persistence.entity.UserMcpServerEntity;
 import dev.workbench.persistence.entity.UserMcpToolEntity;
 import dev.workbench.persistence.repository.UserMcpServerRepository;
 import dev.workbench.persistence.repository.UserMcpToolRepository;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** MCP Server 与工具清单管理；凭据只入密文，响应永不回显。 */
+/**
+ * MCP Server 与工具清单管理；凭据只入密文，响应永不回显。
+ *
+ * <p>权限与出站边界：STDIO 传输会在宿主机启动子进程，多用户模式下仅管理员可注册与探测； STREAMABLE_HTTP 端点必须通过 {@link OutboundUrlGuard}
+ * 的地址校验，用户也不能覆盖客户端保留的 HTTP 头（{@code Host}、{@code Content-Length}、{@code Transfer-Encoding}、{@code
+ * Connection} 等）。
+ */
 @Service
 public class McpServerService {
   private final UserMcpServerRepository servers;
@@ -22,19 +31,40 @@ public class McpServerService {
   private final McpClientManager clients;
   private final ExecutionScopeResolver scopes;
   private final ObjectMapper json;
-  private final SecretCipher cipher = SecretCipher.shared();
+  private final AuthService auth;
+  private final OutboundUrlGuard guard;
+  private final SecretCipher cipher;
 
+  @org.springframework.beans.factory.annotation.Autowired
   public McpServerService(
       UserMcpServerRepository servers,
       UserMcpToolRepository tools,
       McpClientManager clients,
       ExecutionScopeResolver scopes,
-      ObjectMapper json) {
+      ObjectMapper json,
+      AuthService auth,
+      OutboundUrlGuard guard) {
+    this(servers, tools, clients, scopes, json, auth, guard, SecretCipher.shared());
+  }
+
+  /** 单元测试可注入固定主密钥，避免触碰本机 config/master.key。 */
+  McpServerService(
+      UserMcpServerRepository servers,
+      UserMcpToolRepository tools,
+      McpClientManager clients,
+      ExecutionScopeResolver scopes,
+      ObjectMapper json,
+      AuthService auth,
+      OutboundUrlGuard guard,
+      SecretCipher cipher) {
     this.servers = servers;
     this.tools = tools;
     this.clients = clients;
     this.scopes = scopes;
     this.json = json;
+    this.auth = auth;
+    this.guard = guard == null ? OutboundUrlGuard.strict() : guard;
+    this.cipher = cipher;
   }
 
   public List<ServerView> list() {
@@ -48,6 +78,8 @@ public class McpServerService {
     String slug = slug(request.slug());
     if (servers.existsByOwnerScopeKeyAndSlug(scope(), slug))
       throw new IllegalArgumentException("该 MCP Server 别名已存在。");
+    String transport = transport(request.transport());
+    requireStdioAdmin(transport);
     String now = WorkbenchTime.now();
     var saved =
         servers.saveAndFlush(
@@ -56,11 +88,11 @@ public class McpServerService {
                 scope(),
                 name(request.name()),
                 slug,
-                transport(request.transport()),
+                transport,
                 blank(request.command()),
                 writeArgs(request.args()),
-                blank(request.endpointUrl()),
-                encrypt(request.headers()),
+                endpoint(request.endpointUrl(), transport),
+                encrypt(headers(request.headers())),
                 encrypt(request.env()),
                 request.enabled() == null || request.enabled(),
                 now,
@@ -71,13 +103,15 @@ public class McpServerService {
   @Transactional
   public ServerView update(String id, ServerRequest request) {
     var row = own(id);
+    String transport = transport(request.transport());
+    requireStdioAdmin(transport);
     row.update(
         name(request.name()),
-        transport(request.transport()),
+        transport,
         blank(request.command()),
         writeArgs(request.args()),
-        blank(request.endpointUrl()),
-        request.headers() == null ? row.getHeadersCipher() : encrypt(request.headers()),
+        endpoint(request.endpointUrl(), transport),
+        request.headers() == null ? row.getHeadersCipher() : encrypt(headers(request.headers())),
         request.env() == null ? row.getEnvCipher() : encrypt(request.env()),
         request.enabled() == null ? row.isEnabled() : request.enabled(),
         WorkbenchTime.now());
@@ -97,6 +131,7 @@ public class McpServerService {
   @Transactional
   public ServerView probe(String id) {
     var row = own(id);
+    requireStdioAdmin(row.getTransport());
     var probed = clients.probe(row);
     tools.deleteByServerId(id);
     String now = WorkbenchTime.now();
@@ -119,8 +154,7 @@ public class McpServerService {
   @Transactional
   public ToolView updateTool(String serverId, String toolId, String riskLevel, Boolean enabled) {
     var server = own(serverId);
-    var tool =
-        tools.findById(toolId).orElseThrow(() -> new IllegalArgumentException("MCP 工具不存在。"));
+    var tool = tools.findById(toolId).orElseThrow(() -> new IllegalArgumentException("MCP 工具不存在。"));
     if (!server.getId().equals(tool.getServerId()))
       throw new IllegalArgumentException("MCP 工具不属于该 Server。");
     String risk =
@@ -153,17 +187,62 @@ public class McpServerService {
         row.getEnvCipher() != null && !row.getEnvCipher().isBlank(),
         row.getCreatedAt(),
         row.getUpdatedAt(),
-        tools.findByServerIdOrderByNameAsc(row.getId()).stream().map(McpServerService::toolView).toList());
+        tools.findByServerIdOrderByNameAsc(row.getId()).stream()
+            .map(McpServerService::toolView)
+            .toList());
   }
 
   private static ToolView toolView(UserMcpToolEntity row) {
     return new ToolView(
-        row.getId(), row.getName(), row.getDescription(), row.getInputSchemaJson(),
-        row.getRiskLevel(), row.isEnabled());
+        row.getId(),
+        row.getName(),
+        row.getDescription(),
+        row.getInputSchemaJson(),
+        row.getRiskLevel(),
+        row.isEnabled());
   }
 
   private String scope() {
     return scopes.current().ownerScopeKey();
+  }
+
+  /**
+   * STDIO 会在宿主机执行白名单命令；多用户模式下只允许管理员注册与探测。
+   *
+   * <p>尚未初始化账号的单机本地模式没有用户体系，保持既有本地能力；初始化后普通用户一律 403。
+   */
+  private void requireStdioAdmin(String transport) {
+    if (!"STDIO".equals(transport)) return;
+    if (!auth.initialized()) return;
+    auth.requireAdmin();
+  }
+
+  /** STREAMABLE_HTTP 端点必须通过统一出站校验；STDIO 不涉及网络地址。 */
+  private String endpoint(String value, String transport) {
+    String text = blank(value);
+    if (!"STREAMABLE_HTTP".equals(transport)) return text;
+    if (text == null) throw new IllegalArgumentException("STREAMABLE_HTTP 必须填写端点地址。");
+    return guard.validate(text);
+  }
+
+  /** 保留头与换行注入在保存阶段即拒绝，避免把非法配置带进运行期。 */
+  private static Map<String, String> headers(Map<String, String> values) {
+    if (values == null || values.isEmpty()) return values;
+    var sanitized = new LinkedHashMap<String, String>();
+    for (var entry : values.entrySet()) {
+      String name = entry.getKey() == null ? "" : entry.getKey().strip();
+      String headerValue = entry.getValue() == null ? "" : entry.getValue();
+      if (name.isEmpty()
+          || name.indexOf('\r') >= 0
+          || name.indexOf('\n') >= 0
+          || headerValue.indexOf('\r') >= 0
+          || headerValue.indexOf('\n') >= 0
+          || HttpMcpTransport.isReservedHeader(name))
+        throw new IllegalArgumentException(
+            dev.workbench.framework.i18n.LocalizedMessages.get("outbound.mcp.header"));
+      sanitized.put(name, headerValue);
+    }
+    return sanitized;
   }
 
   private String encrypt(Map<String, String> values) {
@@ -187,7 +266,8 @@ public class McpServerService {
     try {
       return raw == null || raw.isBlank()
           ? List.of()
-          : json.readValue(raw, json.getTypeFactory().constructCollectionType(List.class, String.class));
+          : json.readValue(
+              raw, json.getTypeFactory().constructCollectionType(List.class, String.class));
     } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
       return List.of();
     }
@@ -202,7 +282,8 @@ public class McpServerService {
 
   private static String name(String value) {
     String name = value == null ? "" : value.strip();
-    if (name.isBlank() || name.length() > 120) throw new IllegalArgumentException("MCP Server 名称无效。");
+    if (name.isBlank() || name.length() > 120)
+      throw new IllegalArgumentException("MCP Server 名称无效。");
     return name;
   }
 

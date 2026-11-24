@@ -3,13 +3,12 @@ package dev.workbench.modelconnection;
 import dev.workbench.auth.AuthService;
 import dev.workbench.domain.WorkbenchIds;
 import dev.workbench.domain.WorkbenchTime;
+import dev.workbench.framework.outbound.OutboundUrlGuard;
 import dev.workbench.framework.secret.ApiKeyMasker;
 import dev.workbench.framework.secret.SecretCipher;
 import dev.workbench.framework.trace.SensitiveDataMasker;
 import dev.workbench.persistence.entity.UserModelConnectionEntity;
 import dev.workbench.persistence.repository.UserModelConnectionRepository;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -23,8 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 用户自带模型连接（BYOK）配置。
  *
- * <p>密钥只以 AES-256-GCM 密文落库，任何返回值只含掩码。任务创建、想法整理与计划生成在发起
- * 模型调用前校验连接归属与启用状态；运行时按连接标识解密一次，用完即丢。
+ * <p>密钥只以 AES-256-GCM 密文落库，任何返回值只含掩码。任务创建、想法整理与计划生成在发起 模型调用前校验连接归属与启用状态；运行时按连接标识解密一次，用完即丢。
  */
 @Service
 public class ModelConnectionService {
@@ -35,13 +33,15 @@ public class ModelConnectionService {
   private final SecretCipher cipher;
   private final ModelProbe probe;
   private final AuthService auth;
+  private final OutboundUrlGuard guard;
 
   @org.springframework.beans.factory.annotation.Autowired
   public ModelConnectionService(
       UserModelConnectionRepository connections,
       ModelProbe probe,
-      AuthService auth) {
-    this(connections, probe, auth, SecretCipher.shared());
+      AuthService auth,
+      OutboundUrlGuard guard) {
+    this(connections, probe, auth, SecretCipher.shared(), guard);
   }
 
   /** 单元测试可注入固定主密钥，避免依赖本机 config/master.key。 */
@@ -50,10 +50,21 @@ public class ModelConnectionService {
       ModelProbe probe,
       AuthService auth,
       SecretCipher cipher) {
+    this(connections, probe, auth, cipher, OutboundUrlGuard.strict());
+  }
+
+  /** 单元测试可同时替换出站校验策略，覆盖回环开关与 DNS 结果。 */
+  ModelConnectionService(
+      UserModelConnectionRepository connections,
+      ModelProbe probe,
+      AuthService auth,
+      SecretCipher cipher,
+      OutboundUrlGuard guard) {
     this.connections = connections;
     this.probe = probe;
     this.auth = auth;
     this.cipher = cipher;
+    this.guard = guard == null ? OutboundUrlGuard.strict() : guard;
   }
 
   public record SaveRequest(
@@ -69,11 +80,7 @@ public class ModelConnectionService {
       String currency) {}
 
   public record TestDraftRequest(
-      String connectionId,
-      String providerType,
-      String baseUrl,
-      String modelName,
-      String apiKey) {}
+      String connectionId, String providerType, String baseUrl, String modelName, String apiKey) {}
 
   public record ConnectionView(
       String id,
@@ -105,9 +112,7 @@ public class ModelConnectionService {
       String docsUrl) {}
 
   public record ListView(
-      List<ConnectionView> connections,
-      List<ConnectionView> builtIns,
-      List<PresetView> presets) {}
+      List<ConnectionView> connections, List<ConnectionView> builtIns, List<PresetView> presets) {}
 
   public record TestResult(
       boolean ok, String status, long latencyMs, String message, String testedAt) {}
@@ -218,8 +223,7 @@ public class ModelConnectionService {
     var row = requireOwned(id, owner);
     Input input = validate(request, false, row);
     String now = WorkbenchTime.now();
-    boolean makeDefault =
-        request.isDefault() == null ? row.isDefaultFlag() : request.isDefault();
+    boolean makeDefault = request.isDefault() == null ? row.isDefaultFlag() : request.isDefault();
     if (makeDefault && !row.isDefaultFlag()) connections.clearDefault(owner, now);
     row.setDisplayName(input.displayName());
     row.setProviderType(input.provider().name());
@@ -275,8 +279,7 @@ public class ModelConnectionService {
     var row = requireOwned(id, ownerId());
     RuntimeModelConnection runtime = runtime(row);
     TestResult result = runProbe(runtime);
-    row.setLastTest(
-        result.ok() ? "OK" : "FAILED", result.message(), result.testedAt());
+    row.setLastTest(result.ok() ? "OK" : "FAILED", result.message(), result.testedAt());
     row.setUpdatedAt(result.testedAt());
     connections.save(row);
     return result;
@@ -382,8 +385,7 @@ public class ModelConnectionService {
     long started = System.nanoTime();
     ModelProbe.ProbeResult result = probe.probe(runtime);
     long latency = Math.max(0, (System.nanoTime() - started) / 1_000_000);
-    String message =
-        SensitiveDataMasker.maskAndTruncate(result.message(), MESSAGE_LIMIT).text();
+    String message = SensitiveDataMasker.maskAndTruncate(result.message(), MESSAGE_LIMIT).text();
     return new TestResult(
         result.ok(), result.ok() ? "OK" : "FAILED", latency, message, WorkbenchTime.now());
   }
@@ -510,61 +512,37 @@ public class ModelConnectionService {
 
   /**
    * 只允许 https 公网地址；http 仅允许本机回环，避免把服务端请求引向内网。
+   *
+   * <p>具体网段判定统一交给 {@link OutboundUrlGuard}：这里只把受控拒绝原因映射成本模块既有的用户文案，
+   * 保证前端提示与历史行为兼容。保存阶段使用宽松校验（域名暂时无法解析时放行），真实出站前由 Embedding / MCP / 模型探测各自再执行一次严格校验。
    */
-  static String validateBaseUrl(String value) {
+  private String validateBaseUrl(String value) {
     if (value == null || value.isBlank())
       throw new IllegalArgumentException(
           dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlRequired"));
     String text = value.strip();
     if (text.endsWith("/")) text = text.substring(0, text.length() - 1);
     try {
-      URI uri = new URI(text);
-      String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
-      String host = uri.getHost();
-      if (host == null || host.isBlank())
-        throw new IllegalArgumentException(
-            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlHost"));
-      if (uri.getUserInfo() != null)
-        throw new IllegalArgumentException(
-            dev.workbench.framework.i18n.LocalizedMessages.get(
-                "modelConnection.baseUrlCredentials"));
-      if (!List.of("http", "https").contains(scheme))
-        throw new IllegalArgumentException(
-            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlScheme"));
-      String normalized = host.toLowerCase(Locale.ROOT);
-      boolean loopback =
-          normalized.equals("localhost")
-              || normalized.equals("127.0.0.1")
-              || normalized.equals("::1")
-              || normalized.equals("[::1]");
-      if ("http".equals(scheme) && !loopback)
-        throw new IllegalArgumentException(
-            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlLoopback"));
-      if ("https".equals(scheme) && isPrivateLiteral(normalized))
-        throw new IllegalArgumentException(
-            dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlPrivate"));
-      return text;
-    } catch (URISyntaxException e) {
+      return guard.validate(text);
+    } catch (OutboundUrlGuard.Rejected rejected) {
       throw new IllegalArgumentException(
-          dev.workbench.framework.i18n.LocalizedMessages.get("modelConnection.baseUrlInvalid"));
+          dev.workbench.framework.i18n.LocalizedMessages.get(messageKey(rejected.reason())));
     }
   }
 
-  private static boolean isPrivateLiteral(String host) {
-    if (host.equals("0.0.0.0") || host.equals("[::]")) return true;
-    String[] parts = host.split("\\.");
-    if (parts.length != 4) return false;
-    try {
-      int first = Integer.parseInt(parts[0]);
-      int second = Integer.parseInt(parts[1]);
-      return first == 10
-          || first == 127
-          || (first == 169 && second == 254)
-          || (first == 172 && second >= 16 && second <= 31)
-          || (first == 192 && second == 168);
-    } catch (NumberFormatException e) {
-      return false;
-    }
+  private static String messageKey(OutboundUrlGuard.Reason reason) {
+    return switch (reason) {
+      case MISSING -> "modelConnection.baseUrlRequired";
+      case CREDENTIALS -> "modelConnection.baseUrlCredentials";
+      case QUERY, FRAGMENT -> "modelConnection.baseUrlQuery";
+      case SCHEME -> "modelConnection.baseUrlScheme";
+      case HOST -> "modelConnection.baseUrlHost";
+      case LOOPBACK_HTTP -> "modelConnection.baseUrlLoopback";
+      case LOOPBACK_DISABLED -> "modelConnection.baseUrlLoopbackDisabled";
+      case PRIVATE -> "modelConnection.baseUrlPrivate";
+      case UNRESOLVED -> "modelConnection.baseUrlUnresolved";
+      case INVALID -> "modelConnection.baseUrlInvalid";
+    };
   }
 
   private record Input(

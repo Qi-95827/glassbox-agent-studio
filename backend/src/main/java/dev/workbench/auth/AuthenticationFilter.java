@@ -17,15 +17,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /**
  * 初始化后的 API 登录校验。
  *
- * <p>旧单机数据库尚未初始化时保留本地模式，管理员完成初始化后才强制会话；登录与初始化入口始终 公开，其余 API 由服务端会话决定身份。已认证请求同时写入 Spring Security 上下文。全局运维端点暂限管理员访问。
+ * <p>旧单机数据库尚未初始化时保留本地模式，管理员完成初始化后才强制会话；登录与初始化入口始终 公开，其余 API 由服务端会话决定身份。已认证请求同时写入 Spring Security
+ * 上下文。全局运维端点暂限管理员访问。
  */
 public class AuthenticationFilter extends OncePerRequestFilter {
   private static final List<String> PUBLIC =
-      List.of(
-          "/api/auth/status",
-          "/api/auth/initialize",
-          "/api/auth/login",
-          "/api/auth/csrf");
+      List.of("/api/auth/status", "/api/auth/initialize", "/api/auth/login", "/api/auth/csrf");
   private static final List<String> ADMIN_ONLY =
       List.of(
           "/api/audit",
@@ -34,7 +31,9 @@ public class AuthenticationFilter extends OncePerRequestFilter {
           "/api/evaluations",
           "/api/cost/",
           "/api/admin/",
-          "/api/external-actions");
+          "/api/external-actions",
+          // 全平台唯一的向量化端点配置：普通用户改写它即可外带服务端密钥或盗用他人 BYOK 连接。
+          "/api/rag-embedding");
 
   private final AuthService auth;
   private final UserRepository users;
