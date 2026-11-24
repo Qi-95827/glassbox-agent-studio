@@ -31,6 +31,20 @@ public interface MemoryRecordRepository extends JpaRepository<MemoryRecordEntity
 
   long countByWorkspaceIdAndStatus(String workspaceId, MemoryStatus status);
 
+  /**
+   * 召回预筛投影：只取打分与门槛判定需要的字段，刻意排除 {@code embedding_json}。
+   *
+   * <p>整库反序列化 20KB/条向量是此前的 OOM 来源；向量余弦只对候选集按需回表。
+   */
+  @Query(
+      "select m.id as id, m.content as content, m.pathPatternsJson as pathPatternsJson,"
+          + " m.updatedAt as updatedAt, m.confidence as confidence, m.version as version,"
+          + " m.memoryType as memoryType, m.source as source"
+          + " from MemoryRecordEntity m where m.workspaceId = :workspaceId and m.status = :status"
+          + " order by m.updatedAt desc, m.id asc")
+  List<dev.workbench.persistence.view.MemoryRecordSummary> summarizeByWorkspaceAndStatus(
+      @Param("workspaceId") String workspaceId, @Param("status") MemoryStatus status);
+
   @Transactional(propagation = Propagation.MANDATORY)
   @Modifying(flushAutomatically = true, clearAutomatically = true)
   @Query(
@@ -68,7 +82,5 @@ public interface MemoryRecordRepository extends JpaRepository<MemoryRecordEntity
       "update MemoryRecordEntity m set m.hitCount = m.hitCount + 1, m.lastHitAt = :hitAt"
           + " where m.id = :id and m.status = :active")
   int recordHit(
-      @Param("id") String id,
-      @Param("hitAt") String hitAt,
-      @Param("active") MemoryStatus active);
+      @Param("id") String id, @Param("hitAt") String hitAt, @Param("active") MemoryStatus active);
 }

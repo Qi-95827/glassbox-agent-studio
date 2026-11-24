@@ -88,6 +88,54 @@ public class JdbcKnowledgeVectorIndex implements KnowledgeVectorIndex {
     }
   }
 
+  /**
+   * 批量写入整篇文档的分块向量：一次 batchUpdate 完成，维度不一致时整体跳过。
+   *
+   * <p>逐条 UPDATE 会让一篇长文档产生数百次数据库往返；批量执行同时把「维度不一致即整体降级」的判定 收敛到一次，避免部分成功造成检索结果不一致。
+   */
+  @Override
+  public void storeAll(
+      String workspaceId, String modelName, java.util.Map<String, float[]> vectors) {
+    if (!available() || vectors == null || vectors.isEmpty()) return;
+    int dimension = columnDimension();
+    if (dimension > 0) {
+      var mismatch =
+          vectors.values().stream()
+              .filter(vector -> vector != null && vector.length > 0 && vector.length != dimension)
+              .findFirst();
+      if (mismatch.isPresent()) {
+        LOG.warn(
+            "知识库向量维度与数据库列声明不一致，跳过整篇文档的向量列写入：期望 {}，实际 {}，模型 {}",
+            dimension,
+            mismatch.get().length,
+            modelName);
+        return;
+      }
+    }
+    var entries =
+        vectors.entrySet().stream()
+            .filter(entry -> entry.getValue() != null && entry.getValue().length > 0)
+            .toList();
+    if (entries.isEmpty()) return;
+    try {
+      jdbc.batchUpdate(
+          "UPDATE knowledge_chunks SET embedding_vec = ?::vector, embedding_model = ?"
+              + " WHERE id = ? AND workspace_id = ?",
+          entries.stream()
+              .map(
+                  entry ->
+                      new Object[] {
+                        JdbcMemoryVectorIndex.literal(entry.getValue()),
+                        modelName,
+                        entry.getKey(),
+                        workspaceId
+                      })
+              .toList());
+    } catch (RuntimeException e) {
+      LOG.warn("知识库向量列批量写入失败，已保留 embedding_json 并降级为词法召回：{}", e.getMessage());
+    }
+  }
+
   @Override
   @Transactional(readOnly = true)
   public List<ChunkHit> nearest(String workspaceId, String modelName, float[] query, int limit) {

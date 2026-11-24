@@ -82,15 +82,27 @@ public class OwnershipService implements dev.workbench.framework.ownership.Owner
     return tasks.findById(taskId).isPresent() && canRead(owner(TASK, taskId).orElse(null));
   }
 
-  /** 当前会话可读取的任务标识；旧记录按领取状态判定。 */
+  /**
+   * 当前会话可读取的任务标识；旧记录按领取状态判定。
+   *
+   * <p>不再 {@code tasks.findAll()} 拉全表：先按归属集合精确取号，再单独取出「没有归属登记」的
+   * 历史任务（仅单机模式或已领取历史时可见），任务列表随数据量增长保持线性。
+   */
+  @Transactional(readOnly = true)
   public List<String> readableTaskIds() {
     var ownersByTask = new java.util.HashMap<String, String>();
     for (var row : owners.findByResourceType(TASK))
       ownersByTask.put(row.getResourceId(), row.getOwnerScopeKey());
-    return tasks.findAll().stream()
-        .filter(task -> canRead(ownersByTask.get(task.getId())))
-        .map(task -> task.getId())
-        .toList();
+    var result = new java.util.LinkedHashSet<String>();
+    boolean legacyVisible = !auth.initialized() || auth.canReadLegacy();
+    if (legacyVisible) result.addAll(tasks.findIdsWithoutOwnership(TASK));
+    var visibleOwned =
+        ownersByTask.entrySet().stream()
+            .filter(entry -> canRead(entry.getValue()))
+            .map(java.util.Map.Entry::getKey)
+            .toList();
+    if (!visibleOwned.isEmpty()) result.addAll(tasks.findExistingIds(visibleOwned));
+    return List.copyOf(result);
   }
 
   public void requireWorkspace(String workspaceId) {

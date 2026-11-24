@@ -9,7 +9,6 @@ import dev.workbench.modelconnection.ModelConnectionService;
 import dev.workbench.modelconnection.ModelProviderType;
 import dev.workbench.modelconnection.RuntimeModelConnection;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
@@ -102,11 +101,7 @@ public class LlmJudgeGrader {
         payload.put("thinking", Map.of("type", "disabled"));
       }
       var body = JSON.writeValueAsBytes(payload);
-      var client =
-          HttpClient.newBuilder()
-              .connectTimeout(Duration.ofSeconds(15))
-              .followRedirects(HttpClient.Redirect.NEVER)
-              .build();
+      var client = dev.workbench.framework.outbound.OutboundHttpClients.shared();
       var request =
           HttpRequest.newBuilder(endpoint)
               .timeout(Duration.ofSeconds(90))

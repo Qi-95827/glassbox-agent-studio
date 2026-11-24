@@ -304,3 +304,95 @@ mvn test
    `docker compose up -d` 然后 `$env:WORKBENCH_PG_TEST="true"; mvn "-Dtest=PostgresPgVectorIntegrationTest" test`
 2. **向量列维度仍固定为 1536**：本次按"维度不一致则跳过向量列、保留 `embedding_json`"实现安全降级，未改列定义（改列需要新的迁移与重建索引，属于 Task 04/后续演进范围）。
 3. **前端门禁**：未改动前端，未执行前端检查。
+---
+
+## Task 04 · 拆除 RAG 检索 JVM OOM 炸弹、补齐核心索引与指标快照
+
+- **对应审计编号**：`P-01`、`P-02`（快照部分）、`P-04`（任务列表全表扫描）
+- **完成时间**：2026-11-24
+
+### 1. 改动文件清单（严格限定本 Task 范围）
+
+**主代码**
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `persistence/view/KnowledgeChunkSummary.java`（新增） | 知识库检索轻量投影：id/文档/标题/正文/Token 估算，**不含 `embedding_json`** |
+| `persistence/view/MemoryRecordSummary.java`（新增） | 记忆召回轻量投影：打分与门槛所需字段，**不含 `embedding_json`** |
+| `persistence/repository/KnowledgeChunkRepository.java` | 新增 `summarizeByWorkspace()` JPQL 投影查询 |
+| `persistence/repository/MemoryRecordRepository.java` | 新增 `summarizeByWorkspaceAndStatus()` JPQL 投影查询 |
+| `memory/knowledge/KnowledgeRagService.java` | 检索改为「投影全量 BM25 + 候选集向量重排」；`index()` 拆成「事务外 Embedding + 短事务落库」（`TransactionTemplate`）；`storeAll()` 批量写向量 |
+| `memory/MemoryRetrievalService.java` | 同上：先算查询向量，再投影预筛，候选集（词法 Top-N ∪ 向量下推 Top-N）才回表算余弦 |
+| `infrastructure/vector/JdbcKnowledgeVectorIndex.java` | 新增 `storeAll()`：一次 `batchUpdate` 写入整篇分块；维度不一致整体跳过；异常只告警 |
+| `framework/memory/KnowledgeVectorIndex.java` | 新增默认 `storeAll()` 契约（默认逐条，PG 实现覆盖为批量） |
+| `infrastructure/model/OpenAiCompatibleEmbeddingProvider.java` | `embedAll()` 按 `data[].index` 归位；缺条、维度不一致、长度不符整体返回空（fail-fast），杜绝按位置错配 |
+| `persistence/repository/TaskRepository.java` | 新增 `findExistingIds()` 与 `findIdsWithoutOwnership()` 两条精确查询 |
+| `ownership/OwnershipService.java` | `readableTaskIds()` 不再 `findAll()` 扫全表，改为按归属集合精确取号 + 单独取历史无归属任务 |
+| `observability/DatabaseMetrics.java` | 改为按窗口复用的不可变 `Snapshot`：默认 15 秒（`workbench.metrics.snapshot.ttl-seconds`）一次刷新，所有 Gauge 只读快照；`refreshNow()` 供强制刷新；`modelUsage()/toolUsage()` 为空按 0 处理 |
+| `evaluation/grader/LlmJudgeGrader.java`、`evaluation/EvalBenchmarkHubService.java` | 复用共享 `OutboundHttpClients`（禁止重定向、复用连接），不再每请求新建客户端 |
+| `db/migration/V14__core_query_indexes.sql`（新增，H2） | runs / 三类 invocations / events / tasks / resource_ownership / tool_approval_requests / eval_lab_runs 的复合二级索引 |
+| `db/migration-pg/V4__pg_core_query_indexes.sql`（新增，PostgreSQL） | 与 V14 等价的索引集合 |
+
+**测试**
+
+| 文件 | 说明 |
+| :--- | :--- |
+| `.../memory/MemoryRetrievalProjectionTest.java`（新增） | 投影召回与候选上界 2 例 |
+| `.../memory/knowledge/KnowledgeRagProjectionTest.java`（新增） | 知识库投影召回 2 例 |
+| `.../observability/DatabaseMetricsSnapshotTest.java`（新增） | 快照窗口、强制刷新、窗口为 0 与 Gauge 注册 5 例 |
+| `.../ownership/OwnershipReadableTasksTest.java`（新增） | 任务可见性集合 3 例 |
+| `.../infrastructure/model/EmbeddingBatchOrderingTest.java`（新增） | 乱序归位、缺条/维度不一致 fail-fast 4 例 |
+| `MemoryRetrievalServiceTest`、`FlywayMigrationCompatibilityTest`、`WorkbenchIntegrationTest`（适配） | 新增投影/候选桩、最新迁移版本改为 V14、指标缓存窗口在集成测试内设为 0；断言未放宽 |
+
+### 2. 修复要点
+
+1. **不再整库反序列化向量**：检索先用不含 `embedding_json` 的投影在数据库侧取轻量行，BM25 仍在全量语料上计算；向量余弦只对「词法 Top-N ∪ 向量下推 Top-N」候选集按需回表，堆占用从 O(全库向量) 降为 O(候选数)。
+2. **PostgreSQL 走索引下推**：pgvector 可用时召回完全由 `<=>` 下推完成，既不回表读 embedding，也不在 JVM 里算余弦。
+3. **HTTP 移出事务**：索引先完成远端 Embedding，再用 `TransactionTemplate` 开启短事务写入文档+分块+向量；检索同样先算查询向量再查库，避免长事务占用连接。
+4. **批量写向量**：整篇文档一次 `batchUpdate`，维度不一致整体跳过，异常只记 WARN，绝不回滚外层入库事务。
+5. **向量与文本严格配对**：`embedAll()` 按 `index` 归位；条数或维度不符整体失败，调用方降级为词法检索。
+6. **列表查询去全表扫描**：`readableTaskIds()` 改为精确集合查询（含历史无归属任务），语义与旧实现等价。
+7. **指标快照**：一次抓取只读一份不可变快照，默认 15 秒刷新一次，把每次抓取二十多条 COUNT 降为「按窗口一次」。
+8. **客户端复用**：裁判与 Hub 下载复用共享 HttpClient（禁止重定向 + 连接复用）。
+
+### 3. 红线自检
+
+| 红线 | 自检结论 |
+| :--- | :--- |
+| 1 双轨数据库架构 | 保持 H2 + PostgreSQL/pgvector 双轨；未引入独立向量库；向量索引本就是既有 pgvector 通道 |
+| 2 历史 Flyway 迁移 | `V1~V13`、`migration-pg/V1~V2` 一字节未改；只新增 H2 `V14` 与 PG `V4`（Task 03 已占用 PG `V3`） |
+| 3 ArchUnit 守卫 | 5/5 通过；新增投影接口位于既有 `persistence.view` 包，未新增顶层包 |
+| 4 评估与 UI 资产 | Hub 6 个 `packId` 与雷达图未触碰；只替换了下载用的 HttpClient |
+| 5 前端产品设计 | 未改前端 |
+| 6 范围纪律 | 未改公开 API 与兼容字段；未顺手重写监控看板聚合（`timeSeries` 平方级问题留待后续专项） |
+| 7 假修复 | 无 `@Disabled`/`@Ignore`；适配的测试仅改桩/版本号/缓存窗口，断言未放宽 |
+| 8 单任务全量回归 | 本 Task 全量 `mvn test` 全绿后才继续 |
+| 9 未实跑项 | 见第 5 节 |
+| 10 敏感凭据 | 未读取/输出/提交 `config/*` 与 `data/` |
+| 11 git push | 仅本地提交 |
+| 12 代码质量 | 全部改动经 `google-java-format 1.28.0`；注释说明候选上界、降级与缓存窗口的取舍 |
+
+### 4. 新增/修改测试类与核心正反例
+
+| 测试类 | 用例数 | 正常正例 | 异常/边界反例 |
+| :--- | ---: | :--- | :--- |
+| `MemoryRetrievalProjectionTest` | 2 | 投影命中返回记忆；候选回表仅限候选 id | 断言旧的整库查询 `findByWorkspaceIdAndStatus...` 与 `findByWorkspaceId...` 从未被调用；空工作区不触发候选查询 |
+| `KnowledgeRagProjectionTest` | 2 | 投影命中返回分块与文档标题 | 断言整库查询 `findByWorkspaceIdOrderByDocumentId...` 从未被调用；空查询/空工作区零开销 |
+| `DatabaseMetricsSnapshotTest` | 5 | 窗口内多次读取只计数一次；`refreshNow()` 立即生效；窗口为 0 时每次刷新；Gauge 带稳定标签注册成功 | 仓库返回空值时不 NPE，按 0 上报 |
+| `OwnershipReadableTasksTest` | 3 | 自有一致任务 + 已领取历史的无归属任务可见；单机模式看到全部历史任务 | 未领取时隐藏历史任务；断言 `findAll()` 从未被调用 |
+| `EmbeddingBatchOrderingTest` | 4 | 乱序 `data` 按 `index` 归位 | 缺条整体失败；维度不一致整体失败；空输入不调用端点 |
+
+### 5. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 600, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，4:12 min，完成于 2026-11-24 13:18:17） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| `FlywayMigrationCompatibilityTest` | Tests run: 4, Failures: 0, Errors: 0（最新版本断言更新为 `V14`） |
+| 本 Task 新增测试类 | `MemoryRetrievalProjectionTest` 2、`KnowledgeRagProjectionTest` 2、`DatabaseMetricsSnapshotTest` 5、`OwnershipReadableTasksTest` 3、`EmbeddingBatchOrderingTest` 4 |
+
+**未实跑项**：
+1. **PostgreSQL 专项**：本机 Docker 守护进程未运行，`WORKBENCH_PG_TEST=true` 未执行；`V4` 索引脚本与「pgvector 下推不加载 embedding」的 PG 路径需在具备 PG 16 + pgvector 的环境验证。
+2. **前端门禁**：未改前端，未执行。
+3. **监控看板聚合**：`MonitoringDashboardService.timeSeries` 的 `O(B*N)` 嵌套循环与 `range=all` 全量拉取属于审计 `P-04` 的其余子项，不在本 Task 规格列举范围内，未改动。

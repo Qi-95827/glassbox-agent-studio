@@ -91,4 +91,22 @@ public interface TaskRepository extends JpaRepository<TaskEntity, String> {
   default boolean lockForUpdate(String taskId) {
     return lockById(taskId).isPresent();
   }
+
+  /**
+   * 只取给定编号集合中真实存在的任务编号。
+   *
+   * <p>任务列表的可见性过滤此前用 {@code findAll()} 拉全表再逐条比对归属，任务一多就是平方级扫表； 这里改为按归属集合精确取号。
+   */
+  @Query("select t.id from TaskEntity t where t.id in :ids")
+  List<String> findExistingIds(@Param("ids") java.util.Collection<String> ids);
+
+  /**
+   * 没有归属登记的历史任务编号（旧单机数据）。
+   *
+   * <p>仅在单机模式或管理员已领取历史时可见，避免把他人数据混入列表。
+   */
+  @Query(
+      "select t.id from TaskEntity t where t.id not in (select o.resourceId from"
+          + " ResourceOwnershipEntity o where o.resourceType = :resourceType)")
+  List<String> findIdsWithoutOwnership(@Param("resourceType") String resourceType);
 }

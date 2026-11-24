@@ -12,7 +12,6 @@ import dev.workbench.persistence.entity.MemoryRecordEntity;
 import dev.workbench.persistence.repository.MemoryRecordRepository;
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /** 混合评分：词法优先、路径加分、低分不注入、Top-K 限制。 */
@@ -20,22 +19,13 @@ class MemoryRetrievalServiceTest {
   @Test
   void ranksLexicalAndPathOverlapAboveUnrelatedMemory() {
     var repository = mock(MemoryRecordRepository.class);
-    var hit =
-        row(
-            "mem-hit",
-            "排序页面应使用原生 JavaScript，并保留 sort.js 的单步状态。",
-            "[\"sort.js\"]",
-            0.95);
-    var unrelated =
-        row("mem-other", "部署环境使用蓝绿发布。", "[\"deploy.yml\"]", 0.95);
-    when(repository.findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(
-            "ws", MemoryStatus.ACTIVE))
-        .thenReturn(List.of(hit, unrelated));
+    var hit = row("mem-hit", "排序页面应使用原生 JavaScript，并保留 sort.js 的单步状态。", "[\"sort.js\"]", 0.95);
+    var unrelated = row("mem-other", "部署环境使用蓝绿发布。", "[\"deploy.yml\"]", 0.95);
+    stub(List.of(hit, unrelated), repository);
     var service = new MemoryRetrievalService(repository, List.of());
     var matches =
         service.retrieve(
-            "ws",
-            new MemorySearchQuery("原生 JavaScript 排序 sort.js", List.of("sort.js"), 5));
+            "ws", new MemorySearchQuery("原生 JavaScript 排序 sort.js", List.of("sort.js"), 5));
     assertEquals(1, matches.size());
     assertEquals("mem-hit", matches.getFirst().memoryId());
     assertTrue(matches.getFirst().totalScore() > 0.7);
@@ -47,9 +37,7 @@ class MemoryRetrievalServiceTest {
   void embeddingSpiCanImproveLexicalMatchWithoutChangingWeightsShape() {
     var repository = mock(MemoryRecordRepository.class);
     var row = row("mem-embed", "前端状态机与单步演示", "[]", 0.8);
-    when(repository.findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(
-            "ws", MemoryStatus.ACTIVE))
-        .thenReturn(List.of(row));
+    stub(List.of(row), repository);
     var provider =
         new dev.workbench.framework.memory.MemoryEmbeddingProvider() {
           @Override
@@ -71,11 +59,8 @@ class MemoryRetrievalServiceTest {
   @Test
   void unrelatedMemoryIsDroppedByColdStartRelevanceGate() {
     var repository = mock(MemoryRecordRepository.class);
-    var unrelated =
-        agentRow("mem-unrelated", "部署环境使用蓝绿发布与只读副本。", "[]", 1.0);
-    when(repository.findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(
-            "ws", MemoryStatus.ACTIVE))
-        .thenReturn(List.of(unrelated));
+    var unrelated = agentRow("mem-unrelated", "部署环境使用蓝绿发布与只读副本。", "[]", 1.0);
+    stub(List.of(unrelated), repository);
     var service = new MemoryRetrievalService(repository, List.of());
     var matches = service.retrieve("ws", new MemorySearchQuery("前端单步状态机", List.of(), 5));
     // 时间新、置信度高也不能单独越过 0.12 相关性硬门槛。
@@ -86,9 +71,7 @@ class MemoryRetrievalServiceTest {
   void vectorIndexPushdownFeedsRrfBreakdown() {
     var repository = mock(MemoryRecordRepository.class);
     var row = row("mem-vector", "前端状态机与单步演示", "[]", 0.9);
-    when(repository.findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(
-            "ws", MemoryStatus.ACTIVE))
-        .thenReturn(List.of(row));
+    stub(List.of(row), repository);
     var provider =
         new dev.workbench.framework.memory.MemoryEmbeddingProvider() {
           @Override
@@ -129,6 +112,32 @@ class MemoryRetrievalServiceTest {
     assertTrue(matches.getFirst().matchedReason().contains("vector=0.95"));
     assertTrue(matches.getFirst().matchedReason().contains("rrf="));
     assertTrue(matches.getFirst().totalScore() > 0.7);
+  }
+
+  /**
+   * 召回走轻量投影：这里同时提供投影与候选实体，保持原有用例数据不变。
+   *
+   * <p>投影刻意不含 embedding，候选实体只为懒建索引与向量打分按需回表。
+   */
+  private static void stub(List<MemoryRecordEntity> rows, MemoryRecordRepository repository) {
+    var summaries =
+        rows.stream()
+            .map(
+                row -> {
+                  var summary = mock(dev.workbench.persistence.view.MemoryRecordSummary.class);
+                  when(summary.getId()).thenReturn(row.getId());
+                  when(summary.getContent()).thenReturn(row.getContent());
+                  when(summary.getPathPatternsJson()).thenReturn(row.getPathPatternsJson());
+                  when(summary.getUpdatedAt()).thenReturn(row.getUpdatedAt());
+                  when(summary.getConfidence()).thenReturn(row.getConfidence());
+                  when(summary.getVersion()).thenReturn(row.getVersion());
+                  when(summary.getMemoryType()).thenReturn(row.getMemoryType());
+                  when(summary.getSource()).thenReturn(row.getSource());
+                  return summary;
+                })
+            .toList();
+    when(repository.summarizeByWorkspaceAndStatus("ws", MemoryStatus.ACTIVE)).thenReturn(summaries);
+    when(repository.findAllById(any())).thenReturn(rows);
   }
 
   private static MemoryRecordEntity agentRow(

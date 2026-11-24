@@ -22,10 +22,9 @@ import org.springframework.stereotype.Service;
 /**
  * 三层长期记忆混合召回（BM25 + 向量余弦 + RRF）。
  *
- * <p>先按当前工作区 ACTIVE 语料实时计算 BM25 与 IDF，再与向量余弦排名按
- * {@code 1 / (60 + rank)} 做倒数排名融合，最后叠加路径重叠、时间衰减与置信度。冷启动硬门槛
- * {@code max(bm25, cosine) < 0.12} 直接剔除，杜绝“正文零相关却靠时间与置信度混进 Top-K”的污染。
- * 只召回 ACTIVE 记忆，CANDIDATE 永不建索引、永不注入。
+ * <p>先按当前工作区 ACTIVE 语料实时计算 BM25 与 IDF，再与向量余弦排名按 {@code 1 / (60 + rank)}
+ * 做倒数排名融合，最后叠加路径重叠、时间衰减与置信度。冷启动硬门槛 {@code max(bm25, cosine) < 0.12} 直接剔除，杜绝“正文零相关却靠时间与置信度混进
+ * Top-K”的污染。 只召回 ACTIVE 记忆，CANDIDATE 永不建索引、永不注入。
  */
 @Service
 public class MemoryRetrievalService {
@@ -53,58 +52,64 @@ public class MemoryRetrievalService {
     this(records, embeddings, List.of());
   }
 
+  /**
+   * 召回入口：先算查询向量，再用轻量投影做 BM25 预筛，最后只对候选集回表计算真实余弦。
+   *
+   * <p>此前对整库加载 {@code embedding_json} 并逐条 Jackson 反序列化，记忆体量增大后会把堆打满。 现在：投影不含 embedding；候选集 = 词法
+   * Top-N ∪ 向量下推 Top-N，余弦只对这批有限 id 计算， 其余行向量分记为 0，由 BM25 与结构化权重决定排序。
+   */
   public List<MemoryMatch> retrieve(String workspaceId, MemorySearchQuery query) {
-    var rows = records.findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(
-        workspaceId, MemoryStatus.ACTIVE);
-    if (rows.isEmpty()) return List.of();
+    var summaries = records.summarizeByWorkspaceAndStatus(workspaceId, MemoryStatus.ACTIVE);
+    if (summaries.isEmpty()) return List.of();
     Instant now = Instant.now();
     var provider = provider();
     float[] queryVector = null;
     String modelName = null;
     if (provider != null && !query.text().isBlank()) {
+      // 先完成远端 Embedding，再进入任何数据库查询，避免把 HTTP 期间占用的连接拖进长事务。
       queryVector = provider.embed(query.text());
       modelName = provider.modelName();
       if (modelName == null || modelName.isBlank()) modelName = "default";
-      if (queryVector != null && queryVector.length > 0) backfill(workspaceId, rows, provider, modelName);
-      else queryVector = null;
+      if (queryVector == null || queryVector.length == 0) queryVector = null;
     }
-    var pushed = queryVector == null ? Map.<String, Double>of() : pushdown(workspaceId, modelName, queryVector);
-    var inputs = new ArrayList<HybridRanker.Input>(rows.size());
-    for (var row : rows) {
-      double cosine =
-          pushed.containsKey(row.getId())
-              ? pushed.get(row.getId())
-              : cosine(parseEmbedding(row.getEmbeddingJson()), queryVector);
-      inputs.add(new HybridRanker.Input(row.getId(), row.getContent(), cosine));
+    var pushed =
+        queryVector == null
+            ? Map.<String, Double>of()
+            : pushdown(workspaceId, modelName, queryVector);
+    var candidateIds = candidateIds(summaries, pushed, query.text());
+    Map<String, float[]> candidateEmbeddings =
+        candidateIds.isEmpty()
+            ? Map.of()
+            : loadCandidateEmbeddings(workspaceId, candidateIds, provider, modelName, queryVector);
+    var inputs = new ArrayList<HybridRanker.Input>(summaries.size());
+    for (var summary : summaries) {
+      double cosine = cosineFor(summary.getId(), pushed, candidateEmbeddings, queryVector);
+      inputs.add(new HybridRanker.Input(summary.getId(), summary.getContent(), cosine));
     }
     var ranked = HybridRanker.rank(inputs, query.text());
     var matches = new ArrayList<MemoryMatch>();
     boolean vectorActive = queryVector != null;
-    for (var row : rows) {
-      var score = ranked.get(row.getId());
+    for (var summary : summaries) {
+      var score = ranked.get(summary.getId());
       if (score == null) continue;
       // 冷启动硬门槛：词法或语义至少一侧真正相关，否则时间与置信度不得单独抬分。
       // 例外：用户显式确认且未限定路径的 SEMANTIC 项目约定属于“全局常驻背景”，始终允许注入；
       // 带路径限定的约定仍必须与当前授权文件相关。
       boolean curated =
-          row.getSource() == dev.workbench.domain.MemorySource.USER_CONFIRMED
-              && row.getMemoryType() == dev.workbench.framework.memory.MemoryType.SEMANTIC
-              && !hasScopedPaths(row.getPathPatternsJson());
+          summary.getSource() == dev.workbench.domain.MemorySource.USER_CONFIRMED
+              && summary.getMemoryType() == dev.workbench.framework.memory.MemoryType.SEMANTIC
+              && !hasScopedPaths(summary.getPathPatternsJson());
       if (!curated && Math.max(score.bm25(), score.vector()) < MIN_RELEVANCE) continue;
-      double path = pathOverlap(row.getPathPatternsJson(), query.pathPatterns());
-      double recency = recency(row.getUpdatedAt(), now);
-      double confidence = Math.max(0, Math.min(1, row.getConfidence()));
+      double path = pathOverlap(summary.getPathPatternsJson(), query.pathPatterns());
+      double recency = recency(summary.getUpdatedAt(), now);
+      double confidence = Math.max(0, Math.min(1, summary.getConfidence()));
       double semantic = vectorActive ? 0.40 * score.bm25() + 0.60 * score.vector() : score.bm25();
       double total =
-          0.45 * score.rrf()
-              + 0.30 * semantic
-              + 0.10 * path
-              + 0.10 * recency
-              + 0.05 * confidence;
+          0.45 * score.rrf() + 0.30 * semantic + 0.10 * path + 0.10 * recency + 0.05 * confidence;
       matches.add(
           new MemoryMatch(
-              row.getId(),
-              row.getMemoryType(),
+              summary.getId(),
+              summary.getMemoryType(),
               total,
               String.format(
                   Locale.ROOT,
@@ -117,13 +122,65 @@ public class MemoryRetrievalService {
                   recency,
                   confidence,
                   score.bm25()),
-              row.getContent(),
-              row.getVersion()));
+              summary.getContent(),
+              summary.getVersion()));
     }
     return matches.stream()
         .sorted((left, right) -> Double.compare(right.totalScore(), left.totalScore()))
         .limit(Math.min(query.limit(), 5))
         .toList();
+  }
+
+  /** 候选集 = 词法 Top-N ∪ 向量下推命中；整体规模有上界，保证不会加载整库向量。 */
+  private static java.util.Set<String> candidateIds(
+      List<dev.workbench.persistence.view.MemoryRecordSummary> summaries,
+      Map<String, Double> pushed,
+      String queryText) {
+    var lexical =
+        HybridRanker.rank(
+            summaries.stream()
+                .map(summary -> new HybridRanker.Input(summary.getId(), summary.getContent(), 0))
+                .toList(),
+            queryText);
+    var ids = new java.util.LinkedHashSet<String>(pushed.keySet());
+    lexical.entrySet().stream()
+        .sorted((left, right) -> Double.compare(right.getValue().bm25(), left.getValue().bm25()))
+        .limit(VECTOR_CANDIDATES * 2L)
+        .forEach(entry -> ids.add(entry.getKey()));
+    return ids;
+  }
+
+  /**
+   * 只回表候选集读取向量；缺失或模型不一致时顺带补齐，写入 pgvector 供后续下推。
+   *
+   * @return 候选 id 到向量的映射，解析失败的行不参与向量打分
+   */
+  private Map<String, float[]> loadCandidateEmbeddings(
+      String workspaceId,
+      java.util.Set<String> candidateIds,
+      MemoryEmbeddingProvider provider,
+      String modelName,
+      float[] queryVector) {
+    var rows = records.findAllById(candidateIds);
+    if (rows.isEmpty()) return Map.of();
+    if (provider != null && queryVector != null) backfill(workspaceId, rows, provider, modelName);
+    var result = new HashMap<String, float[]>(rows.size());
+    for (var row : rows) {
+      var vector = parseEmbedding(row.getEmbeddingJson());
+      // 没有向量时不要放入 null：Map.copyOf 不接受空值，且该行本来就不参与余弦。
+      if (vector != null && vector.length > 0) result.put(row.getId(), vector);
+    }
+    return Map.copyOf(result);
+  }
+
+  private static double cosineFor(
+      String id,
+      Map<String, Double> pushed,
+      Map<String, float[]> candidateEmbeddings,
+      float[] queryVector) {
+    if (pushed.containsKey(id)) return pushed.get(id);
+    if (queryVector == null) return 0;
+    return cosine(candidateEmbeddings.get(id), queryVector);
   }
 
   private MemoryEmbeddingProvider provider() {
@@ -184,7 +241,8 @@ public class MemoryRetrievalService {
 
   /** 路径重叠：Jaccard；任一侧为空时为 0。 */
   static double pathOverlap(String storedJson, List<String> queried) {
-    if (storedJson == null || storedJson.isBlank() || queried == null || queried.isEmpty()) return 0;
+    if (storedJson == null || storedJson.isBlank() || queried == null || queried.isEmpty())
+      return 0;
     var stored = parsePaths(storedJson);
     if (stored.isEmpty()) return 0;
     var left = new LinkedHashSet<>(stored);

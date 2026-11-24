@@ -83,7 +83,9 @@ import reactor.core.publisher.Flux;
     classes = WorkbenchApplication.class,
     properties = {
       "spring.datasource.url=jdbc:h2:mem:workbenchtest;DB_CLOSE_DELAY=-1",
-      "workbench.workspace-root=${java.io.tmpdir}/agent-workbench-test-workspaces"
+      "workbench.workspace-root=${java.io.tmpdir}/agent-workbench-test-workspaces",
+      // 指标快照默认 15 秒缓存；本测试逐次断言计数增量，关闭缓存以保持即时可见。
+      "workbench.metrics.snapshot.ttl-seconds=0"
     })
 class WorkbenchIntegrationTest {
   @Autowired RunService service;

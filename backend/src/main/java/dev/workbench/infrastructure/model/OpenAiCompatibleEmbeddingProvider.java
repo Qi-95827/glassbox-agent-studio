@@ -83,6 +83,11 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
     return result.isEmpty() ? new float[0] : result.getFirst();
   }
 
+  /**
+   * 批量向量化。
+   *
+   * <p>硬约束：返回值长度必须与输入完全一致，任何一批失败/缺条都整体返回空列表，调用方据此放弃 向量化并降级为词法检索；绝不允许「部分成功」的向量被按位置错配到其他文本上。
+   */
   @Override
   public List<float[]> embedAll(List<String> texts) {
     if (texts == null || texts.isEmpty()) return List.of();
@@ -107,8 +112,17 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
         dimensionModeKey = key;
         dimensionModeExplicit = explicit;
       }
+      if (batch.size() != end - start) {
+        // 仍缺条：整批放弃，返回空列表让调用方整体降级，避免位置错配。
+        return List.of();
+      }
       result.addAll(batch);
     }
+    if (result.size() != texts.size()) return List.of();
+    // 统一维度：任一条为空或长度不一致都视为失败，防止后续向量列写入与余弦计算错位。
+    int dimension = result.getFirst().length;
+    if (dimension == 0) return List.of();
+    for (var vector : result) if (vector == null || vector.length != dimension) return List.of();
     return List.copyOf(result);
   }
 
@@ -200,17 +214,22 @@ public class OpenAiCompatibleEmbeddingProvider implements MemoryEmbeddingProvide
       var response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() / 100 != 2) return List.of();
       JsonNode root = JSON.readTree(response.body());
-      var vectors = new ArrayList<float[]>(texts.size());
+      // 兼容端点可能乱序返回 data：必须按 index 归位，否则向量会与错误的文本配对。
+      var byIndex = new java.util.TreeMap<Integer, float[]>();
+      int position = 0;
       for (JsonNode item : root.path("data")) {
         var embedding = item.path("embedding");
+        int index = item.has("index") ? item.path("index").asInt(position) : position;
+        position++;
         if (!embedding.isArray() || embedding.isEmpty()) continue;
         float[] values = new float[embedding.size()];
-        for (int index = 0; index < embedding.size(); index++)
-          values[index] = (float) embedding.get(index).asDouble();
+        for (int slot = 0; slot < embedding.size(); slot++)
+          values[slot] = (float) embedding.get(slot).asDouble();
         if (enforceDimension && dimension > 0 && values.length != dimension) continue;
-        vectors.add(values);
+        byIndex.putIfAbsent(index, values);
       }
-      return vectors.size() == texts.size() ? List.copyOf(vectors) : List.of();
+      if (byIndex.size() != texts.size()) return List.of();
+      return List.copyOf(byIndex.values());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       return List.of();
