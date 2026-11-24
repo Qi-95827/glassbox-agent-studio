@@ -30,6 +30,10 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final RunStateStore runs;
   private final RunEvidenceRecordService evidence;
   private final RunControl.NodePolicy nodePolicy;
+
+  /** 与预算解耦的节点标识：HITL 审批只依赖它，默认模板不需要配置 nodePolicy。 */
+  private final String hitlNodeId;
+
   private final CostService costs;
   private final WorkspaceAuthorizationService authorization;
   private final GlassboxTraceStore traces;
@@ -131,6 +135,37 @@ final class ControlledAgentRuntime implements AgentRuntime {
       CostService costs,
       WorkspaceAuthorizationService authorization,
       GlassboxTraceStore traces,
+      String locale,
+      ToolApprovalService approvals,
+      ApplicationEventPublisher publisher) {
+    this(
+        runId,
+        agentId,
+        control,
+        assemblyRecords,
+        runs,
+        evidence,
+        nodePolicy,
+        costs,
+        authorization,
+        traces,
+        locale,
+        approvals,
+        publisher,
+        null);
+  }
+
+  ControlledAgentRuntime(
+      String runId,
+      String agentId,
+      RunControl control,
+      AgentAssemblyRecordService assemblyRecords,
+      RunStateStore runs,
+      RunEvidenceRecordService evidence,
+      RunControl.NodePolicy nodePolicy,
+      CostService costs,
+      WorkspaceAuthorizationService authorization,
+      GlassboxTraceStore traces,
       String locale) {
     this(
         runId,
@@ -161,7 +196,8 @@ final class ControlledAgentRuntime implements AgentRuntime {
       GlassboxTraceStore traces,
       String locale,
       ToolApprovalService approvals,
-      ApplicationEventPublisher publisher) {
+      ApplicationEventPublisher publisher,
+      String hitlNodeId) {
     this.runId = Objects.requireNonNull(runId);
     this.agentId = Objects.requireNonNull(agentId);
     this.control = Objects.requireNonNull(control);
@@ -175,6 +211,10 @@ final class ControlledAgentRuntime implements AgentRuntime {
     this.locale = locale;
     this.approvals = approvals;
     this.publisher = publisher;
+    this.hitlNodeId =
+        hitlNodeId == null || hitlNodeId.isBlank()
+            ? (nodePolicy == null ? null : nodePolicy.nodeId().toString())
+            : hitlNodeId;
   }
 
   @Override
@@ -329,10 +369,15 @@ final class ControlledAgentRuntime implements AgentRuntime {
   @Override
   public ToolApprovalDecision approvalDecision(
       String toolName, int version, String argsJson, ToolRiskAssessment risk) {
-    if (approvals == null || nodePolicy == null)
+    if (approvals == null || hitlNodeId == null)
       return ToolApprovalDecision.reject("当前运行没有可用的动态审批通道，高危工具不会自动执行。");
-    return approvals.await(
-        runId, nodePolicy.nodeId(), agentId, toolName, version, argsJson, risk, control::check);
+    java.util.UUID node;
+    try {
+      node = java.util.UUID.fromString(hitlNodeId);
+    } catch (IllegalArgumentException invalid) {
+      return ToolApprovalDecision.reject("节点标识无效，高危工具不会自动执行。");
+    }
+    return approvals.await(runId, node, agentId, toolName, version, argsJson, risk, control::check);
   }
 
   @Override

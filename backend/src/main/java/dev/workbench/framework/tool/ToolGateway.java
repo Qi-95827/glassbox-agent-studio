@@ -132,6 +132,38 @@ public final class ToolGateway {
         action);
   }
 
+  /** 带明确目标路径的版本（工具名默认取枚举名），供内置写入工具注入真实写入目标。 */
+  public <T> String execute(
+      ToolKind kind,
+      int toolVersion,
+      String fingerprint,
+      String argsJson,
+      ToolEffect effect,
+      String start,
+      Function<T, String> summary,
+      Runnable validate,
+      Function<T, String> resourceVersion,
+      java.util.function.Consumer<String> editedValidate,
+      java.util.function.Function<String, T> editedAction,
+      java.util.List<String> targetPaths,
+      Callable<T> action) {
+    return execute(
+        kind,
+        kind.name(),
+        toolVersion,
+        fingerprint,
+        argsJson,
+        effect,
+        start,
+        summary,
+        validate,
+        resourceVersion,
+        editedValidate,
+        editedAction,
+        targetPaths,
+        action);
+  }
+
   /** 保留动态注册工具的逻辑名称，供网关证据和风险策略使用。 */
   public <T> String execute(
       ToolKind kind,
@@ -146,6 +178,43 @@ public final class ToolGateway {
       Function<T, String> resourceVersion,
       java.util.function.Consumer<String> editedValidate,
       java.util.function.Function<String, T> editedAction,
+      Callable<T> action) {
+    return execute(
+        kind,
+        toolName,
+        toolVersion,
+        fingerprint,
+        argsJson,
+        effect,
+        start,
+        summary,
+        validate,
+        resourceVersion,
+        editedValidate,
+        editedAction,
+        java.util.List.of(),
+        action);
+  }
+
+  /**
+   * 带明确目标路径的完整执行入口。
+   *
+   * <p>风险策略需要真实写入目标才能判断是否命中敏感文件；只靠参数 JSON 文本匹配会被代码正文中的 {@code security} 之类字样误伤，也会漏掉单文件闭包写入。
+   */
+  public <T> String execute(
+      ToolKind kind,
+      String toolName,
+      int toolVersion,
+      String fingerprint,
+      String argsJson,
+      ToolEffect effect,
+      String start,
+      Function<T, String> summary,
+      Runnable validate,
+      Function<T, String> resourceVersion,
+      java.util.function.Consumer<String> editedValidate,
+      java.util.function.Function<String, T> editedAction,
+      java.util.List<String> targetPaths,
       Callable<T> action) {
     if (toolVersion < 1) throw new IllegalArgumentException("工具版本无效。");
     synchronized (runtime) {
@@ -202,7 +271,7 @@ public final class ToolGateway {
               checks);
         }
         ToolRiskAssessment risk =
-            riskPolicy.assess(new ToolRiskContext(toolName, effect, argsJson));
+            riskPolicy.assess(new ToolRiskContext(toolName, effect, argsJson, targetPaths));
         checks.add(new GatewayCheck("RISK_ASSESSMENT", "风险分级", risk.level().name(), risk.reason()));
         ToolApprovalDecision approval =
             risk.requiresApproval()

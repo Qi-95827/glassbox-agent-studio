@@ -475,3 +475,74 @@ mvn test
 **未实跑项**：
 1. 未用真实 OpenAI/DeepSeek 端点回放「工具配对破坏导致 HTTP 400」的场景（需要真实密钥与外网）；协议合规性由单元测试从消息序列层面守护。
 2. 未改动前端，未执行前端门禁。
+---
+
+## Task 06 · 打通 Gate 5.5 HITL 工具审批、MCP 装配收口与单文件写风险绕过
+
+- **对应审计编号**：`F-03`、`F-04`、`S-06`
+- **完成时间**：2026-11-24
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `orchestration/ControlledAgentRuntime.java` | 新增与预算解耦的 `hitlNodeId` 字段（由调度器传入；13 参兼容构造回退到 `nodePolicy.nodeId()`）；`approvalDecision()` 只检查 `approvals`/`hitlNodeId`，非法节点标识按拒绝处理而不是抛异常 |
+| `orchestration/WorkflowScheduler.java` | `executeAttempt` 显式传入 `node.id().toString()`，不再依赖 `nodePolicy != null` |
+| `framework/tool/ToolRiskContext.java` | 新增 `targetPaths`（标准化：小写、`\`→`/`、去掉前导 `./`）；保留三参兼容构造 |
+| `framework/tool/ConservativeToolRiskPolicy.java` | 有目标路径时**只按路径**判定敏感文件；无路径时才回退参数文本匹配。代码正文里的 `security` 字样不再误拦截 |
+| `framework/tool/ToolGateway.java` | 新增带 `targetPaths` 的两个 `execute` 重载（12/13 参），旧重载委托为空路径；风险评估使用真实目标 |
+| `infrastructure/agentscope/GatewayAgentTool.java` | 写入调用注入 `writePaths + authorizedPaths + 入参 path` 作为目标路径 |
+| `infrastructure/agentscope/McpAgentTool.java` | 指纹改为 `sha256(exposedName + \0 + argsJson)`（不同工具同参不再误判重复）；新增按 `inputSchema.required` 的必选参数校验（校验前后各一次） |
+| `infrastructure/mcp/McpToolAdmission.java`（新增） | 角色准入：`REVIEWER` 禁用全部外部工具；`ANALYST` 剥离 `HIGH` 风险工具；其余角色允许，高风险仍走 Gate 5.5 |
+| `infrastructure/agentscope/AgentScopeExecutor.java` | 装配 MCP 工具前先过准入，被剥离的工具记 `TOOL_REJECTED` 事件并带原因 |
+
+**测试**
+
+| 文件 | 用例数 |
+| :--- | ---: |
+| `orchestration/ControlledAgentRuntimeHitlTest.java`（新增） | 4 |
+| `framework/tool/ConservativeToolRiskPolicyTest.java`（新增） | 6 |
+| `infrastructure/mcp/McpToolAdmissionTest.java`（新增） | 4 |
+
+### 2. 修复要点
+
+1. **HITL 默认可用**：审批通道只依赖节点标识；未配置预算的内置模板与候选计划节点现在也会真正进入 Gate 5.5，而不是被判「无审批通道」后一律拒绝。
+2. **入口风险判定看真实路径**：单文件闭包写入（参数里只有内容）也能命中 `.env`/`pom.xml`/`Dockerfile`/`application.*`/`*.key` 等敏感目标；普通源码正文出现敏感词不再误报。
+3. **MCP 指纹唯一**：指纹包含 `exposedName()`，避免不同 MCP 工具用 `{}` 参数互相触发防循环拦截。
+4. **必选参数校验**：按 `inputSchema.required` 校验原始参数与改参结果，缺参在本地失败，不把半成品请求发往外部服务。
+5. **角色收口**：评审角色不允许任何外部工具，分析角色只能拿到低风险只读工具，被剥离项留下可审计原因。
+
+### 3. 红线自检
+
+| 红线 | 自检结论 |
+| :--- | :--- |
+| 1 双轨数据库架构 | 未涉及 |
+| 2 历史 Flyway 迁移 | 未改迁移脚本 |
+| 3 ArchUnit 守卫 | 5/5 通过；新增类位于既有 `infrastructure.mcp` 包 |
+| 4 评估与 UI 资产 | 未触碰 |
+| 5 前端产品设计 | 未改前端 |
+| 6 范围纪律 | 未改公开 API 路径；`ToolRiskContext`、`ToolGateway`、`ControlledAgentRuntime` 均保留旧重载/构造 |
+| 7 假修复 | 无 `@Disabled`；既有 `ControlledAgentRuntimeTest`、`ToolGatewayTest` 未改动且仍通过 |
+| 8 单任务全量回归 | 全量 `mvn test` 全绿后继续 |
+| 9 未实跑项 | 未用真实 MCP 服务器验证外部调用链路（需要用户配置连接）；见第 5 节 |
+| 10 敏感凭据 | 未读取/输出/提交 `config/*` 与 `data/` |
+| 11 git push | 仅本地提交 |
+| 12 代码质量 | 全部改动经 `google-java-format 1.28.0`；注释说明角色边界与降级行为 |
+
+### 4. 新增测试类与核心正反例
+
+| 测试类 | 正例 | 反例 |
+| :--- | :--- | :--- |
+| `ControlledAgentRuntimeHitlTest` | 无预算节点仍调用 `approvals.await` 并采纳决定；旧 `nodePolicy` 仍能提供节点标识 | 无节点标识时拒绝且不调用审批；非法节点标识返回拒绝而不是抛异常 |
+| `ConservativeToolRiskPolicyTest` | 普通源码写入为 MEDIUM；MCP 写操作为 HIGH；只读为 LOW | 单文件写 `.env`、`pom.xml`、`.github/workflows/*` 为 HIGH；正文含 `security` 不再误判；无路径时回退文本匹配；`.\DockerFile` 归一化后仍命中 |
+| `McpToolAdmissionTest` | 可执行角色可用高风险工具（仍走审批）；分析角色可用低风险工具 | 评审角色全禁；分析角色禁用 HIGH；风险等级大小写/空白不敏感 |
+
+### 5. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 626, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，完成于 2026-11-24 13:52:14） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+
+**未实跑项**：未连接真实 MCP 服务器/真实用户审批 UI 做端到端回放（需要用户自己的 MCP 连接与交互），本次以单元测试锁定决策逻辑；未改前端，未执行前端门禁。

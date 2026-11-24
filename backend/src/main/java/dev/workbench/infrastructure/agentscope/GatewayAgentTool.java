@@ -117,7 +117,23 @@ final class GatewayAgentTool<T> extends ToolBase {
         resourceVersionFn,
         editedValidate,
         editedAction,
+        targetPaths(effect, input),
         () -> spec.action().execute(bound, context.runtime()::check));
+  }
+
+  /**
+   * 收集本次调用的真实写入目标：授权文件清单 + 入参中的 path。
+   *
+   * <p>只读调用不产生文件写入，直接返回空列表；写入调用把单文件闭包（授权清单即目标）与多文件入参 一并交给风险策略，避免只靠参数正文猜测目标。
+   */
+  private java.util.List<String> targetPaths(ToolEffect effect, Map<String, Object> input) {
+    if (effect != ToolEffect.WRITE) return java.util.List.of();
+    var paths = new java.util.LinkedHashSet<String>();
+    if (context.writePaths() != null) paths.addAll(context.writePaths());
+    if (context.authorizedPaths() != null) paths.addAll(context.authorizedPaths());
+    if (input != null && input.get("path") instanceof String path && !path.isBlank())
+      paths.add(path);
+    return java.util.List.copyOf(paths);
   }
 
   private static Map<String, Object> inputSchema(ToolSpecification<?> specification) {

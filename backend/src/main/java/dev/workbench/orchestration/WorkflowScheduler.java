@@ -17,14 +17,13 @@ import dev.workbench.framework.workflow.check.StaleEvidenceException;
 import dev.workbench.framework.workflow.check.SystemCheckRegistry;
 import dev.workbench.framework.workflow.check.SystemCheckRequest;
 import dev.workbench.framework.workflow.check.SystemCheckResult;
-import dev.workbench.planning.PlanService;
-import dev.workbench.framework.workflow.plan.ReviewVerdict;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
+import dev.workbench.planning.PlanService;
+import dev.workbench.planning.SourceArtifactService;
 import dev.workbench.store.AgentAssemblyRecordService;
 import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.store.RunStateStore;
-import dev.workbench.planning.SourceArtifactService;
 import dev.workbench.task.WorkflowExecutionService;
 import dev.workbench.task.WorkflowRecoveryService;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
@@ -41,9 +40,6 @@ import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import dev.workbench.store.HandoffValidator;
-import dev.workbench.store.ReviewCompletion;
-import dev.workbench.store.StopCompletion;
 
 /** 按持久化依赖顺序执行受控计划；整个运行共享一个控制器。 */
 @Component
@@ -197,8 +193,7 @@ class WorkflowScheduler {
       Object stateLock,
       Set<UUID> activeAgents)
       throws InterruptedException, com.fasterxml.jackson.core.JsonProcessingException {
-    CompletionService<NodeOutcome> completion =
-        new ExecutorCompletionService<>(nodeExecutor);
+    CompletionService<NodeOutcome> completion = new ExecutorCompletionService<>(nodeExecutor);
     int effectiveMax =
         parallelAllPlans || !plans.revisionEdges(runId).isEmpty() ? maxParallelNodes : 1;
     var inFlight = new java.util.LinkedHashMap<UUID, Future<NodeOutcome>>();
@@ -225,8 +220,7 @@ class WorkflowScheduler {
                   && traces.planControl(runId).breakpoints().contains(node.id().toString())) {
                 releasedBreakpoints.add(node.id().toString());
                 control.pauseAtBreakpoint(
-                    stateLock,
-                    "命中节点断点：" + node.label() + "；请检查上游交接与上下文后点击「继续」放行。");
+                    stateLock, "命中节点断点：" + node.label() + "；请检查上游交接与上下文后点击「继续」放行。");
               }
               try {
                 if (node.systemCheck()) {
@@ -245,17 +239,12 @@ class WorkflowScheduler {
                           stateLock,
                           () ->
                               workflowRuns.claimWorkflowNode(
-                                  runId,
-                                  plan.id(),
-                                  node.id(),
-                                  task.goal(),
-                                  effectiveMax));
+                                  runId, plan.id(), node.id(), task.goal(), effectiveMax));
                   activeAgents.add(UUID.fromString(attempt.agentId()));
                   workflowRuns.requireWorkspaceCurrent(attempt.workspaceGuard());
                   inFlight.put(
                       node.id(),
-                      completion.submit(
-                          () -> runAgent(runId, task, attempt, control, stateLock)));
+                      completion.submit(() -> runAgent(runId, task, attempt, control, stateLock)));
                 }
                 submitted = true;
                 if (checkInFlight) break;
@@ -272,8 +261,7 @@ class WorkflowScheduler {
             }
           }
           if (!submitted && inFlight.isEmpty()) {
-            throw new IllegalStateException(
-                "工作流没有可继续执行的节点；可能存在未结算状态或不可调度的计划。");
+            throw new IllegalStateException("工作流没有可继续执行的节点；可能存在未结算状态或不可调度的计划。");
           }
         }
 
@@ -314,8 +302,7 @@ class WorkflowScheduler {
           if (outcome.error() instanceof RuntimeException runtime) {
             failure = runtime;
           } else {
-            failure =
-                new IllegalStateException("节点执行失败，请查看节点与调用记录。", outcome.error());
+            failure = new IllegalStateException("节点执行失败，请查看节点与调用记录。", outcome.error());
           }
           cancelAll(completion, inFlight);
           continue;
@@ -381,10 +368,10 @@ class WorkflowScheduler {
   /**
    * 真并行只对“写集非空且互不重叠”的就绪节点开放。
    *
-   * <p>只读/纯文本节点按顺序执行，避免同时消耗共享预算或让两个读取分支争抢同一观察窗口；
-   * 独立写分支仍可并发，且数据库认领会再次验证写集互斥。
+   * <p>只读/纯文本节点按顺序执行，避免同时消耗共享预算或让两个读取分支争抢同一观察窗口； 独立写分支仍可并发，且数据库认领会再次验证写集互斥。
    */
-  private boolean parallelSafe(String runId, dev.workbench.framework.workflow.plan.PlanNode candidate, Set<UUID> inFlight) {
+  private boolean parallelSafe(
+      String runId, dev.workbench.framework.workflow.plan.PlanNode candidate, Set<UUID> inFlight) {
     var specs = plans.specsByNode(runId);
     var candidateSpec = specs.get(candidate.id());
     if (candidateSpec == null || candidateSpec.writeFiles().isEmpty()) return false;
@@ -397,7 +384,8 @@ class WorkflowScheduler {
     return true;
   }
 
-  private static boolean settled(List<dev.workbench.framework.workflow.plan.PlanNode> nodes) {    return nodes.stream()
+  private static boolean settled(List<dev.workbench.framework.workflow.plan.PlanNode> nodes) {
+    return nodes.stream()
         .allMatch(
             node ->
                 node.status() == dev.workbench.framework.workflow.plan.PlanNodeStatus.COMPLETED
@@ -427,7 +415,8 @@ class WorkflowScheduler {
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         return;
-      } catch (java.util.concurrent.ExecutionException | java.util.concurrent.CancellationException ignored) {
+      } catch (java.util.concurrent.ExecutionException
+          | java.util.concurrent.CancellationException ignored) {
         // 已取消或失败的节点不再影响已终止运行。
       }
     }
@@ -472,9 +461,7 @@ class WorkflowScheduler {
     } catch (StopExecution stop) {
       return NodeOutcome.check(claimed, null, stop);
     } catch (RuntimeException failure) {
-      result =
-          SystemCheckResult.blocked(
-              "系统检查执行失败，不能确认检查条件。", failure.getClass().getSimpleName());
+      result = SystemCheckResult.blocked("系统检查执行失败，不能确认检查条件。", failure.getClass().getSimpleName());
     }
     return NodeOutcome.check(claimed, result, null);
   }
@@ -551,35 +538,36 @@ class WorkflowScheduler {
     String id = attempt.agentId();
     var request =
         new AgentExecutionRequest(
-            node.role(),
-            id,
-            stepInput(runId, task, attempt, json.writeValueAsString(input)),
-            nodeWorkspaceId,
-            files,
-            !writeFiles.isEmpty(),
-            task.scenario(),
-            task.modelMode(),
-            CheckpointStage.BEFORE_TOOL,
-            null,
-            new ControlledAgentRuntime(
-                runId,
+                node.role(),
                 id,
-                control,
-                agents,
-                runs,
-                evidence,
-                nodePolicy,
-                costs,
-                workspaceAuthorization,
-                traces,
-                task.locale(),
-                approvals,
-                publisher),
-            node.definitionRef(),
-            node.definitionSha256(),
-            writeFiles)
-        .withModelConnection(task.modelConnectionId())
-        .withLocale(task.locale());
+                stepInput(runId, task, attempt, json.writeValueAsString(input)),
+                nodeWorkspaceId,
+                files,
+                !writeFiles.isEmpty(),
+                task.scenario(),
+                task.modelMode(),
+                CheckpointStage.BEFORE_TOOL,
+                null,
+                new ControlledAgentRuntime(
+                    runId,
+                    id,
+                    control,
+                    agents,
+                    runs,
+                    evidence,
+                    nodePolicy,
+                    costs,
+                    workspaceAuthorization,
+                    traces,
+                    task.locale(),
+                    approvals,
+                    publisher,
+                    node.id().toString()),
+                node.definitionRef(),
+                node.definitionSha256(),
+                writeFiles)
+            .withModelConnection(task.modelConnectionId())
+            .withLocale(task.locale());
     return limited(agent.execute(request), 1900);
   }
 
@@ -618,7 +606,10 @@ class WorkflowScheduler {
   }
 
   private static AgentInput stepInput(
-      String runId, TaskDefinition task, WorkflowExecutionService.ClaimedNode attempt, String text) {
+      String runId,
+      TaskDefinition task,
+      WorkflowExecutionService.ClaimedNode attempt,
+      String text) {
     var sources = new java.util.ArrayList<AgentInput.Source>();
     sources.add(new AgentInput.Source(AgentInput.Kind.TASK, task.id().toString(), null));
     sources.add(

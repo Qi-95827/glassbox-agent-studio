@@ -198,6 +198,16 @@ public class AgentScopeExecutor implements AgentExecutor {
     if (mcpProvider != null && mcpManager != null && request.context().runId() != null) {
       for (var binding : mcpProvider.bindingsForRun(request.context().runId())) {
         String name = binding.exposedName();
+        // 外部工具按节点角色收口：评审角色禁用，分析角色剥离高风险写工具。
+        var admission =
+            dev.workbench.infrastructure.mcp.McpToolAdmission.decide(
+                request.role(), binding.riskLevel());
+        if (!admission.allowed()) {
+          runtime.event(
+              dev.workbench.domain.EventType.TOOL_REJECTED,
+              "未装配外部工具 " + name + "：" + admission.reason());
+          continue;
+        }
         if (toolkit.getTool(name) == null)
           toolkit.registerAgentTool(new McpAgentTool(binding, mcpManager, toolContext));
       }

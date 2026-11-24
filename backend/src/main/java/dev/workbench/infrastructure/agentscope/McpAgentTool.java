@@ -22,7 +22,8 @@ final class McpAgentTool extends ToolBase {
   private final McpClientManager clients;
   private final AgentToolContext context;
 
-  McpAgentTool(McpToolProvider.Binding binding, McpClientManager clients, AgentToolContext context) {
+  McpAgentTool(
+      McpToolProvider.Binding binding, McpClientManager clients, AgentToolContext context) {
     super(
         ToolBase.builder()
             .name(binding.exposedName())
@@ -50,26 +51,64 @@ final class McpAgentTool extends ToolBase {
 
   private String invoke(Map<String, Object> input) throws Exception {
     String argsJson = JSON.writeValueAsString(input == null ? Map.of() : input);
-    ToolEffect effect = "HIGH".equals(binding.riskLevel()) ? ToolEffect.WRITE : ToolEffect.READ_ONLY;
+    ToolEffect effect =
+        "HIGH".equals(binding.riskLevel()) ? ToolEffect.WRITE : ToolEffect.READ_ONLY;
     var gateway = new ToolGateway(context.json(), context.runtime(), context.failure());
     return gateway.execute(
         ToolKind.MCP,
         1,
-        dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.sha256(argsJson),
+        fingerprint(argsJson),
         argsJson,
         effect,
         "调用 MCP 工具 " + binding.exposedName(),
         value -> value == null ? "" : value.substring(0, Math.min(500, value.length())),
-        () -> requireObject(argsJson),
+        () -> requireSchema(argsJson),
         null,
-        McpAgentTool::requireObject,
+        edited -> requireSchema(edited),
         edited -> clients.call(binding.server(), binding.tool().getName(), edited),
         () -> clients.call(binding.server(), binding.tool().getName(), argsJson));
   }
 
+  /** 调用指纹必须包含工具名：不同 MCP 工具用同样的 `{}` 参数不能被判成重复调用而误拦截。 */
+  private String fingerprint(String argsJson) {
+    return dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.sha256(
+        binding.exposedName() + '\u0000' + argsJson);
+  }
+
+  /** 按 inputSchema 的 required 列表补全必选参数校验：缺参直接失败，不把半成品请求发给外部服务。 */
+  private void requireSchema(String argsJson) {
+    requireObject(argsJson);
+    var required = requiredNames(binding.tool().getInputSchemaJson());
+    if (required.isEmpty()) return;
+    try {
+      var node = JSON.readTree(argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
+      for (String name : required)
+        if (!node.has(name) || node.get(name).isNull())
+          throw new IllegalArgumentException("MCP 工具缺少必选参数：" + name);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      throw new IllegalArgumentException("MCP 参数不是有效 JSON。", e);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static java.util.List<String> requiredNames(String schemaJson) {
+    if (schemaJson == null || schemaJson.isBlank()) return java.util.List.of();
+    try {
+      var schema = JSON.readValue(schemaJson, java.util.Map.class);
+      Object required = schema.get("required");
+      if (!(required instanceof java.util.List<?> items)) return java.util.List.of();
+      var names = new java.util.ArrayList<String>(items.size());
+      for (Object item : items) if (item instanceof String name) names.add(name);
+      return names;
+    } catch (Exception e) {
+      return java.util.List.of();
+    }
+  }
+
   private static void requireObject(String argsJson) {
     try {
-      if (!JSON.readTree(argsJson).isObject()) throw new IllegalArgumentException("MCP 参数必须是 JSON 对象。");
+      if (!JSON.readTree(argsJson).isObject())
+        throw new IllegalArgumentException("MCP 参数必须是 JSON 对象。");
     } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
       throw new IllegalArgumentException("MCP 参数不是有效 JSON。", e);
     }
