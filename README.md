@@ -193,8 +193,15 @@ Open **http://127.0.0.1:8088** in your browser:
 
 ### 3. Run Full Verification Suite
 ```bash
-# Backend unit, integration, Flyway migration & ArchUnit architecture guard tests
+# Backend unit, integration, Flyway migration & ArchUnit architecture guard tests (H2 default)
 mvn test
+
+# Optional: run with real Docker bug sandbox verification (requires Docker Desktop)
+# PowerShell: $env:RUN_DOCKER_TESTS="true"; mvn test
+
+# Optional: start PostgreSQL 16 + pgvector and run PG + HNSW + JPA integration tests
+docker compose up -d
+# PowerShell: $env:WORKBENCH_PG_TEST="true"; mvn "-Dtest=PostgresPgVectorIntegrationTest" test
 
 # Frontend format, lint, unit tests & production build
 cd frontend/user-workbench
@@ -208,29 +215,33 @@ npm run build
 
 ## Architecture Overview
 
-Strict layered architecture automatically enforced by **ArchUnit** (`ArchitectureGuardTest`): zero top-level package cycles, pure `domain` & `framework` layers, and strict isolation of `io.agentscope` SDK calls to `infrastructure` / `app`.
+Strict layered architecture automatically enforced by **ArchUnit** (`ArchitectureGuardTest`): zero top-level package cycles, pure `domain` & `framework` layers, and strict isolation of `io.agentscope` SDK calls to `infrastructure` / `persistence.agentscope` / `app`.
 
 ```text
-frontend/user-workbench/   React 19 · Vite · MUI (M3) · React Flow · React Query · React Router
+frontend/user-workbench/   React 19 · Vite 6 · MUI (M3) · React Flow · React Query · React Router
 backend/src/main/java/
   dev.workbench.domain          Pure domain enums & value objects (zero persistence/web deps)
-  dev.workbench.framework       Pure contracts, ToolGateway, SecretCipher & trace extractors
-  dev.workbench.infrastructure  AgentScope Java 2.0.4 & OpenAI-compatible model adapters
-  dev.workbench.modelconnection BYOK encrypted model connections, probing & usage estimation
-  dev.workbench.persistence     JPA entities, repositories & Flyway V1~V6 migrations (H2)
-  dev.workbench.planning        Idea drafting, entry routing, candidate DAG generation & validation
-  dev.workbench.orchestration   Run lifecycle, DAG scheduler, breakpoints & handoff coordination
+  dev.workbench.framework       Pure contracts, ToolGateway (6.5 gates + HITL), OutboundUrlGuard, SecretCipher
+  dev.workbench.infrastructure  AgentScope Java 2.0.4, BYOK/Embedding adapters, hardened MCP (STDIO/HTTP) & pgvector
+  dev.workbench.modelconnection BYOK encrypted model connections, RAG Embedding settings, probing & usage estimation
+  dev.workbench.persistence     JPA entities (H2 CLOB / PG TEXT), repositories & Flyway migrations
+  dev.workbench.planning        Idea drafting, entry routing, candidate DAG generation, budgets & validation
+  dev.workbench.orchestration   Run lifecycle, parallel DAG scheduler, reflection loops & non-blocking breakpoints
+  dev.workbench.control         4-tier context compaction (Query-Aware L1 offload, L2 anchors) & L1 artifacts
   dev.workbench.delivery        Execution graph projector, node detail & delivery aggregation
   dev.workbench.workspace       Authorized file sandbox & Git worktree review/commit/merge
   dev.workbench.privateagent    Versioned private Agents, Skills & read-only Tool configs
-  dev.workbench.bug             Simulated Bug triage & Docker container regression verification
-  dev.workbench.evaluation      Versioned evaluation suites, datasets & batch comparison
-  dev.workbench.observability   Cursor event stream, Grafana-style dashboard & 5-step diagnostics
+  dev.workbench.memory          Layered long-term memory (V9) & workspace RAG knowledge base (V13 + pgvector)
+  dev.workbench.bug             Simulated Bug triage & isolated Docker Python container regression
+  dev.workbench.evaluation      Eval Lab v2 (6-dim capabilities, Benchmark Hub, custom datasets & A/B compare)
+  dev.workbench.observability   SSE cursor stream, Grafana-style SVG dashboard, Prometheus metrics & 5-step diagnostics
+  dev.workbench.auth/ownership  Session auth, Cookie CSRF, ADMIN_ONLY guards & per-user resource ownership
 backend/src/main/resources/
   prompts/                      Externalized Chinese prompts & tool contracts (default)
   prompts/en/                   Mirrored English prompts & tool contracts (for EN tasks)
   i18n/                         Spring MessageSource bundles (messages_zh_CN / messages_en_US)
-  db/migration/                 Flyway versioned migrations (V1 ~ V6)
+  db/migration/                 Flyway H2 migrations (V1 ~ V14)
+  db/migration-pg/              Flyway PostgreSQL 16 + pgvector migrations (V1 ~ V4)
 ```
 
 ---
@@ -239,6 +250,9 @@ backend/src/main/resources/
 
 - [Documentation Index (Chinese)](docs/README.md)
 - [Product Requirements & Technical Architecture](docs/项目总览_产品需求与技术架构.md)
+- [Security Audit, Top 10 Fixes & Roadmap](docs/项目漏洞审计与后续演进改进文档.md)
+- [Top 10 Security & P0 Fixes Verification Log](docs/交接/Top10安全止血与P0修复_验收记录.md)
+- [PostgreSQL 16 + pgvector Deployment Guide](docs/开发记录/PGVector切换与部署指南.md)
 - [Glass-Box Multi-Agent Full-Link Visualization Design](docs/概要设计/玻璃盒多Agent全链路可视化_概要设计.md)
 - [Engineering & Security Coding Standards](docs/开发规范/代码开发规范.md)
 

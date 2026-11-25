@@ -196,8 +196,15 @@ mvn spring-boot:run
 
 ### 3. 运行全量测试与架构守卫
 ```powershell
-# 后端全量测试（含 ArchUnit 架构守卫与 Flyway 迁移兼容测试）
+# 后端全量测试（H2 默认档：含 ArchUnit 架构守卫与 Flyway 迁移兼容测试）
 mvn test
+
+# 可选：启用真实 Docker 模拟 Bug 沙箱测试（需启动 Docker Desktop）
+$env:RUN_DOCKER_TESTS="true"; mvn test
+
+# 可选：启动 PostgreSQL 16 + pgvector 并执行 PG + HNSW + JPA 集成测试
+docker compose up -d
+$env:WORKBENCH_PG_TEST="true"; mvn "-Dtest=PostgresPgVectorIntegrationTest" test
 
 # 前端代码格式化检查、Lint、单元测试与生产构建
 cd frontend/user-workbench
@@ -211,29 +218,33 @@ npm run build
 
 ## 技术架构与分层守卫
 
-项目采用清晰的分层架构，由 **ArchUnit（`ArchitectureGuardTest`）** 自动守卫：顶层包零循环依赖、`domain` / `framework` 保持绝对纯净、`io.agentscope` SDK 严格隔离在 `infrastructure` / `app` 层。
+项目采用清晰的分层架构，由 **ArchUnit（`ArchitectureGuardTest`）** 自动守卫：顶层包零循环依赖、`domain` / `framework` 保持绝对纯净、`io.agentscope` SDK 严格隔离在 `infrastructure` / `persistence.agentscope` / `app` 层。
 
 ```text
-frontend/user-workbench/   React 19 · Vite · MUI (M3) · React Flow · React Query · React Router
+frontend/user-workbench/   React 19 · Vite 6 · MUI (M3) · React Flow · React Query · React Router
 backend/src/main/java/
   dev.workbench.domain          纯领域枚举与值对象（零持久化/Web 依赖）
-  dev.workbench.framework       纯契约、ToolGateway、SecretCipher 与交接提取器
-  dev.workbench.infrastructure  AgentScope Java 2.0.4 与 OpenAI 兼容模型适配层
-  dev.workbench.modelconnection BYOK 加密模型连接管理、连通性探测与费用估算
-  dev.workbench.persistence     JPA 实体、Repository 与 Flyway V1~V6 数据库迁移（H2）
-  dev.workbench.planning        想法整理、入口路由、候选 DAG 生成与校验
-  dev.workbench.orchestration   运行生命周期、DAG 调度、断点控制与交接协调
+  dev.workbench.framework       纯契约、ToolGateway（6.5道安检与HITL审批）、OutboundUrlGuard、SecretCipher
+  dev.workbench.infrastructure  AgentScope Java 2.0.4、BYOK/Embedding 适配、安全 MCP (STDIO/HTTP) 与 pgvector
+  dev.workbench.modelconnection BYOK 加密连接、RAG Embedding 设置、连通性探测与费用估算
+  dev.workbench.persistence     JPA 实体（兼容 H2 CLOB 与 PG TEXT）、Repository 与双库 Flyway 迁移
+  dev.workbench.planning        想法整理、入口路由、候选 DAG 生成校验与默认安全预算
+  dev.workbench.orchestration   运行生命周期、并行 DAG 调度、有界反思、非阻塞断点与恢复
+  dev.workbench.control         四级上下文压缩（Query-Aware L1 卸载、L2 结构化锚点）与 L1 产物隔离
   dev.workbench.delivery        执行图投影、节点详情投影与交付聚合
   dev.workbench.workspace       授权文件沙箱与 Git worktree 审查/提交/合并
   dev.workbench.privateagent    版本化私有 Agent / Skill / 只读 Tool 配置管理
-  dev.workbench.bug             模拟 Bug 分诊与 Docker 容器复现回归闭环
-  dev.workbench.evaluation      版本化评测套件、数据集与批次对照
-  dev.workbench.observability   游标事件流、类 Grafana 监控看板与 5 步故障诊断
+  dev.workbench.memory          V9 分层长期记忆与 V13 工作区 Hybrid RAG 知识库（BM25 + pgvector + RRF）
+  dev.workbench.bug             模拟 Bug 分诊与强隔离 Docker 容器复现回归闭环
+  dev.workbench.evaluation      Eval Lab v2 六维能力评测、Benchmark Hub 公开集、自定义数据集与 A/B 消融对照
+  dev.workbench.observability   SSE 游标事件流、类 Grafana 监控看板、Prometheus 指标与 5 步故障诊断
+  dev.workbench.auth/ownership  本地会话认证、Cookie CSRF、ADMIN_ONLY 守卫与服务端资源归属隔离
 backend/src/main/resources/
   prompts/                      外置化中文 Agent / Skill / 规划 Prompt 与工具契约（默认）
   prompts/en/                   外置化英文镜像 Prompt 与工具契约（英文任务专用）
   i18n/                         Spring MessageSource 国际化资源（zh_CN / en_US）
-  db/migration/                 Flyway 版本化迁移脚本（V1 ~ V6）
+  db/migration/                 Flyway H2 版本化迁移脚本（V1 ~ V14）
+  db/migration-pg/              Flyway PostgreSQL 16 + pgvector 迁移脚本（V1 ~ V4）
 ```
 
 ---
@@ -241,7 +252,10 @@ backend/src/main/resources/
 ## 文档导航
 
 - **[docs/README.md](docs/README.md)**：完整文档目录与归档索引
-- **[项目总览：产品需求与技术架构](docs/项目总览_产品需求与技术架构.md)**：完整能力范围、数据模型与验收基线
+- **[项目总览：产品需求与技术架构](docs/项目总览_产品需求与技术架构.md)**：唯一权威系统设计与最新实机基线
+- **[项目漏洞审计与后续演进改进文档](docs/项目漏洞审计与后续演进改进文档.md)**：安全审计台账、Top 10 闭环状态与演进路线图
+- **[Top 10 安全止血与 P0 修复验收记录](docs/交接/Top10安全止血与P0修复_验收记录.md)**：逐任务实机验收证据与门禁报告
+- **[PGVector 切换与部署指南](docs/开发记录/PGVector切换与部署指南.md)**：PostgreSQL 16 + pgvector 启用与验证清单
 - **[玻璃盒多 Agent 全链路可视化概要设计](docs/概要设计/玻璃盒多Agent全链路可视化_概要设计.md)**：面向开源教学的全链路透视架构设计
 - **[代码开发规范](docs/开发规范/代码开发规范.md)**：工程分层、JPA 持久化与安全规约
 

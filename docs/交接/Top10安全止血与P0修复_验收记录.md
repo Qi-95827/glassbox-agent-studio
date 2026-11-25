@@ -1,8 +1,18 @@
 # Top 10 安全止血与核心 P0 缺陷修复 · 逐项验收记录
 
-> **施工依据**：`docs/迭代计划/研发实施文档_Top10安全止血与核心P0缺陷修复.md`
+> **审计与演进依据**：[项目漏洞审计与后续演进改进文档](../项目漏洞审计与后续演进改进文档.md)（原施工实施文档及提示词已归档合并并清理，本验收记录保留全部实测过程与提交证据）
 > **记录规则**：每完成 1 个 Task 立即执行仓库根目录全量测试门禁，并在本文件追加真实改动、新增测试与实测数字；
 > 未实跑的验证项必须显式说明原因，绝不以计划或推断代替实测。
+
+## 封板验收总览（2026-11-25 · 全量实机全绿）
+
+| 门禁项 | 最新实机命令与范围 | 实测结果 | 基线 Commit |
+| :--- | :--- | :--- | :--- |
+| **PostgreSQL 16 + pgvector** | `$env:WORKBENCH_PG_TEST="true"; mvn "-Dtest=PostgresPgVectorIntegrationTest" test` | **Tests run: 3, Failures: 0, Errors: 0, Skipped: 0**，`BUILD SUCCESS` | `4873bf3` |
+| **后端全量 + 真实 Docker** | `$env:RUN_DOCKER_TESTS="true"; mvn test` | **Tests run: 696, Failures: 0, Errors: 0, Skipped: 5**，`BUILD SUCCESS`（5 个跳过含 PG 专项 3 例 + 2 个系统条件用例） | `4873bf3` |
+| **架构与迁移守卫** | `ArchitectureGuardTest`、`FlywayMigrationCompatibilityTest`、`LegacyH2DoubleStartupIntegrationTest` | **5/5** + **4/4** + **1/1** 全部通过；H2 `V1~V14` / PG `V1~V4` 历史迁移 0 破坏 | `4873bf3` |
+| **前端四步门禁** | `npm run format:check` / `lint` / `test` / `build` | 退出码全 **0**；Vitest **23 test files / 67 tests passed** | `d689a7d` 后前端 0 改动 |
+| **交付边界** | Top 10 + P0 + 补漏与并发修复共 **17 个本地提交**（`36c23c2` → `4873bf3`） | 仅文档与代码提交，**零敏感配置/数据入库** | 待终整理后统一 Push |
 
 ---
 
