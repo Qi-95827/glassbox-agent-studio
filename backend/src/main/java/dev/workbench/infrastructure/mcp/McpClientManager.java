@@ -66,10 +66,12 @@ public class McpClientManager {
     }
   }
 
+  /** 调用失败即驱逐缓存的客户端：坏连接留在缓存里会让后续每次调用都重复失败。 */
   public String call(UserMcpServerEntity server, String toolName, String argsJson) {
     try {
       return client(server).callTool(toolName, argsJson);
     } catch (Exception e) {
+      evict(server.getId());
       throw new IllegalStateException("MCP 工具调用失败：" + e.getMessage(), e);
     }
   }

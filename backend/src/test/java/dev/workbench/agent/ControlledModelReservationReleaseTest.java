@@ -34,6 +34,23 @@ class ControlledModelReservationReleaseTest {
   }
 
   @Test
+  void synchronousInputFailureAfterReservationReleasesIt() {
+    var stop =
+        new dev.workbench.framework.control.StopExecution(
+            dev.workbench.domain.StopCause.TOKEN_LIMIT, "输入超过上限");
+    doThrow(stop).when(runtime).verifyModelInput(anyString());
+
+    var thrown =
+        assertThrows(
+            dev.workbench.framework.control.StopExecution.class,
+            () -> model().stream(messages(), List.of(), null).collectList().block());
+
+    assertSame(stop, thrown);
+    verify(runtime).modelFailed();
+    verify(delegate, never()).stream(anyList(), anyList(), any());
+  }
+
+  @Test
   void failureReleasesReservation() {
     when(delegate.stream(anyList(), anyList(), any()))
         .thenReturn(Flux.error(new IllegalStateException("上游 500")));

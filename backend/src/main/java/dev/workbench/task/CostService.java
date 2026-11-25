@@ -116,8 +116,7 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
   public void bindLimit(String runId, ModelMode mode, Long maxCostMicros) {
     if (maxCostMicros == null) return;
     ProviderPriceVersionEntity price = defaultPrice(mode);
-    if (price == null)
-      throw new IllegalArgumentException("至少配置一个生效价格版本，才能启用费用硬预算。");
+    if (price == null) throw new IllegalArgumentException("至少配置一个生效价格版本，才能启用费用硬预算。");
     bindLimit(
         runId,
         new dev.workbench.planning.BudgetPricing(
@@ -154,17 +153,11 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
       byModel.put(binding.model().code(), price.getId());
       if (defaultPriceId == null) defaultPriceId = price.getId();
     }
-    if (defaultPriceId == null)
-      throw new IllegalArgumentException("费用硬预算没有绑定任何模型价格。");
+    if (defaultPriceId == null) throw new IllegalArgumentException("费用硬预算没有绑定任何模型价格。");
     String time = Instant.now().toString();
     limits.saveAndFlush(
         new RunCostLimitEntity(
-            runId,
-            pricing.maxCostMicros(),
-            defaultPriceId,
-            writeModelPrices(byModel),
-            time,
-            time));
+            runId, pricing.maxCostMicros(), defaultPriceId, writeModelPrices(byModel), time, time));
   }
 
   /** 恢复子运行沿用父运行价格版本，并把已结算和未结算预留从可用额度中扣除。 */
@@ -205,8 +198,7 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
         .orElseThrow(
             () ->
                 new StopExecution(
-                    StopCause.COST_LIMIT,
-                    "模型 " + model.code() + " 未配置生效价格版本，无法继续执行费用硬预算。"));
+                    StopCause.COST_LIMIT, "模型 " + model.code() + " 未配置生效价格版本，无法继续执行费用硬预算。"));
   }
 
   /** 已确认运行固定使用绑定价格；仅旧运行缺少绑定映射时回退到原默认价格/当前生效价格。 */
@@ -216,20 +208,15 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
       String priceId = bindings.get(model.code());
       if (priceId == null)
         throw new StopExecution(
-            StopCause.COST_LIMIT,
-            "运行未绑定模型 " + model.code() + " 的确认价格版本，不能继续派发。");
+            StopCause.COST_LIMIT, "运行未绑定模型 " + model.code() + " 的确认价格版本，不能继续派发。");
       var bound =
           prices
               .findById(priceId)
               .orElseThrow(
-                  () ->
-                      new StopExecution(
-                          StopCause.COST_LIMIT,
-                          "运行绑定的模型价格版本已不存在，不能继续派发。"));
+                  () -> new StopExecution(StopCause.COST_LIMIT, "运行绑定的模型价格版本已不存在，不能继续派发。"));
       if (!bound.getModel().equals(model.code()))
         throw new StopExecution(
-            StopCause.COST_LIMIT,
-            "运行绑定的价格版本与模型 " + model.code() + " 不匹配，不能继续派发。");
+            StopCause.COST_LIMIT, "运行绑定的价格版本与模型 " + model.code() + " 不匹配，不能继续派发。");
       return bound;
     }
     // 旧账本没有逐模型映射：沿用默认价格，模型不匹配时才回退到当前生效价格。
@@ -256,8 +243,7 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
     String currency = null;
     for (ModelKind model : models) {
       var price =
-          prices.findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(
-              PROVIDER, model.code());
+          prices.findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(PROVIDER, model.code());
       if (price.isEmpty()) {
         missing.add(model.code());
         continue;
@@ -265,15 +251,13 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
       if (currency == null) currency = price.get().getCurrency();
       else if (!currency.equals(price.get().getCurrency()))
         throw new IllegalArgumentException(
-            "实际模型价格币种不一致（" + currency + ", " + price.get().getCurrency()
-                + "），不能汇总到同一硬预算。");
+            "实际模型价格币种不一致（" + currency + ", " + price.get().getCurrency() + "），不能汇总到同一硬预算。");
       bindings.add(
           new dev.workbench.planning.BudgetPricing.ModelPrice(
               model, price.get().getId(), price.get().getCurrency()));
     }
     if (!missing.isEmpty())
-      throw new IllegalArgumentException(
-          "以下实际模型缺少生效价格，不能启用费用硬预算：" + String.join(", ", missing));
+      throw new IllegalArgumentException("以下实际模型缺少生效价格，不能启用费用硬预算：" + String.join(", ", missing));
     return new dev.workbench.planning.BudgetPricing(maxCostMicros, bindings);
   }
 
@@ -308,7 +292,10 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
           if (base != null && !base.getCurrency().equals(price.getCurrency()))
             throw new StopExecution(
                 StopCause.COST_LIMIT,
-                "本次模型价格币种 " + price.getCurrency() + " 与运行预算币种 " + base.getCurrency()
+                "本次模型价格币种 "
+                    + price.getCurrency()
+                    + " 与运行预算币种 "
+                    + base.getCurrency()
                     + " 不一致，已停止派发。");
           long estimate = price.upperBoundMicros();
           long committed = Math.addExact(limit.getReservedMicros(), limit.getSettledMicros());
@@ -355,20 +342,21 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
     Settlement result =
         settlementTx.execute(
             ignored -> {
-              var row = reservations.findById(reservation.id()).orElse(null);
-              if (row == null || !"RESERVED".equals(row.getStatus())) return Settlement.none();
+              var probe = reservations.findById(reservation.id()).orElse(null);
+              if (probe == null) return Settlement.none();
+              // 先锁运行预算行再重读预留：否则两个并发结算会各自读到 RESERVED 并重复扣费。
               RunCostLimitEntity limit =
                   limits
-                      .lockByRunId(row.getRunId())
+                      .lockByRunId(probe.getRunId())
                       .orElseThrow(() -> new IllegalStateException("费用预算记录缺失。"));
+              var row = reservations.findById(reservation.id()).orElse(null);
+              if (row == null || !"RESERVED".equals(row.getStatus())) return Settlement.none();
               String priceId =
                   row.getPriceVersionId() == null
                       ? limit.getPriceVersionId()
                       : row.getPriceVersionId();
               ProviderPriceVersionEntity price =
-                  prices
-                      .findById(priceId)
-                      .orElseThrow(() -> new IllegalStateException("价格版本缺失。"));
+                  prices.findById(priceId).orElseThrow(() -> new IllegalStateException("价格版本缺失。"));
               boolean unknown = input == null || output == null;
               Long actual = unknown ? null : price.cost(Math.max(0, input), Math.max(0, output));
               String time = Instant.now().toString();
@@ -394,9 +382,12 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
     if (reservation == null || reservation.id() == null) return;
     settlementTx.executeWithoutResult(
         ignored -> {
+          var probe = reservations.findById(reservation.id()).orElse(null);
+          if (probe == null) return;
+          // 与结算同序加锁：先锁运行预算行，再重读预留，避免与结算并发时双重释放额度。
+          RunCostLimitEntity limit = limits.lockByRunId(probe.getRunId()).orElse(null);
           var row = reservations.findById(reservation.id()).orElse(null);
           if (row == null || !"RESERVED".equals(row.getStatus())) return;
-          RunCostLimitEntity limit = limits.lockByRunId(row.getRunId()).orElse(null);
           if (limit != null) {
             limit.release(row.getReservedMicros(), Instant.now().toString());
             limits.save(limit);

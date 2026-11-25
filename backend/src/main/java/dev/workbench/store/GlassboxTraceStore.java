@@ -59,24 +59,24 @@ public class GlassboxTraceStore {
   @Transactional
   public void recordModelPayload(String runId, String modelCallId, ModelCallPayload payload) {
     if (runId == null || modelCallId == null || payload == null) return;
-    var reqMessages = SensitiveDataMasker.maskAndTruncate(writeJson(payload.requestMessages()));
-    var reqTools = SensitiveDataMasker.maskAndTruncate(writeJson(payload.requestTools()));
+    var listTruncated = new boolean[1];
+    var reqMessagesJson = writeListWithinLimit(payload.requestMessages(), listTruncated);
+    var reqToolsJson = writeListWithinLimit(payload.requestTools(), listTruncated);
     var respContent = SensitiveDataMasker.maskAndTruncate(payload.responseContent());
-    var respTools = SensitiveDataMasker.maskAndTruncate(writeJson(payload.responseToolCalls()));
+    var respToolsJson = writeListWithinLimit(payload.responseToolCalls(), listTruncated);
     boolean truncated =
         payload.truncated()
-            || reqMessages.truncated()
-            || reqTools.truncated()
+            || listTruncated[0]
             || respContent.truncated()
-            || respTools.truncated();
+            || respContent.truncated();
     modelPayloads.save(
         new ModelCallPayloadEntity(
             modelCallId,
             runId,
-            reqMessages.text(),
-            reqTools.text(),
+            reqMessagesJson,
+            reqToolsJson,
             respContent.text(),
-            respTools.text(),
+            respToolsJson,
             truncated,
             payload.context() == null ? null : writeJson(payload.context()),
             payload.context() == null ? null : payload.context().appliedTier().name(),
@@ -101,11 +101,32 @@ public class GlassboxTraceStore {
     return result;
   }
 
+  /**
+   * 列表类载荷的结构化裁剪：只删尾部条目，保证序列化结果永远是合法 JSON 数组。
+   *
+   * <p>旧实现先 `writeJson` 再按字符截断，会把数组或对象从中间切开，落库后无法反序列化。
+   */
+  private <T> String writeListWithinLimit(List<T> items, boolean[] truncatedFlag) {
+    var kept = new java.util.ArrayList<T>(items == null ? List.of() : items);
+    String encoded = writeJson(kept);
+    while (encoded.length() > SensitiveDataMasker.DEFAULT_MAX_CHARS && !kept.isEmpty()) {
+      kept.remove(kept.size() - 1);
+      encoded = writeJson(kept);
+    }
+    if (encoded.length() > SensitiveDataMasker.DEFAULT_MAX_CHARS) {
+      if (truncatedFlag != null) truncatedFlag[0] = true;
+      return "[]";
+    }
+    if (kept.size() != (items == null ? 0 : items.size()) && truncatedFlag != null)
+      truncatedFlag[0] = true;
+    return SensitiveDataMasker.mask(encoded);
+  }
+
   @Transactional
   public void recordToolTrace(String runId, String toolCallId, ToolCallTrace trace) {
     if (runId == null || toolCallId == null || trace == null) return;
     var args = SensitiveDataMasker.maskAndTruncate(trace.inputArgs());
-    var checks = SensitiveDataMasker.maskAndTruncate(writeJson(trace.gatewayChecks()));
+    var checksJson = writeListWithinLimit(trace.gatewayChecks(), null);
     var full = SensitiveDataMasker.maskAndTruncate(trace.fullResult());
     boolean truncated = trace.resultTruncated() || args.truncated() || full.truncated();
     toolTraces.save(
@@ -113,7 +134,7 @@ public class GlassboxTraceStore {
             toolCallId,
             runId,
             args.text(),
-            checks.text(),
+            checksJson,
             full.text(),
             truncated,
             Instant.now().toString()));

@@ -49,6 +49,18 @@ class WorkflowMemoryContextTest {
   }
 
   @Test
+  void frozenLoadIsReusedWithoutNewRecallCountOrEvent() {
+    when(memories.frozenMatches("run-1")).thenReturn(List.of(match("m-1", "排序必须稳定")));
+
+    var section = context(60_000).load(task(true, "ws-1"), "run-1");
+
+    assertTrue(section.contains("排序必须稳定"), section);
+    verifyNoInteractions(retrieval);
+    verify(memories, never()).recordLoad(anyString(), anyString(), any());
+    verify(evidence, never()).event(anyString(), any(), anyString());
+  }
+
+  @Test
   void disabledMemoryLoadsNothing() {
     when(retrieval.retrieve(any(), any())).thenReturn(List.of(match("m-1", "排序必须稳定")));
 

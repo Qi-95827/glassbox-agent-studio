@@ -243,7 +243,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
   }
 
   @Override
-  public void modelResult(Integer input, Integer output) {
+  public synchronized void modelResult(Integer input, Integer output) {
     control.finishModel(agentId, InvocationStatus.COMPLETED, input, output, null);
     CostService.Settlement settlement = CostService.Settlement.NONE;
     if (costs != null) {

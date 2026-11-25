@@ -186,6 +186,8 @@ public record ControlledModel(
                     })
                 .doOnCancel(this::releaseReservation);
           } catch (RuntimeException e) {
+            // beforeModel 已经预留费用；此处的停止信号/输入校验异常同样必须释放预留。
+            releaseReservation();
             failure.set(e);
             return Flux.error(e);
           }

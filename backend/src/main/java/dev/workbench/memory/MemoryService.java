@@ -1,5 +1,11 @@
 package dev.workbench.memory;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.workbench.domain.MemoryCategory;
+import dev.workbench.domain.MemorySource;
+import dev.workbench.domain.MemoryStatus;
+import dev.workbench.framework.memory.MemoryMatch;
+import dev.workbench.framework.memory.MemoryType;
 import dev.workbench.persistence.entity.MemoryHistoryEntity;
 import dev.workbench.persistence.entity.MemoryRecordEntity;
 import dev.workbench.persistence.entity.RunMemoryLoadEntity;
@@ -8,10 +14,7 @@ import dev.workbench.persistence.repository.MemoryHistoryRepository;
 import dev.workbench.persistence.repository.MemoryRecordRepository;
 import dev.workbench.persistence.repository.RunMemoryLoadRepository;
 import dev.workbench.persistence.repository.RunMemoryReferenceRepository;
-import dev.workbench.framework.memory.MemoryMatch;
-import dev.workbench.framework.memory.MemoryType;
 import dev.workbench.workspace.WorkspaceService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.text.Normalizer;
 import java.time.Instant;
 import java.util.List;
@@ -21,9 +24,6 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import dev.workbench.domain.MemoryCategory;
-import dev.workbench.domain.MemorySource;
-import dev.workbench.domain.MemoryStatus;
 
 /** 单机本地工作区的用户确认记忆；不自动把模型输出写入长期记忆。 */
 @Service
@@ -91,11 +91,7 @@ public class MemoryService {
             var record = selected.get(index);
             references.save(
                 new RunMemoryReferenceEntity(
-                    runId,
-                    index + 1,
-                    record.id().toString(),
-                    record.version(),
-                    record.category()));
+                    runId, index + 1, record.id().toString(), record.version(), record.category()));
           }
           return selected;
         });
@@ -105,12 +101,11 @@ public class MemoryService {
   public void recordLoad(String runId, String workspaceId, List<MemoryMatch> matches) {
     tx.executeWithoutResult(
         status -> {
+          // 同一运行的多节点共享同一份召回：已有记录时直接复用，避免撞主键、虚增 hit_count 与重复事件。
+          if (loads.findById(runId).isPresent()) return;
           loads.save(
               new RunMemoryLoadEntity(
-                  runId,
-                  workspaceId,
-                  matches.size(),
-                  dev.workbench.domain.WorkbenchTime.now()));
+                  runId, workspaceId, matches.size(), dev.workbench.domain.WorkbenchTime.now()));
           for (int index = 0; index < matches.size(); index++) {
             var match = matches.get(index);
             var row =
@@ -128,14 +123,36 @@ public class MemoryService {
                     match.totalScore(),
                     match.matchedReason()));
             records.recordHit(
-                match.memoryId(),
-                dev.workbench.domain.WorkbenchTime.now(),
-                MemoryStatus.ACTIVE);
+                match.memoryId(), dev.workbench.domain.WorkbenchTime.now(), MemoryStatus.ACTIVE);
           }
         });
   }
 
   /** 没有装配标记时返回未记录，不能把历史数据缺失解释为已装配零条。 */
+  /**
+   * 读取本运行已冻结的记忆召回（含正文），供同一运行内的后续节点复用。
+   *
+   * <p>多节点动态工作流每个节点都会请求记忆上下文；若每次都重新召回并落库，会撞 `run_memory_loads` 主键、 虚增 `hit_count`，还会重复发
+   * `MEMORY_LOADED` 事件。这里返回首次冻结的结果，找不到时返回空列表由调用方 重新召回。
+   */
+  public List<MemoryMatch> frozenMatches(String runId) {
+    if (runId == null || runId.isBlank() || loads.findById(runId).isEmpty()) return List.of();
+    var result = new java.util.ArrayList<MemoryMatch>();
+    for (var reference : references.findByRunId(runId)) {
+      var row = records.findById(reference.getMemoryId().toString()).orElse(null);
+      if (row == null || row.getStatus() != MemoryStatus.ACTIVE) continue;
+      result.add(
+          new MemoryMatch(
+              row.getId(),
+              reference.getMemoryType(),
+              reference.getScore(),
+              reference.getMatchedReason(),
+              row.getContent(),
+              reference.getMemoryVersion()));
+    }
+    return List.copyOf(result);
+  }
+
   public MemoryLoad loadForRun(String runId) {
     var load = loads.findById(runId);
     if (load.isEmpty())
@@ -184,9 +201,8 @@ public class MemoryService {
             : versions.findBefore(memoryId, beforeVersion, page);
     boolean hasMore = rows.size() > limit;
     var items =
-        (hasMore ? rows.subList(0, limit) : rows).stream()
-            .map(MemoryService::toHistoryVersion)
-            .toList();
+        (hasMore ? rows.subList(0, limit) : rows)
+            .stream().map(MemoryService::toHistoryVersion).toList();
     return new MemoryHistoryPage(items, hasMore ? items.getLast().version() : null);
   }
 
@@ -217,7 +233,8 @@ public class MemoryService {
         s -> {
           if (records.countByWorkspaceIdAndStatus(workspaceId, MemoryStatus.ACTIVE) >= 20)
             throw new IllegalStateException("每个工作区最多保存 20 条有效记忆。");
-          String id = dev.workbench.domain.WorkbenchIds.newId(), time = dev.workbench.domain.WorkbenchTime.now();
+          String id = dev.workbench.domain.WorkbenchIds.newId(),
+              time = dev.workbench.domain.WorkbenchTime.now();
           records.saveAndFlush(
               new MemoryRecordEntity(
                   id,
@@ -307,7 +324,8 @@ public class MemoryService {
   }
 
   public MemoryRecord update(
-      String workspaceId, String id, int version, MemoryCategory category, String content) {    String text = validate(category, content);
+      String workspaceId, String id, int version, MemoryCategory category, String content) {
+    String text = validate(category, content);
     return tx.execute(
         s -> {
           int changed =
@@ -390,8 +408,7 @@ public class MemoryService {
   private static List<String> readPaths(String value) {
     if (value == null || value.isBlank()) return List.of();
     try {
-      return java.util.Arrays.asList(
-          new ObjectMapper().readValue(value, String[].class));
+      return java.util.Arrays.asList(new ObjectMapper().readValue(value, String[].class));
     } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
       return List.of();
     }

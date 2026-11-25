@@ -14,7 +14,12 @@ import java.util.regex.Pattern;
 public final class SensitiveTextRedactor {
   /** 盘符前不能紧邻字母数字，避免把 {@code https:} 里的 {@code s:} 误判为 Windows 路径。 */
   private static final Pattern WINDOWS_PATH =
-      Pattern.compile("(?<![A-Za-z0-9])[A-Za-z]:(?:[\\\\/][^\\\\/:*?\"<>|\\r\\n，。；、]*)+");
+      Pattern.compile(
+          "(?<![A-Za-z0-9])[A-Za-z]:(?:[\\\\/][^\\\\/:*?\"<>|\\r"
+              + "\\n"
+              + "，。；、]+)*[\\\\/][^\\\\/:*?\"<>|\\s\\r"
+              + "\\n"
+              + "，。；、]*");
 
   private static final Pattern UNIX_PATH =
       Pattern.compile("(?<![\\w:/])/(?:[^/\\r\\n\"'<>|，。；、]+/)+[^/\\r\\n\"'<>|，。；、]+");
@@ -40,11 +45,16 @@ public final class SensitiveTextRedactor {
   private static final Pattern URL_CREDENTIALS =
       Pattern.compile("(?<=://)[^/\\s:@'\"]+:[^/\\s@'\"]+@");
 
-  /** 键值对允许单引号、双引号、JSON 转义引号与 HTML 转义引号。 */
+  /**
+   * 键值对允许单引号、双引号、JSON 转义引号与 HTML 转义引号（{@code &quot;} / {@code &#39;}）。
+   *
+   * <p>值遇到引号、括号、分隔符即停止：既覆盖 HTML 已转义的报告文本，也绝不吞掉 {@code }} 或 {@code ]]} 这类 JSON 结构符。
+   */
   private static final Pattern LABELLED_SECRET =
       Pattern.compile(
-          "(?i)((?:api[_-]?key|token|secret|password|passwd|credential|authorization|cookie)"
-              + "[\"']?\\s*[=:]\\s*[\"']?)([^\"'\\s,;<>]{4,})");
+          "(?i)((?:&quot;|&#39;|[\"'])?(?:api[_-]?key|token|secret|password|passwd|credential"
+              + "|authorization|cookie)(?:&quot;|&#39;|[\"'])?\\s*[=:]\\s*(?:&quot;|&#39;|[\"'])?)"
+              + "([^\"'\\s,;<>}\\]]{4,})");
 
   private SensitiveTextRedactor() {}
 

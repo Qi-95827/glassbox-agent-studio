@@ -1,0 +1,65 @@
+package dev.workbench.framework.trace;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import org.junit.jupiter.api.Test;
+
+/**
+ * 玻璃盒脱敏的凭据覆盖与 JSON 结构完整性。
+ *
+ * <p>反例对应 `F-09`：旧规则只覆盖 Bearer/sk-/含引号键值；AWS/Google/GitHub/GitLab/JWT/PEM/URL 凭据与 单引号键值全部漏网，且值匹配会吞掉
+ * JSON 的 {@code }} / {@code ]}，导致落库后无法反序列化。
+ */
+class SensitiveDataMaskerCredentialTest {
+  @Test
+  void cloudAndPlatformTokensAreMasked() {
+    String masked =
+        SensitiveDataMasker.mask(
+            "AKIAIOSFODNN7EXAMPLE AIzaSyA1234567890abcdefghijklmnopqrstuvwxyz01234 "
+                + "ghp_abcdefghijklmnopqrstuvwxyz0123456789 glpat-abcdefghijklmnopqrst");
+
+    assertFalse(masked.contains("AKIAIOSFODNN7EXAMPLE"), masked);
+    assertFalse(masked.contains("AIzaSyA"), masked);
+    assertFalse(masked.contains("ghp_"), masked);
+    assertFalse(masked.contains("glpat-"), masked);
+  }
+
+  @Test
+  void jwtPemAndUrlCredentialsAreMasked() {
+    String masked =
+        SensitiveDataMasker.mask(
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+                + " -----BEGIN RSA PRIVATE KEY-----\n"
+                + "MIIEow\n"
+                + "-----END RSA PRIVATE KEY----- postgres://app:pa55word@db.internal:5432/app");
+
+    assertFalse(masked.contains("eyJhbGci"), masked);
+    assertFalse(masked.contains("MIIEow"), masked);
+    assertFalse(masked.contains("pa55word"), masked);
+    assertTrue(masked.contains("db.internal"), masked);
+  }
+
+  @Test
+  void singleQuotedSecretKeepsJsonStructure() {
+    String masked = SensitiveDataMasker.mask("{'password': 'abcdef123', 'note': 'ok'}");
+
+    assertFalse(masked.contains("abcdef123"), masked);
+    assertTrue(masked.contains("{'password':"), "键名必须保留：" + masked);
+    assertTrue(masked.trim().endsWith("}"), "JSON 闭合符不能被吞：" + masked);
+  }
+
+  @Test
+  void doubleQuotedDoubleBraceJsonStaysValid() {
+    String masked = SensitiveDataMasker.mask("{\"api_key\": \"SecretVal123\", \"list\": [1]}");
+
+    assertFalse(masked.contains("SecretVal123"), masked);
+    assertTrue(masked.contains("\"list\": [1]}"), "数组与对象闭合符必须保留：" + masked);
+  }
+
+  @Test
+  void ordinaryTextIsUnchanged() {
+    String text = "排序页面需要保留原生实现并给出证据。";
+
+    assertEquals(text, SensitiveDataMasker.mask(text));
+  }
+}

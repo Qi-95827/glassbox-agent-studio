@@ -696,3 +696,43 @@ mvn test
 5. `GlassboxTraceStore` 序列化前结构化裁剪。
 
 原因：上述改动集中在运行状态机与并发认领逻辑，需要与 Task 08 未完成的「暂停让出线程 + 恢复重派」一并设计，否则会产生认领孤儿或重复结算；在未完成该状态机改造前单点修改风险高于收益，故本轮只交付可独立验证的费用释放与脱敏修复。
+---
+
+## 收官第 1 步 · 复核 4 处缺陷补齐 + 玻璃盒 JSON 安全裁剪
+
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `memory/MemoryService.java` | `recordLoad()` 按 `runId` 幂等：已有 `run_memory_loads` 记录直接返回，不再撞主键、虚增 `hit_count`、重复发事件；新增 `frozenMatches(runId)` 复用本运行已冻结的召回（含正文） |
+| `orchestration/WorkflowMemoryContext.java` | 多节点动态工作流优先复用 `frozenMatches`，仅在缺失时召回并落库；抽出 `toContext`/`section` 复用 |
+| `report/SensitiveTextRedactor.java` | 键值模式兼容 HTML 转义引号（`&quot;` / `&#39;`），值不吞 `}`/`]`；Windows 盘符规则改为「盘符前非字母数字 + 中间段可含空格、末段不含空格」，修复把 `https://` 与后续邮箱整段吞掉的问题 |
+| `framework/trace/SensitiveDataMasker.java` | 同步补齐 PEM/JWT/AWS/Google/GitHub/GitLab/URL 内嵌凭据与单引号键值；值匹配排除 `}`/`]`，保证脱敏后 JSON 仍可反序列化 |
+| `infrastructure/agentscope/ControlledModel.java` | `beforeModel()` 之后、`Flux` 构造之前的同步异常（`StopExecution`/输入校验失败）同样 `releaseReservation()` |
+| `orchestration/ControlledAgentRuntime.java` | `modelResult()` 与 `modelFailed()` 均为 `synchronized`，预留的读/清/结算统一在同一把锁内 |
+| `task/CostService.java` | `settle()`/`cancel()` 改为「先锁运行预算行 → 再重读预留」，消除并发双扣/双释放窗口 |
+| `infrastructure/mcp/McpClientManager.java` | 调用失败即 `evict(serverId)`，坏连接不再滞留缓存 |
+| `store/GlassboxTraceStore.java` | 新增 `writeListWithinLimit()`：请求消息/工具 Schema/响应工具调用/安检记录按条目裁剪，落库永远是合法 JSON 数组；`truncated` 标记同步置位 |
+
+### 2. 新增/扩展测试
+
+| 测试类 | 用例数 | 覆盖 |
+| :--- | ---: | :--- |
+| `store/GlassboxTraceStoreTruncationTest`（新增，`@DataJpaTest`） | 3 | 超 64KB 载荷按条目裁剪且可完整反序列化、`truncated` 置位；超大安检记录中 **DENY 条目保留**；普通载荷原样往返 |
+| `framework/trace/SensitiveDataMaskerCredentialTest`（新增） | 5 | AWS/Google/GitHub/GitLab/JWT/PEM/URL 凭据；单引号与双引号 JSON 结构符 `}`/`[` 保留；普通正文不变 |
+| `report/HtmlReportRedactionTest`（新增） | 3 | `&quot;api_key&quot;` 形态密钥脱敏且 `</pre></section>` 完整；原始 JSON 密钥脱敏且 `}` 保留；URL 不被盘符规则吞掉 |
+| `orchestration/WorkflowMemoryContextTest`（扩展） | 7 | 新增「已冻结召回直接复用：不重新召回、不 recordLoad、不发事件」 |
+| `agent/ControlledModelReservationReleaseTest`（扩展） | 4 | 新增「`beforeModel` 之后同步抛 `StopExecution` 也释放预留且不派发模型调用」 |
+
+### 3. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 686, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| 历史迁移脚本 | 未改动任何文件 |
+
+**未实跑**：PG/Docker 专项（本机 Docker 未启动），已如实标注。
