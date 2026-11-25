@@ -254,7 +254,8 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
       }
       git(repo, "add", ".");
       git(repo, "commit", "-m", "eval fixture");
-      return new TempEvalWorkspace(repo, workspaces.create(repo.toString(), "main"));
+      return new TempEvalWorkspace(
+          repo, workspaces.createInternalEvaluationWorkspace(repo.toString(), "main"));
     } catch (Exception e) {
       deleteDirectoryQuietly(repo);
       throw new IllegalStateException("评测工作区创建失败。", e);

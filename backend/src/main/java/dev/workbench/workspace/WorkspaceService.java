@@ -71,6 +71,36 @@ public class WorkspaceService {
     return create(repository, branch, workBranch, false);
   }
 
+  /**
+   * 评测实验室专用内部入口：仅允许在系统临时目录下且前缀为 {@code eval-coding-} 的服务端自建临时仓库跳过用户仓库白名单。
+   *
+   * <p>防止已初始化账号后 {@code CodingReflectionRunner} 自建临时仓库被 {@code RepositoryAuthorizationService}
+   * 误拦截；任意非临时路径一律拒绝，绝不构成用户导入旁路。
+   */
+  public synchronized Workspace createInternalEvaluationWorkspace(
+      String repository, String branch) {
+    if (repository == null || repository.isBlank())
+      throw new IllegalArgumentException("评测临时仓库路径不能为空。");
+    Path repo;
+    Path tmpRoot;
+    try {
+      repo = Path.of(repository).toRealPath();
+      tmpRoot = Path.of(System.getProperty("java.io.tmpdir")).toRealPath();
+    } catch (IOException | RuntimeException e) {
+      throw new IllegalArgumentException("评测临时仓库目录不存在或不可访问。");
+    }
+    Path parent = repo.getParent();
+    Path name = repo.getFileName();
+    if (parent == null
+        || !parent.equals(tmpRoot)
+        || name == null
+        || !name.toString().startsWith("eval-coding-")
+        || !Files.isDirectory(repo)) {
+      throw new IllegalArgumentException("仅允许评测引擎在系统临时目录创建的 eval-coding-* 仓库使用内部工作区入口。");
+    }
+    return create(repo.toString(), branch, null, true);
+  }
+
   private synchronized Workspace create(String repository, String branch, boolean internal) {
     return create(repository, branch, null, internal);
   }

@@ -1,4 +1,5 @@
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -568,6 +569,19 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
       ? 'evalLab.case.passed'
       : 'evalLab.case.failed';
   const estimatedOnly = Boolean(metrics.usageKnown === false || trace.modelMode === 'mock');
+  const rawError =
+    metrics.errorCode ||
+    trace.errorCode ||
+    metrics.executionError ||
+    trace.executionError ||
+    trace.error ||
+    '';
+  const translatedError = rawError ? t('evalLab.pipeline.error.' + rawError) : '';
+  const displayError = rawError
+    ? translatedError.startsWith('evalLab.pipeline.error.')
+      ? String(rawError)
+      : translatedError
+    : '';
   const calls = GATEWAY_ROOTS.flatMap(key => (Array.isArray(trace[key]) ? trace[key] : []));
   const matches = Array.isArray(trace.matches) ? trace.matches : [];
   const plans = Array.isArray(trace.plans) ? trace.plans : [];
@@ -638,10 +652,10 @@ export default function EvalCaseDetailDrawer({ open, item, categoryLabel, onClos
           <JsonBlock value={trace.prompt || t('common.notAvailable')} maxHeight={160} />
         </Section>
 
-        {metrics.errorCode && (
-          <Typography variant="body2" color="error">
-            {t('evalLab.pipeline.error.' + metrics.errorCode)}
-          </Typography>
+        {displayError && (
+          <Alert severity="error" sx={{ py: 0.5 }}>
+            {displayError}
+          </Alert>
         )}
         {agent && <AgentPipeline category={item?.category} trace={trace} metrics={metrics} />}
 

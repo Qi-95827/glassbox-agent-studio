@@ -119,4 +119,29 @@ describe('评测题玻璃盒穿透抽屉', () => {
     expect(screen.getByText('L2 结构化锚点检查点')).toBeInTheDocument();
     expect(screen.queryByText('压缩摘要或卸载摘录')).not.toBeInTheDocument();
   });
+
+  it('用例执行失败时展示真实失败原因，不再呈现空白抽屉', () => {
+    render(
+      <I18nProvider initialLocale="zh-CN">
+        <EvalCaseDetailDrawer
+          open
+          item={{
+            ...item,
+            category: 'CODING_REFLECTION',
+            passed: false,
+            codeScore: 0,
+            rawOutput: '',
+            assertions: [],
+            metrics: { executionFailed: true },
+            trace: { prompt: '修复加法', errorCode: '评测工作区创建失败。' }
+          }}
+          categoryLabel={{ CODING_REFLECTION: '端到端代码与有界反思' }}
+          onClose={() => {}}
+        />
+      </I18nProvider>
+    );
+
+    expect(screen.getByText('执行失败')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('评测工作区创建失败。');
+  });
 });

@@ -58,8 +58,9 @@ public class PlanningMultiAgentRunner implements EvalCategoryRunner {
     if (plans.isEmpty()) {
       var single = new LinkedHashMap<String, Object>();
       single.put("label", "candidate");
-      single.put("nodes", setup.get("nodes"));
-      single.put("revisionEdges", setup.get("revisionEdges"));
+      if (setup.get("nodes") != null) single.put("nodes", setup.get("nodes"));
+      if (setup.get("revisionEdges") != null)
+        single.put("revisionEdges", setup.get("revisionEdges"));
       plans = List.<Map<String, Object>>of(Map.copyOf(single));
     }
     var acceptance = strings(setup.get("acceptanceCriteria"));
@@ -99,7 +100,7 @@ public class PlanningMultiAgentRunner implements EvalCategoryRunner {
       row.put("errors", result.errors());
       row.put("nodeCount", draft.nodes().size());
       row.put("normalizedNodes", result.nodes().size());
-      row.put("candidateSha256", result.candidateSha256());
+      if (result.candidateSha256() != null) row.put("candidateSha256", result.candidateSha256());
       planResults.add(Map.copyOf(row));
     }
 
@@ -522,7 +523,8 @@ public class PlanningMultiAgentRunner implements EvalCategoryRunner {
       if (item instanceof Map<?, ?> map) {
         var row = new LinkedHashMap<String, Object>();
         for (var entry : map.entrySet())
-          if (entry.getKey() != null) row.put(String.valueOf(entry.getKey()), entry.getValue());
+          if (entry.getKey() != null && entry.getValue() != null)
+            row.put(String.valueOf(entry.getKey()), entry.getValue());
         result.add(Map.copyOf(row));
       }
     }

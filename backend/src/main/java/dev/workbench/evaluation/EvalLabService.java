@@ -32,6 +32,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class EvalLabService {
+  private static final Logger log = LoggerFactory.getLogger(EvalLabService.class);
   private final EvalLabRunRepository runs;
   private final EvalLabCaseResultRepository cases;
   private final BuiltInMiniPackLoader miniPacks;
@@ -384,6 +387,7 @@ public class EvalLabService {
             try {
               execution = runner.run(sample, config, owner);
             } catch (RuntimeException e) {
+              log.warn("Eval case execution failed: category={}, sampleId={}", category, sample.id(), e);
               String reason = hubRun ? "AGENT_EXECUTION_ERROR" : safe(e.getMessage());
               execution =
                   EvalCaseExecution.failed(
