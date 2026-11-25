@@ -579,3 +579,38 @@ mvn test
 | 构建 | `BUILD SUCCESS`（`EXITCODE=0`，完成于 2026-11-24 22:24:30） |
 | `ArchitectureGuardTest` | **5/5 通过** |
 | 迁移脚本 | 未改动 `db/migration/V1~V14`、`db/migration-pg/V1~V4` 任一字节 |
+---
+
+## Task 07 · 反思上限门禁、私有 Agent 提示词、动态工作流长期记忆与候选计划兜底预算
+
+- **对应审计编号**：`F-05`、`F-06`、`F-07`、`S-10`
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `orchestration/WorkflowScheduler.java` | 新增 `carriesCriticVerdict()`：`EXHAUSTED`（达到修订上限）与 `REVISE`/`APPROVED` 的裁决一律交给结算，`EXHAUSTED` 由此进入 `BLOCKED + HUMAN_REVIEW_REQUIRED`，不再错结 `COMPLETED`；`executeAttempt` 接入 `WorkflowMemoryContext` 并把记忆段落写入 `StepInput`；`StepInput` 新增 `memoryContext` 字段 |
+| `orchestration/WorkflowMemoryContext.java`（新增） | 动态工作流长期记忆：受 `task.memoryEnabled()` 与工作区门控，混合评分召回 5 条，`MemoryService.recordLoad` 落 `run_memory_loads`/`run_memory_references`，发 `MEMORY_LOADED` 事件；段落超过 `AgentContextAssembler.DEFAULT_MAX_CHARS`（60,000）时阻断而非静默截断 |
+| `infrastructure/agentscope/AgentScopeExecutor.java` | 新增 `privateAgentSection()` 注入私有 Agent `definition.systemPrompt()`（受信声明，仍受角色权限约束）；新增 `untrustedSkillSection()` 用 `<untrusted_skill_playbook>` 边界隔离私有 Skill 正文并声明不得覆盖系统约束；内置技能与私有技能分段装配；`maxIters` 由 `Integer.MAX_VALUE` 改为 `maxReActIters()`（默认 40，可用 `workbench.orchestration.max-react-iters` 调整并收敛到 1~200）；删除装配期误发的 `TOOL_STARTED` 事件并清理重复 JavaDoc |
+| `planning/PlanCandidateConfirmationService.java` | 新增 `defaultRunLimits()`（12 轮 / 12 工具 / 单工具 6 / 同指纹 3 / 240 秒 / 单 Agent 10 轮 10 工具），替换原先全 `null` 预算 |
+
+### 2. 新增测试
+
+| 测试类 | 用例数 | 覆盖 |
+| :--- | ---: | :--- |
+| `orchestration/ReflectionExhaustedGateTest` | 3 | `EXHAUSTED` 必须携带裁决（回归断言：旧 `revisionRequired()` 为 false）；`REVISE`/`APPROVED` 同样落裁决；非审查节点无裁决 |
+| `orchestration/WorkflowMemoryContextTest` | 6 | 未启用记忆/无工作区/空 runId 不召回；启用时召回并落库引用 + 事件；超 60,000 字符阻断 |
+| `infrastructure/agentscope/AgentScopeExecutorPromptSectionsTest` | 6 | 私有 Agent 定义注入（中英）+ 权限边界声明；私有技能正文包在不可信边界内；`maxReActIters` 默认/非法值/上限收敛 |
+| `planning/PlanCandidateDefaultLimitsTest` | 2 | 兜底预算七项全非空且在合法区间；多次调用结果稳定 |
+
+### 3. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 657, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，完成于 2026-11-25 10:05:55） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| 迁移脚本 | 未改动任何历史迁移 |
+
+**未实跑项**：未用真实模型/真实长会话验证动态工作流的记忆注入效果（需要真实工作区与确认记忆）；PG/Docker 未启动，未运行 PG 专项。

@@ -64,6 +64,7 @@ class WorkflowScheduler {
   private final int maxParallelNodes;
   private final boolean parallelAllPlans;
   private final ReflectionCoordinator reflection;
+  private final WorkflowMemoryContext memoryContext;
   private final dev.workbench.tool.ToolApprovalService approvals;
   private final org.springframework.context.ApplicationEventPublisher publisher;
 
@@ -88,6 +89,7 @@ class WorkflowScheduler {
       @Value("${workbench.orchestration.max-parallel-nodes:3}") int maxParallelNodes,
       @Value("${workbench.orchestration.parallel-all-plans:false}") boolean parallelAllPlans,
       ReflectionCoordinator reflection,
+      WorkflowMemoryContext memoryContext,
       dev.workbench.tool.ToolApprovalService approvals,
       org.springframework.context.ApplicationEventPublisher publisher) {
     this.evidence = evidence;
@@ -112,6 +114,7 @@ class WorkflowScheduler {
     this.maxParallelNodes = Math.max(1, maxParallelNodes);
     this.parallelAllPlans = parallelAllPlans;
     this.reflection = java.util.Objects.requireNonNull(reflection, "反思协调器不能为空");
+    this.memoryContext = java.util.Objects.requireNonNull(memoryContext, "项目记忆上下文组件不能为空");
     this.approvals = approvals;
     this.publisher = publisher;
   }
@@ -332,7 +335,9 @@ class WorkflowScheduler {
 
         String verdictJson = null;
         var decision = reflection.decide(runId, outcome.claimed().node(), outcome.result());
-        if (decision.revisionRequired() && decision.verdict() != null)
+        // 达到修订上限（EXHAUSTED）同样携带裁决：结算时据此转入 BLOCKED/HUMAN_REVIEW_REQUIRED，
+        // 绝不因为「不再重试」而把运行错结为 COMPLETED。
+        if (carriesCriticVerdict(decision))
           verdictJson = json.writeValueAsString(decision.verdict());
         final String criticVerdict = verdictJson;
         var settlement =
@@ -522,6 +527,8 @@ class WorkflowScheduler {
         spec != null ? spec.writeFiles() : node.workspaceWrite() ? files : List.<String>of();
     String nodeWorkspaceId = files.isEmpty() ? null : task.workspaceId();
     String criticFeedback = reflection.criticFeedback(runId, node.id());
+    // 动态工作流此前完全忽略 memoryEnabled；这里与静态运行入口对齐，按混合评分召回并落库引用。
+    String memorySection = memoryContext.load(task, runId);
     var input =
         new StepInput(
             task.goal(),
@@ -534,7 +541,8 @@ class WorkflowScheduler {
             attempt.dependencies(),
             attempt.attemptNumber(),
             attempt.revisionIndex(),
-            criticFeedback);
+            criticFeedback,
+            memorySection);
     String id = attempt.agentId();
     var request =
         new AgentExecutionRequest(
@@ -601,6 +609,17 @@ class WorkflowScheduler {
         control.elapsed());
   }
 
+  /**
+   * 反思裁决是否必须随节点结算落库。
+   *
+   * <p>{@code EXHAUSTED}（达到修订上限）与 {@code REVISE} 都携带裁决，{@code APPROVED} 同样需要留下证据；
+   * 只有「不是审查节点」才没有裁决。此前只按 {@code revisionRequired()} 判断，导致 EXHAUSTED 的裁决被丢弃， 结算时看不到修订上限，运行被错结为
+   * COMPLETED。
+   */
+  static boolean carriesCriticVerdict(ReflectionCoordinator.Decision decision) {
+    return decision != null && decision.verdict() != null;
+  }
+
   private static String limited(String text, int max) {
     return text.length() <= max ? text : text.substring(0, max - 1) + "…";
   }
@@ -643,5 +662,6 @@ class WorkflowScheduler {
       List<WorkflowExecutionService.WorkflowInput> dependencies,
       int attemptNumber,
       int revisionIndex,
-      String criticFeedback) {}
+      String criticFeedback,
+      String memoryContext) {}
 }

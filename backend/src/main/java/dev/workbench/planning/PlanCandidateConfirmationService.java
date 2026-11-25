@@ -25,6 +25,16 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>确认前复核候选摘要、输入摘要、输入版本、当前分组最新版本、工作区基线与文件版本；创建事务内再锁住候选行复核一次，重复确认返回已有运行而不是再派发。
  */
 class PlanCandidateConfirmationService {
+  /**
+   * 候选计划物化运行的兜底预算。
+   *
+   * <p>候选计划节点通常不声明预算，若整份 {@link RunLimits} 全为 {@code null}，一旦模型陷入循环就没有任何
+   * 平台侧停机防线。这里给出保守默认值，仍可被用户显式预算覆盖。
+   */
+  static RunLimits defaultRunLimits() {
+    return new RunLimits(12, 12, 6, null, 3, 240, 10, 10);
+  }
+
   private final PlanCandidateStoreService store;
   private final PlanCandidateWorkspaceService workspaces;
   private final PlanCandidateValidator validator;
@@ -104,7 +114,7 @@ class PlanCandidateConfirmationService {
     var task =
         taskDefinition(
             taskId, input, mode, workspaceId, mode == ModelMode.USER ? connectionId : null);
-    var limits = new RunLimits(null, null, null, null, null, null, null, null);
+    var limits = defaultRunLimits();
     var alreadyCreated = new AtomicReference<String>();
     tx.executeWithoutResult(
         status ->
