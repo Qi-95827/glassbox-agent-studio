@@ -71,117 +71,148 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
     int maxSeconds = Math.max(10, Math.min(180, (int) number(setup.get("maxSeconds"), 45)));
 
     WorkspaceService.Workspace workspace = createWorkspace(files);
-    String runId = null;
-    RunStatus status = RunStatus.BLOCKED;
-    String runError = "";
-    String resolvedModelMode =
-        "byok".equalsIgnoreCase(config.modelMode()) ? "user" : config.modelMode();
     try {
-      var request =
-          CreateTaskRequest.builder()
-              .goal(sample.prompt())
-              .scenario("normal")
-              .limits(maxRounds, maxTools, maxSeconds)
-              .modelMode(resolvedModelMode)
-              .modelConnectionId(config.modelConnectionId())
-              .workspace(workspace.id(), null)
-              .writeEnabled(true)
-              .fileScopes(List.copyOf(files.keySet()))
-              // 静态/演示模型不支持「工作区 + 长期记忆」场景，消融开关在此如实记录为未应用。
-              .memoryEnabled(false)
-              .maxPerTool(2)
-              .maxIdenticalTools(2)
-              .constraints(strings(setup.get("constraints")))
-              .acceptanceCriteria(
-                  strings(setup.get("acceptanceCriteria")).isEmpty()
-                      ? List.of("修改可核对且运行进入终态")
-                      : strings(setup.get("acceptanceCriteria")))
-              .workflowTemplate("workspace-change")
-              .reviewPlan(false)
-              .locale("zh-CN")
-              .build();
-      runId = runs.create(request);
-      status = waitFor(runId);
-    } catch (RuntimeException e) {
-      runError = e.getMessage() == null ? "运行创建失败" : e.getMessage();
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      runError = "等待运行被中断";
-    }
-
-    boolean fileMatches = expectedContains.isBlank();
-    String actualContent = "";
-    try {
-      Path file = Path.of(workspace.workspacePath()).resolve(expectedFile).normalize();
-      if (file.startsWith(Path.of(workspace.workspacePath()))) {
-        actualContent = Files.exists(file) ? Files.readString(file, StandardCharsets.UTF_8) : "";
-        if (!expectedContains.isBlank()) fileMatches = actualContent.contains(expectedContains);
-      }
-    } catch (Exception ignored) {
-      // 文件不可读按未达成期望处理，不能虚增通过。
-    }
-
-    boolean terminal = runId != null && runError.isBlank() && !status.canCancel();
-    double cost = 0;
-    int inputTokens = 0;
-    int outputTokens = 0;
-    if (runId != null) {
+      String runId = null;
+      RunStatus status = RunStatus.BLOCKED;
+      String runError = "";
+      String resolvedModelMode =
+          "byok".equalsIgnoreCase(config.modelMode()) ? "user" : config.modelMode();
       try {
-        var estimate = usage.estimate(runId);
-        if (estimate.estimatedCost() != null) cost = estimate.estimatedCost().doubleValue();
-        inputTokens = (int) Math.min(Integer.MAX_VALUE, estimate.inputTokens());
-        outputTokens = (int) Math.min(Integer.MAX_VALUE, estimate.outputTokens());
-      } catch (RuntimeException ignored) {
-        // 费用估算失败不影响真实执行结果。
+        var request =
+            CreateTaskRequest.builder()
+                .goal(sample.prompt())
+                .scenario("normal")
+                .limits(maxRounds, maxTools, maxSeconds)
+                .modelMode(resolvedModelMode)
+                .modelConnectionId(config.modelConnectionId())
+                .workspace(workspace.id(), null)
+                .writeEnabled(true)
+                .fileScopes(List.copyOf(files.keySet()))
+                // 静态/演示模型不支持「工作区 + 长期记忆」场景，消融开关在此如实记录为未应用。
+                .memoryEnabled(false)
+                .maxPerTool(2)
+                .maxIdenticalTools(2)
+                .constraints(strings(setup.get("constraints")))
+                .acceptanceCriteria(
+                    strings(setup.get("acceptanceCriteria")).isEmpty()
+                        ? List.of("修改可核对且运行进入终态")
+                        : strings(setup.get("acceptanceCriteria")))
+                .workflowTemplate("workspace-change")
+                .reviewPlan(false)
+                .locale("zh-CN")
+                .build();
+        runId = runs.create(request);
+        status = waitFor(runId);
+      } catch (RuntimeException e) {
+        runError = e.getMessage() == null ? "运行创建失败" : e.getMessage();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        runError = "等待运行被中断";
       }
+
+      boolean fileMatches = expectedContains.isBlank();
+      String actualContent = "";
+      try {
+        Path file = Path.of(workspace.workspacePath()).resolve(expectedFile).normalize();
+        if (file.startsWith(Path.of(workspace.workspacePath()))) {
+          actualContent = Files.exists(file) ? Files.readString(file, StandardCharsets.UTF_8) : "";
+          if (!expectedContains.isBlank()) fileMatches = actualContent.contains(expectedContains);
+        }
+      } catch (Exception ignored) {
+        // 文件不可读按未达成期望处理，不能虚增通过。
+      }
+
+      boolean terminal = runId != null && runError.isBlank() && !status.canCancel();
+      double cost = 0;
+      int inputTokens = 0;
+      int outputTokens = 0;
+      if (runId != null) {
+        try {
+          var estimate = usage.estimate(runId);
+          if (estimate.estimatedCost() != null) cost = estimate.estimatedCost().doubleValue();
+          inputTokens = (int) Math.min(Integer.MAX_VALUE, estimate.inputTokens());
+          outputTokens = (int) Math.min(Integer.MAX_VALUE, estimate.outputTokens());
+        } catch (RuntimeException ignored) {
+          // 费用估算失败不影响真实执行结果。
+        }
+      }
+
+      // 真实核查越权写入：与初始夹具内容不同、又不是本次预期修改的文件都计入。
+      var unauthorized =
+          workspace == null
+              ? List.<String>of()
+              : dev.workbench.evaluation.runner.EvalWorkspaceFiles.changedOutside(
+                  workspace.workspacePath(), files, expectedFile);
+
+      var metrics = new LinkedHashMap<String, Object>();
+      metrics.put("runStatus", status.name());
+      metrics.put("terminal", terminal);
+      metrics.put("fileMatchesExpected", fileMatches ? 1 : 0);
+      metrics.put("unauthorizedWrites", unauthorized.size());
+      metrics.put("actualContainsExpected", fileMatches ? 1 : 0);
+      metrics.put("expectedFile", expectedFile);
+      metrics.put("elapsedMs", runId == null ? 0 : records.runSnapshot(runId).elapsedMs());
+      if (!runError.isBlank()) metrics.put("executionError", runError);
+
+      var evidence = new LinkedHashMap<String, Object>(metrics);
+      evidence.put("runStatus", status.name());
+      evidence.put("terminal", terminal);
+      evidence.put("expectedFile", expectedFile);
+      evidence.put("actualContainsExpected", fileMatches ? 1 : 0);
+      evidence.put("unauthorizedWrites", unauthorized.size());
+      evidence.put("unauthorizedFiles", unauthorized);
+      evidence.put("rawOutput", actualContent);
+
+      var trace = new LinkedHashMap<String, Object>();
+      trace.put("category", category().name());
+      trace.put("runId", runId);
+      trace.put("workspaceId", workspace.id());
+      trace.put("workspacePath", workspace.workspacePath());
+      trace.put("expectedFile", expectedFile);
+      trace.put("expectedContains", expectedContains);
+      trace.put("actualContent", actualContent);
+      trace.put("workspaceFiles", List.copyOf(files.keySet()));
+      trace.put("modelMode", config.modelMode());
+      trace.put("reflectionEnabled", config.enableReflection());
+      trace.put("compactionEnabled", config.enableCompaction());
+      trace.put("longTermMemoryEnabled", config.enableLongTermMemory());
+      trace.put("longTermMemoryApplied", false);
+      trace.put("measurement", "run_service_and_workspace_file");
+      if (!runError.isBlank()) trace.put("executionError", runError);
+
+      long duration = (System.nanoTime() - started) / 1_000_000;
+      return new EvalCaseExecution(
+          evidence,
+          metrics,
+          trace,
+          runId,
+          actualContent,
+          duration,
+          inputTokens,
+          outputTokens,
+          cost);
+    } finally {
+      // 评测临时 Git 仓库必须清理：长期跑评测会持续堆积磁盘垃圾，删除失败只记 WARN 不覆盖主结果。
+      deleteWorkspaceDirectory(workspace);
     }
+  }
 
-    // 真实核查越权写入：与初始夹具内容不同、又不是本次预期修改的文件都计入。
-    var unauthorized =
-        workspace == null
-            ? List.<String>of()
-            : dev.workbench.evaluation.runner.EvalWorkspaceFiles.changedOutside(
-                workspace.workspacePath(), files, expectedFile);
-
-    var metrics = new LinkedHashMap<String, Object>();
-    metrics.put("runStatus", status.name());
-    metrics.put("terminal", terminal);
-    metrics.put("fileMatchesExpected", fileMatches ? 1 : 0);
-    metrics.put("unauthorizedWrites", unauthorized.size());
-    metrics.put("actualContainsExpected", fileMatches ? 1 : 0);
-    metrics.put("expectedFile", expectedFile);
-    metrics.put("elapsedMs", runId == null ? 0 : records.runSnapshot(runId).elapsedMs());
-    if (!runError.isBlank()) metrics.put("executionError", runError);
-
-    var evidence = new LinkedHashMap<String, Object>(metrics);
-    evidence.put("runStatus", status.name());
-    evidence.put("terminal", terminal);
-    evidence.put("expectedFile", expectedFile);
-    evidence.put("actualContainsExpected", fileMatches ? 1 : 0);
-    evidence.put("unauthorizedWrites", unauthorized.size());
-    evidence.put("unauthorizedFiles", unauthorized);
-    evidence.put("rawOutput", actualContent);
-
-    var trace = new LinkedHashMap<String, Object>();
-    trace.put("category", category().name());
-    trace.put("runId", runId);
-    trace.put("workspaceId", workspace.id());
-    trace.put("workspacePath", workspace.workspacePath());
-    trace.put("expectedFile", expectedFile);
-    trace.put("expectedContains", expectedContains);
-    trace.put("actualContent", actualContent);
-    trace.put("workspaceFiles", List.copyOf(files.keySet()));
-    trace.put("modelMode", config.modelMode());
-    trace.put("reflectionEnabled", config.enableReflection());
-    trace.put("compactionEnabled", config.enableCompaction());
-    trace.put("longTermMemoryEnabled", config.enableLongTermMemory());
-    trace.put("longTermMemoryApplied", false);
-    trace.put("measurement", "run_service_and_workspace_file");
-    if (!runError.isBlank()) trace.put("executionError", runError);
-
-    long duration = (System.nanoTime() - started) / 1_000_000;
-    return new EvalCaseExecution(
-        evidence, metrics, trace, runId, actualContent, duration, inputTokens, outputTokens, cost);
+  /** 递归删除临时评测仓库目录；失败仅记录告警。 */
+  private static void deleteWorkspaceDirectory(WorkspaceService.Workspace workspace) {
+    if (workspace == null || workspace.workspacePath() == null) return;
+    java.nio.file.Path root;
+    try {
+      root = java.nio.file.Path.of(workspace.workspacePath()).toAbsolutePath().normalize();
+    } catch (RuntimeException invalid) {
+      return;
+    }
+    if (!java.nio.file.Files.isDirectory(root)) return;
+    try (var paths = java.nio.file.Files.walk(root)) {
+      paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> path.toFile().delete());
+    } catch (java.io.IOException cleanupFailed) {
+      org.slf4j.LoggerFactory.getLogger(CodingReflectionRunner.class)
+          .warn("评测临时目录清理失败：{}", root, cleanupFailed);
+    }
   }
 
   private WorkspaceService.Workspace createWorkspace(Map<String, String> files) {

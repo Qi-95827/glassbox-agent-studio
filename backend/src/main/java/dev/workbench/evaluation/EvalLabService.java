@@ -412,11 +412,17 @@ public class EvalLabService {
                     || (reference == null
                         ? !execution.rawOutput().isBlank()
                         : answer instanceof String text && !text.isBlank());
+            // 调用裁判前复核预算：裁决费用可能比被测模型更贵，超预算时不再发起裁判调用。
+            boolean judgeBudgetExceeded =
+                config.maxCostUsd() != null
+                    && modelCost + judgeCost + Math.max(0, execution.costUsd())
+                        >= config.maxCostUsd();
             var verdict =
                 config.judgeEnabled()
                         && !cancellations.contains(id)
                         && !executionFailed
                         && judgeInputAvailable
+                        && !judgeBudgetExceeded
                     ? judge.judge(
                         sample,
                         execution.withAssertions(code.assertions(), code.score()),
@@ -424,6 +430,8 @@ public class EvalLabService {
                         locale,
                         reference instanceof String text ? text : null)
                     : LlmJudgeGrader.JudgeResult.disabled();
+            // 裁判超时/报错/解析失败时 passed 为 null：必须判失败，绝不静默放行。
+            boolean judgeError = "BYOK".equals(verdict.mode()) && verdict.passed() == null;
             boolean judgePassed =
                 "BYOK".equals(verdict.mode()) && Boolean.TRUE.equals(verdict.passed());
             var graded =
@@ -431,13 +439,16 @@ public class EvalLabService {
                     ? codeGrader.gradeAgent(category, execution, true)
                     : code;
             boolean passed =
-                graded.passed()
+                !judgeError
+                    && graded.passed()
                     && (agentGrade
                         || !"BYOK".equals(verdict.mode())
-                        || !Boolean.FALSE.equals(verdict.passed()));
+                        || Boolean.TRUE.equals(verdict.passed()));
             var executionWithScore = execution.withAssertions(graded.assertions(), graded.score());
             var metrics = new LinkedHashMapCopy(executionWithScore.metrics());
             metrics.put("codePassed", code.passed());
+            if (judgeError) metrics.put("errorCode", "JUDGE_ERROR");
+            if (judgeBudgetExceeded) metrics.put("judgeSkippedReason", "BUDGET_EXCEEDED");
             var caseCost = executionWithScore.costUsd();
             modelCost += caseCost;
             judgeCost += verdict.costUsd();
@@ -487,7 +498,8 @@ public class EvalLabService {
                     executionWithScore.durationMs(),
                     caseCost,
                     metrics));
-            row.progress(modelCost, tokens, duration);
+            // 费用口径与 totalTokens 一致：被测模型费用 + 裁判费用。
+            row.progress(modelCost + judgeCost, tokens, duration);
             runs.save(row);
             if (hubRun
                 && config.usesByok()
@@ -570,8 +582,7 @@ public class EvalLabService {
             .distinct()
             .sorted()
             .toList();
-    if (ids.isEmpty())
-      throw new IllegalArgumentException("请选择至少一个已下载的公开评测集。");
+    if (ids.isEmpty()) throw new IllegalArgumentException("请选择至少一个已下载的公开评测集。");
     return ids;
   }
 

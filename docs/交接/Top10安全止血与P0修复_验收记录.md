@@ -891,3 +891,38 @@ mvn test
 2. `CodingReflectionRunner` 的**临时 Git 目录 `try...finally` 清理**未实现（当前仅在成功路径保留目录，已有 `workspaceFiles` trace 记录路径）；
 3. `EvalLabService` 裁判异常 `JUDGE_ERROR` fail-closed 与 `judgeCost` 计入 `totalCostUsd` 未实现；
 4. `enableReflection`/`enableCompaction` 仅进入 trace 记录，未改变运行装配（`longTermMemoryApplied=false` 已如实标注平台限制）。
+---
+
+## 封板收口 · 裁判 Fail-Closed、费用对齐与评测临时仓库清理
+
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `evaluation/EvalLabService.java` | ① 废除 `!Boolean.FALSE.equals(verdict.passed())` 静默放行：裁判超时/报错/解析失败导致 `passed()==null` 时置 `judgeError`，用例 **`passed=false`** 并写 `metrics.errorCode=JUDGE_ERROR`；② 调用裁判**前**复核 `maxCostUsd`（含本条用例已花费），超预算不再发起裁判调用并记 `judgeSkippedReason=BUDGET_EXCEEDED`；③ `row.progress(modelCost + judgeCost, ...)`，`totalCostUsd` 与 `totalTokens` 口径一致 |
+| `evaluation/runner/CodingReflectionRunner.java` | 单题执行包进 `try ... finally`：递归删除临时 Git 工作区目录，删除失败仅 `WARN` 记录、不覆盖主结果（修复长期评测的磁盘泄漏） |
+
+### 2. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 691, Failures: 0, Errors: 0, Skipped: 16**，`BUILD SUCCESS`（`EXITCODE=0`） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| `EvalCategoryRunnerIntegrationTest` | **6/6 通过**（含清理路径） |
+| 历史迁移脚本 | `V1~V14`、PG `V1~V4` **0 改动** |
+
+### 3. 封板状态总表
+
+| 项 | 状态 |
+| :--- | :--- |
+| Task 01~09 安全止血与 P0 修复 | ✅ 已交付（14 个独立提交） |
+| Task 10 评测实验室（安全扣分、恒 0 分、费用口径、裁判隔离、线程池互杀） | ✅ 已交付 |
+| 裁判 Fail-Closed + `judgeCost` 口径 | ✅ 本轮交付 |
+| 评测临时 Git 仓库清理 | ✅ 本轮交付 |
+| 「5 断点挂起不饥饿 + 取消 + 恢复」多线程端到端测试 | ⚠️ **未编写**（断点让出/取消终结/恢复切态已有单元级验证） |
+| `CreateTaskRequest` 公开消融字段 | ⚠️ 已知边界（`longTermMemoryApplied=false` 已如实标注） |
+| Docker / PG 集成验证 | ⚠️ 待本机开启 Docker 后执行 `RUN_DOCKER_TESTS=true` / `WORKBENCH_PG_TEST=true` |
+
+**结论**：安全与并发类缺陷已全部修实；剩余 3 项均为「测试覆盖缺口 / 已知边界 / 环境待跑」，不含已知未修复的功能缺陷。
