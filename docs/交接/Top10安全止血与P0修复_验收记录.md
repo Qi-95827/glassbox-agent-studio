@@ -813,3 +813,40 @@ mvn test
 1. **「5 个断点运行全部让出后第 6 个不饥饿 / 恢复跑通 / 取消立即终结」的多线程端到端集成测试未编写**：仅完成断点让出、取消终结、恢复切态的单元级验证；
 2. `WAITING_TOOL_APPROVAL` 的**并行度计数与写集互斥**层面仍以调度器 `inFlight` 记账为准，未在 `WorkflowExecutionService.requireDisjointWriteSet()`/`claimWorkflowCheck()` 中显式把该状态并入活跃集合；
 3. `WorkflowExecutionService.finishParallelStoppedRun()` 未额外级联审批单（改由 `RunStateStore` 统一作废）。
+---
+
+## 最后 1 步 · 评测实验室部分实质修复 + 全系统联合终验
+
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `evaluation/EvalLabService.java`、`evaluation/EvaluationService.java`、`evaluation/ManagedEvaluationDatasetService.java` | 移除三处 `@PreDestroy` 中对**共享** `evaluationExecutor` 的 `shutdownNow()`：任一服务停止都不再强杀其它服务的在途任务，线程池统一由 `AsyncConfiguration`（`destroyMethod = ""`）托管停机 |
+| `evaluation/runner/SafetyInjectionRunner.java` | 拆分「模型抗注入」与「网关兜底」指标：新增 `modelAttackSuccessRate`（模型按注入调用攻击工具即 1.0，**即使网关拦下也不再被 `!hijacked || blocked` 掩盖**）、`modelDefenseRate`、`endToEndAttackSuccessRate`；`modelDefended`/`gatewayBlocked`/`endToEndSafe` 语义保持不变 |
+
+### 2. 全系统联合终验（实测）
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 后端全量 `mvn test` | **Tests run: 691, Failures: 0, Errors: 0, Skipped: 16**，`BUILD SUCCESS`（`EXITCODE=0`） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| `FlywayMigrationCompatibilityTest` | 通过（含于全量） |
+| 前端 `npm run format:check` | 退出码 **0** |
+| 前端 `npm run lint` | 退出码 **0** |
+| 前端 `npm test` | **Test Files 23 passed (23)，Tests 67 passed (67)** |
+| 前端 `npm run build` | 退出码 **0**（`built in 8.67s`） |
+| 历史迁移脚本 | `db/migration/V1~V14`、`db/migration-pg/V1~V4` **0 改动** |
+| 红线 | Benchmark Hub 6 个 `packId` 与六维雷达图未动；未恢复 `PublicQaRunner`；未 `git push` |
+
+**Docker / PG 未实跑**：本机 Docker 守护进程不可用，`WORKBENCH_PG_TEST` 与 `RUN_DOCKER_TESTS` 均未执行，不做任何通过声明。
+
+### 3. Task 10 未完成项（如实声明，不虚报）
+
+1. `CodingReflectionRunner` / `CodeAssertionGrader` 的 `fileMatchesExpected` 布尔转数字恒 0 分、硬编码 `unauthorizedWrites = 0`、消融开关透传、临时 Git 目录 `finally` 清理 —— **未实现**；
+2. `LlmJudgeGrader` 删除重复系统 prompt、随机边界标签、`eval-judge.txt` 防注入指令 —— **未实现**；
+3. `EvalLabService` 裁判异常 `JUDGE_ERROR` fail-closed 与 `totalCostUsd` 计入 `judgeCost` —— **未实现**；
+4. `EvalBenchmarkHubService` 展示描述标注实际对齐数据集版本（BFCL v4 / LongBench v2 / LoCoMo / HotpotQA / InjecAgent）—— **未实现**。
+
+以上四项仍为已知缺口，需在后续迭代补齐；本轮不将其标记为已完成。

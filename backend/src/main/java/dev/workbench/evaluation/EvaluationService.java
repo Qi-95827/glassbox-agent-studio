@@ -68,7 +68,7 @@ public class EvaluationService {
 
   @PreDestroy
   void shutdown() {
-    executor.shutdownNow();
+    // 共享 evaluationExecutor 由 AsyncConfiguration 统一托管停机；此处不得互相 shutdownNow。
   }
 
   /** 只接受固定样本，避免通过评测接口触发真实模型和代码写入。 */

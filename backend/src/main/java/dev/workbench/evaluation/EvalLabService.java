@@ -334,7 +334,7 @@ public class EvalLabService {
 
   @PreDestroy
   void shutdown() {
-    executor.shutdownNow();
+    // 共享 evaluationExecutor 由 AsyncConfiguration 统一托管停机；此处不得互相 shutdownNow。
   }
 
   private void execute(
