@@ -16,6 +16,8 @@ import java.util.Map;
 import java.util.Optional;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -67,15 +69,34 @@ public class AuthService {
     return users.anyUser();
   }
 
-  /** 从服务端会话解析当前用户；没有请求上下文时返回空，不能回退到请求体。 */
+  /**
+   * 从服务端会话解析当前用户；当处于已显式传递 Spring Security 认证上下文的异步后台线程
+   * （无 HTTP 请求上下文，如评测实验室异步执行器）时，按已认证主体回查活跃用户。
+   * 绝不回退到请求体或外部输入。
+   */
   public Optional<UserEntity> current() {
     var attributes = RequestContextHolder.getRequestAttributes();
-    if (!(attributes instanceof ServletRequestAttributes servlet)) return Optional.empty();
-    HttpSession session = servlet.getRequest().getSession(false);
-    if (session == null) return Optional.empty();
-    Object value = session.getAttribute(SESSION_USER);
-    if (!(value instanceof String id)) return Optional.empty();
-    return users.findById(id).filter(user -> "ACTIVE".equals(user.getStatus()));
+    if (attributes instanceof ServletRequestAttributes servlet) {
+      HttpSession session = servlet.getRequest().getSession(false);
+      if (session == null) return Optional.empty();
+      Object value = session.getAttribute(SESSION_USER);
+      if (!(value instanceof String id)) return Optional.empty();
+      return users.findById(id).filter(user -> "ACTIVE".equals(user.getStatus()));
+    }
+    var context = SecurityContextHolder.getContext();
+    var authentication = context == null ? null : context.getAuthentication();
+    if (authentication == null
+        || !authentication.isAuthenticated()
+        || authentication instanceof AnonymousAuthenticationToken) {
+      return Optional.empty();
+    }
+    Object principal = authentication.getPrincipal();
+    if (principal instanceof String username && !username.isBlank()) {
+      return users
+          .findByUsername(username.strip().toLowerCase(Locale.ROOT))
+          .filter(user -> "ACTIVE".equals(user.getStatus()));
+    }
+    return Optional.empty();
   }
 
   public UserEntity requireCurrent() {

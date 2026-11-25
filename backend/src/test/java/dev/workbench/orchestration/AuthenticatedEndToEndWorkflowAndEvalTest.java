@@ -8,7 +8,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.app.WorkbenchApplication;
+import dev.workbench.auth.AuthService;
 import dev.workbench.domain.RunStatus;
+import dev.workbench.modelconnection.ModelConnectionService;
 import dev.workbench.planning.PlanService;
 import dev.workbench.store.GlassboxTraceStore;
 import dev.workbench.store.RunStateStore;
@@ -57,6 +59,8 @@ class AuthenticatedEndToEndWorkflowAndEvalTest {
   @Autowired GlassboxTraceStore traces;
   @Autowired RunStateStore states;
   @Autowired WorkspaceService workspaces;
+  @Autowired AuthService authService;
+  @Autowired ModelConnectionService modelConnections;
   @TempDir Path temp;
 
   @Test
@@ -243,11 +247,23 @@ class AuthenticatedEndToEndWorkflowAndEvalTest {
       assertFalse(
           row.path("metrics").path("executionFailed").asBoolean(false),
           "用例不得执行失败：" + row.path("sampleId").asText() + " -> " + row.path("trace"));
+      assertTrue(
+          row.path("metrics").path("executionError").asText("").isBlank(),
+          "用例不得出现 executionError：" + row.path("sampleId").asText() + " -> " + row.path("metrics"));
+      assertTrue(
+          row.path("trace").path("executionError").asText("").isBlank(),
+          "用例 trace 不得出现 executionError："
+              + row.path("sampleId").asText()
+              + " -> "
+              + row.path("trace"));
       if ("CODING_REFLECTION".equals(row.path("category").asText())) {
         codingCases++;
         assertFalse(
             row.path("linkedRunId").asText("").isBlank(),
             "编码评测题在登录态下必须真实创建运行：" + row.path("sampleId").asText());
+        assertTrue(
+            row.path("metrics").path("terminal").asBoolean(false),
+            "编码评测题必须进入终态：" + row.path("sampleId").asText() + " -> " + row.path("metrics"));
         String wsPath = row.path("trace").path("workspacePath").asText("");
         assertFalse(wsPath.isBlank());
         assertFalse(Files.exists(Path.of(wsPath)), "评测临时 worktree 必须被清理：" + wsPath);
@@ -262,6 +278,63 @@ class AuthenticatedEndToEndWorkflowAndEvalTest {
               .toList();
       assertTrue(leaked.isEmpty(), "评测结束后不得残留临时源仓库：" + leaked);
     }
+
+    // 5) 登录态下创建 BYOK 连接，模拟评测实验室异步线程（无 HttpServletRequest，仅传递 SecurityContext）
+    //    验证 AuthService.current() 与 ModelConnectionService.requireEnabledOwned(...) 不会再报
+    //    EmptyResultDataAccessException (Incorrect result size: expected 1, actual 0)。
+    String connBody =
+        mvc.perform(
+                post("/api/model-connections")
+                    .with(csrf())
+                    .session(admin)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(
+                        json.writeValueAsString(
+                            Map.of(
+                                "displayName",
+                                "E2E BYOK",
+                                "providerType",
+                                "DEEPSEEK",
+                                "baseUrl",
+                                "https://api.deepseek.com",
+                                "modelName",
+                                "deepseek-chat",
+                                "apiKey",
+                                "sk-e2e-test-key-1234567890",
+                                "enabled",
+                                true,
+                                "isDefault",
+                                true))))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    String connId = json.readTree(connBody).path("id").asText();
+    assertFalse(connId.isBlank());
+    var asyncCheck =
+        java.util.concurrent.CompletableFuture.supplyAsync(
+                () -> {
+                  var ctx =
+                      org.springframework.security.core.context.SecurityContextHolder
+                          .createEmptyContext();
+                  ctx.setAuthentication(
+                      new org.springframework.security.authentication
+                          .UsernamePasswordAuthenticationToken(
+                          "e2e-admin",
+                          null,
+                          List.of(
+                              new org.springframework.security.core.authority
+                                  .SimpleGrantedAuthority("ROLE_ADMIN"))));
+                  org.springframework.security.core.context.SecurityContextHolder.setContext(ctx);
+                  try {
+                    assertTrue(authService.current().isPresent());
+                    return modelConnections.requireEnabledOwned(connId);
+                  } finally {
+                    org.springframework.security.core.context.SecurityContextHolder.clearContext();
+                  }
+                })
+            .join();
+    assertEquals(connId, asyncCheck);
 
     // 5. 安全反例：内部评测工作区入口绝不允许导入非临时目录下的任意仓库。
     assertThrows(
