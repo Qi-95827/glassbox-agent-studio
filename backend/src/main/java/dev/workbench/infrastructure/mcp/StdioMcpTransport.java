@@ -1,5 +1,6 @@
 package dev.workbench.infrastructure.mcp;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.workbench.framework.i18n.LocalizedMessages;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -76,6 +77,7 @@ public final class StdioMcpTransport implements McpTransport {
   private static final Set<String> INLINE_CODE_FLAGS =
       Set.of("-e", "--eval", "-p", "--print", "-c", "--command", "--exec", "--execute");
 
+  private static final ObjectMapper JSON = new ObjectMapper();
   private static final int MAX_ARGS = 32;
   private static final int MAX_ARG_LENGTH = 1024;
 
@@ -173,26 +175,77 @@ public final class StdioMcpTransport implements McpTransport {
 
   @Override
   public String exchange(String request) throws Exception {
-    Future<String> future =
-        executor.submit(
-            () -> {
-              input.write(request);
-              input.newLine();
-              input.flush();
-              String line;
-              while ((line = output.readLine()) != null) {
-                String trimmed = line.strip();
-                if (trimmed.startsWith("{")) return trimmed;
-              }
-              throw new IllegalStateException("MCP 子进程已关闭，未返回响应。");
-            });
+    // 同一子进程的写入与读取必须串行：并发交换会相互吞掉对方的响应行，造成串帧。
+    synchronized (this) {
+      if (process != null && !process.isAlive())
+        throw new IllegalStateException("MCP 子进程已退出，需要重新连接服务器。");
+      Future<String> future =
+          executor.submit(
+              () -> {
+                input.write(request);
+                input.newLine();
+                input.flush();
+                String line;
+                while ((line = output.readLine()) != null) {
+                  String trimmed = line.strip();
+                  if (trimmed.startsWith("{")) return trimmed;
+                }
+                throw new IllegalStateException("MCP 子进程已关闭，未返回响应。");
+              });
+      try {
+        String response = future.get(Math.max(1, timeout.toMillis()), TimeUnit.MILLISECONDS);
+        if (!sameRequestId(request, response)) {
+          // 响应标识不匹配说明管道已经错位，继续复用只会把 A 的结果返回给 B。
+          destroyIfAlive(process);
+          throw new IllegalStateException("MCP 子进程返回了与请求不匹配的响应标识，已终止该子进程以避免串帧。");
+        }
+        return response;
+      } catch (java.util.concurrent.TimeoutException e) {
+        future.cancel(true);
+        // 超时的子进程通常仍然存活并卡在读取上：必须强杀，否则会长期占用执行线程。
+        destroyIfAlive(process);
+        throw new IllegalStateException("MCP 子进程响应超时。", e);
+      } catch (java.util.concurrent.ExecutionException e) {
+        destroyIfAlive(process);
+        throw new IllegalStateException("MCP 子进程交换失败。", e.getCause() == null ? e : e.getCause());
+      } catch (InterruptedException e) {
+        future.cancel(true);
+        Thread.currentThread().interrupt();
+        destroyIfAlive(process);
+        throw e;
+      }
+    }
+  }
+
+  /**
+   * 失败时是否需要强杀子进程。
+   *
+   * <p>只有**仍然存活**的僵死进程才需要销毁；原实现条件写反（{@code !process.isAlive()}），超时后从不清理， 两次超时就会永久占死 MCP 执行线程。
+   */
+  static boolean shouldDestroyForcibly(Process process) {
+    return process != null && process.isAlive();
+  }
+
+  private static void destroyIfAlive(Process process) {
+    if (shouldDestroyForcibly(process)) process.destroyForcibly();
+  }
+
+  /**
+   * 校验 JSON-RPC 响应 {@code id} 与请求一致。
+   *
+   * <p>通知类请求没有 {@code id}，不做限制；有 id 的请求必须收到同一 id 的响应，否则视为串帧。
+   */
+  static boolean sameRequestId(String request, String response) {
     try {
-      return future.get(Math.max(1, timeout.toMillis()), TimeUnit.MILLISECONDS);
-    } catch (java.util.concurrent.TimeoutException e) {
-      future.cancel(true);
-      throw new IllegalStateException("MCP 子进程响应超时。", e);
-    } finally {
-      if (process != null && !process.isAlive()) process.destroyForcibly();
+      var requestId = JSON.readTree(request).path("id");
+      if (requestId.isMissingNode() || requestId.isNull()) return true;
+      var responseId = JSON.readTree(response).path("id");
+      if (responseId.isMissingNode() || responseId.isNull()) return false;
+      if (requestId.isNumber() && responseId.isNumber())
+        return requestId.asLong() == responseId.asLong();
+      return requestId.asText().equals(responseId.asText());
+    } catch (Exception e) {
+      return false;
     }
   }
 

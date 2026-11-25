@@ -50,7 +50,7 @@ public class TaskIdeaModel {
                       Msg.builder().role(MsgRole.USER).textContent(idea).build()),
                   List.of(),
                   GenerateOptions.builder().responseFormat(ResponseFormat.jsonObject()).build())
-              .blockLast();
+              .blockLast(java.time.Duration.ofSeconds(90));
       return reply == null
           ? ""
           : reply.getContent().stream()

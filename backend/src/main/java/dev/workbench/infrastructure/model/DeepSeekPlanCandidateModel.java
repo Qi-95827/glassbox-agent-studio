@@ -53,7 +53,7 @@ public class DeepSeekPlanCandidateModel implements PlanCandidateModel {
                       Msg.builder().role(MsgRole.USER).textContent(input).build()),
                   List.of(),
                   GenerateOptions.builder().responseFormat(ResponseFormat.jsonObject()).build())
-              .blockLast();
+              .blockLast(java.time.Duration.ofSeconds(90));
       String text =
           reply == null
               ? ""

@@ -74,6 +74,23 @@ public class McpClientManager {
     }
   }
 
+  /**
+   * 应用关闭时释放全部托管的 MCP 子进程与连接。
+   *
+   * <p>此前没有任何关闭钩子：一次正常停机就会留下悬空的 STDIO 子进程，下次启动再累积一批。
+   */
+  @jakarta.annotation.PreDestroy
+  public void shutdown() {
+    for (var entry : clients.entrySet()) {
+      try {
+        entry.getValue().client.close();
+      } catch (RuntimeException e) {
+        // 子进程可能已自行退出；关闭阶段不再抛出，避免阻断其它清理。
+      }
+    }
+    clients.clear();
+  }
+
   public void evict(String serverId) {
     clients
         .entrySet()

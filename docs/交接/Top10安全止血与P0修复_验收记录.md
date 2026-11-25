@@ -614,3 +614,43 @@ mvn test
 | 迁移脚本 | 未改动任何历史迁移 |
 
 **未实跑项**：未用真实模型/真实长会话验证动态工作流的记忆注入效果（需要真实工作区与确认记忆）；PG/Docker 未启动，未运行 PG 专项。
+---
+
+## Task 08 · 断点事件倒序、MCP STDIO 管道损坏与规划流超时
+
+- **对应审计编号**：`F-08`、`F-10`
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `framework/control/RunControl.java` | `pauseAtBreakpoint()` 改为「在状态边界内先标记暂停并立即写入断点原因事件」：旧实现先 `paused.add` 再进边界，边界里的 `check()` 先落通用 PAUSED 事件并阻塞，断点原因只能等恢复后补写（事件倒序） |
+| `infrastructure/mcp/StdioMcpTransport.java` | `exchange()` 加 `synchronized` 串行化同一进程的写入/读取；严格校验 JSON-RPC 响应 `id` 与请求一致（不一致即判串帧并终止子进程）；超时/IO 失败时杀**仍然存活**的子进程（原条件 `!process.isAlive()` 写反，超时后从不清理，两次超时即占死 MCP 执行线程）；新增 `shouldDestroyForcibly()` 与 `sameRequestId()` |
+| `infrastructure/mcp/McpClientManager.java` | 新增 `@PreDestroy shutdown()`：应用关闭时释放全部托管的 MCP 客户端与子进程 |
+| `infrastructure/model/DeepSeekPlanCandidateModel.java`、`TaskIdeaModel.java` | `.blockLast(Duration.ofSeconds(90))` 显式超时，避免单次请求挂起永久占死单线程规划池 |
+
+### 2. 新增测试
+
+| 测试类 | 用例数 | 覆盖 |
+| :--- | ---: | :--- |
+| `framework/control/RunControlBreakpointOrderingTest` | 2 | 断点原因事件必须在暂停等待期间就已落库且**早于**通用 PAUSED 事件（`InOrder` + 并发线程验证未恢复时仍停在边界）；预算策略仍暴露声明限额 |
+| `infrastructure/mcp/StdioMcpTransportExchangeTest` | 4 | 存活进程必须强杀（回归断言旧条件写反）、已退出进程不杀、响应 id 必须匹配、无 id 通知不受限、非法 JSON 一律不匹配 |
+
+### 3. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 663, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`，完成于 2026-11-25 10:18:07） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+
+### 4. 未完成项（如实声明，不虚报）
+
+**暂停/断点占用 `workflowRunTaskExecutor` 工作线程的「让出线程 + 恢复重派」改造未实现。** 原因与现状：
+
+- 当前暂停是协作式阻塞（`RunControl.check()` 在 `pauseMonitor` 上等待），暂停期间确实占用执行线程；
+- 若要改为「先落库再让出线程、`/resume` 重新派发」，`RunExecutionEngine.prepare()` 只接受 `PENDING` 状态（PAUSED 会被直接返回 null），且重新进入调度时被中断节点的 `RUNNING` 认领记录会成为孤儿，需要同步改造状态机与认领回收；
+- 该改造横跨 `RunExecutionEngine`、`WorkflowScheduler`、`RunCommandService` 三处并需要新增恢复语义，超出「最小修复」的安全边界，本轮未实现；已在验收记录中标注，不做「已修复」的虚假声明。
+
+**未实跑**：未做真实 MCP 子进程（node/npx）超时回放；PG/Docker 未启动，未运行 PG 专项。

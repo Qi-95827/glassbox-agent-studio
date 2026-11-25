@@ -5,13 +5,12 @@ import dev.workbench.domain.EventType;
 import dev.workbench.domain.InvocationStatus;
 import dev.workbench.domain.ModelKind;
 import dev.workbench.domain.RoleBudget;
+import dev.workbench.domain.RunLimits;
 import dev.workbench.domain.RunSnapshot;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
 import dev.workbench.domain.ToolKind;
 import dev.workbench.framework.workflow.plan.WorkflowNodeBudget;
-import dev.workbench.domain.RunLimits;
-
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -38,8 +37,10 @@ public final class RunControl {
   private final Map<ToolKind, Integer> toolBudgets;
   private final AtomicInteger rounds = new AtomicInteger();
   private final AtomicInteger tools = new AtomicInteger();
+
   /** 并行节点各自持有模型/工具调用槽，避免共享单个 callId 互相覆盖。 */
   private final Map<String, CallSlot> modelSlots = new ConcurrentHashMap<>();
+
   private final Map<String, CallSlot> toolSlots = new ConcurrentHashMap<>();
 
   public RunControl(
@@ -76,12 +77,17 @@ public final class RunControl {
     return rounds.get();
   }
 
-  /** 在节点断点处主动挂起运行，复用协作式暂停与恢复机制等待用户人工放行。 */
+  /**
+   * 在节点断点处主动挂起运行，复用协作式暂停与恢复机制等待用户人工放行。
+   *
+   * <p>顺序必须是「先标记暂停、在同一边界内立即写入断点事件」：若先标记暂停再调用边界，边界内的 {@link #check()} 会先落库通用 PAUSED
+   * 事件并进入等待，断点原因只能等到恢复后才写入，事件序列倒置。
+   */
   public void pauseAtBreakpoint(Object stateLock, String reason) {
-    paused.add(runId);
     atBoundary(
         stateLock,
         () -> {
+          paused.add(runId);
           repository.event(runId, EventType.PAUSED, reason);
           return null;
         });
@@ -283,8 +289,7 @@ public final class RunControl {
     return roleBudgets.isEmpty() ? null : roleBudgets.get(repository.agentRole(runId, agentId));
   }
 
-  private UUID startTool(
-      String agentId, ToolKind kind, int version, String fingerprint) {
+  private UUID startTool(String agentId, ToolKind kind, int version, String fingerprint) {
     var slot = new CallSlot(UUID.randomUUID().toString(), System.nanoTime());
     toolSlots.put(slotKey(agentId), slot);
     if (maxIdenticalTools == null)
@@ -298,8 +303,7 @@ public final class RunControl {
   }
 
   /** 完成指定 Agent 的工具调用，避免并行节点结算彼此的 callId。 */
-  public void finishTool(
-      String agentId, InvocationStatus status, String result, String error) {
+  public void finishTool(String agentId, InvocationStatus status, String result, String error) {
     finishTool(agentId, status, result, error, null);
   }
 
@@ -364,8 +368,7 @@ public final class RunControl {
     return slot == null || slot.id == null ? null : UUID.fromString(slot.id);
   }
 
-  public void finishModel(
-      InvocationStatus status, Integer input, Integer output, String error) {
+  public void finishModel(InvocationStatus status, Integer input, Integer output, String error) {
     finishModel(null, status, input, output, error);
   }
 
