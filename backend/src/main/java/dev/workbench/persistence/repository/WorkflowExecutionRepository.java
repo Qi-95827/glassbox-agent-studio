@@ -80,7 +80,8 @@ public class WorkflowExecutionRepository {
   public void recordCriticVerdict(String agentId, String verdictJson) {
     sessions
         .createQuery(
-            "update WorkflowAttemptEntity a set a.criticVerdictJson = :verdict where a.agentId = :agentId")
+            "update WorkflowAttemptEntity a set a.criticVerdictJson = :verdict where a.agentId ="
+                + " :agentId")
         .setParameter("verdict", verdictJson)
         .setParameter("agentId", agentId)
         .executeUpdate();
@@ -260,15 +261,13 @@ public class WorkflowExecutionRepository {
   public List<ToolEvidence> findAcceptedToolEvidence(String receiver, String dependency) {
     var reads =
         sessions
-            .createQuery(
-                WorkflowExecutionQueries.ACCEPTED_READ_EVIDENCE, ToolEvidenceRow.class)
+            .createQuery(WorkflowExecutionQueries.ACCEPTED_READ_EVIDENCE, ToolEvidenceRow.class)
             .setParameter("receiver", receiver)
             .setParameter("dependency", dependency)
             .getResultList();
     var writes =
         sessions
-            .createQuery(
-                WorkflowExecutionQueries.ACCEPTED_WRITE_EVIDENCE, WriteEvidenceRow.class)
+            .createQuery(WorkflowExecutionQueries.ACCEPTED_WRITE_EVIDENCE, WriteEvidenceRow.class)
             .setParameter("receiver", receiver)
             .setParameter("dependency", dependency)
             .getResultList();

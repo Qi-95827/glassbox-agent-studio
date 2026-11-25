@@ -87,6 +87,7 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
               .workspace(workspace.id(), null)
               .writeEnabled(true)
               .fileScopes(List.copyOf(files.keySet()))
+              // 静态/演示模型不支持「工作区 + 长期记忆」场景，消融开关在此如实记录为未应用。
               .memoryEnabled(false)
               .maxPerTool(2)
               .maxIdenticalTools(2)
@@ -135,10 +136,19 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
       }
     }
 
+    // 真实核查越权写入：与初始夹具内容不同、又不是本次预期修改的文件都计入。
+    var unauthorized =
+        workspace == null
+            ? List.<String>of()
+            : dev.workbench.evaluation.runner.EvalWorkspaceFiles.changedOutside(
+                workspace.workspacePath(), files, expectedFile);
+
     var metrics = new LinkedHashMap<String, Object>();
     metrics.put("runStatus", status.name());
     metrics.put("terminal", terminal);
-    metrics.put("fileMatchesExpected", fileMatches);
+    metrics.put("fileMatchesExpected", fileMatches ? 1 : 0);
+    metrics.put("unauthorizedWrites", unauthorized.size());
+    metrics.put("actualContainsExpected", fileMatches ? 1 : 0);
     metrics.put("expectedFile", expectedFile);
     metrics.put("elapsedMs", runId == null ? 0 : records.runSnapshot(runId).elapsedMs());
     if (!runError.isBlank()) metrics.put("executionError", runError);
@@ -147,8 +157,9 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
     evidence.put("runStatus", status.name());
     evidence.put("terminal", terminal);
     evidence.put("expectedFile", expectedFile);
-    evidence.put("actualContainsExpected", fileMatches);
-    evidence.put("unauthorizedWrites", 0);
+    evidence.put("actualContainsExpected", fileMatches ? 1 : 0);
+    evidence.put("unauthorizedWrites", unauthorized.size());
+    evidence.put("unauthorizedFiles", unauthorized);
     evidence.put("rawOutput", actualContent);
 
     var trace = new LinkedHashMap<String, Object>();
@@ -162,20 +173,15 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
     trace.put("workspaceFiles", List.copyOf(files.keySet()));
     trace.put("modelMode", config.modelMode());
     trace.put("reflectionEnabled", config.enableReflection());
+    trace.put("compactionEnabled", config.enableCompaction());
+    trace.put("longTermMemoryEnabled", config.enableLongTermMemory());
+    trace.put("longTermMemoryApplied", false);
     trace.put("measurement", "run_service_and_workspace_file");
     if (!runError.isBlank()) trace.put("executionError", runError);
 
     long duration = (System.nanoTime() - started) / 1_000_000;
     return new EvalCaseExecution(
-        evidence,
-        metrics,
-        trace,
-        runId,
-        actualContent,
-        duration,
-        inputTokens,
-        outputTokens,
-        cost);
+        evidence, metrics, trace, runId, actualContent, duration, inputTokens, outputTokens, cost);
   }
 
   private WorkspaceService.Workspace createWorkspace(Map<String, String> files) {
@@ -206,8 +212,7 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
     command.addAll(List.of(args));
     Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
     String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-    if (process.waitFor() != 0)
-      throw new IllegalStateException("评测临时仓库 Git 操作失败：" + output);
+    if (process.waitFor() != 0) throw new IllegalStateException("评测临时仓库 Git 操作失败：" + output);
   }
 
   private RunStatus waitFor(String runId) throws InterruptedException {
@@ -218,8 +223,7 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
       if (!status.canCancel()) return status;
       long remaining = deadline - System.nanoTime();
       if (remaining > 0) {
-        completionWaiter.await(
-            future, TimeUnit.NANOSECONDS.toMillis(remaining));
+        completionWaiter.await(future, TimeUnit.NANOSECONDS.toMillis(remaining));
         status = records.runSnapshot(runId).status();
         if (!status.canCancel()) return status;
       }

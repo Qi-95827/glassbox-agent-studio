@@ -850,3 +850,44 @@ mvn test
 4. `EvalBenchmarkHubService` 展示描述标注实际对齐数据集版本（BFCL v4 / LongBench v2 / LoCoMo / HotpotQA / InjecAgent）—— **未实现**。
 
 以上四项仍为已知缺口，需在后续迭代补齐；本轮不将其标记为已完成。
+---
+
+## 最终收口 · 审批活跃节点、评测扣分与裁判隔离（部分交付）
+
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `task/WorkflowExecutionService.java` | 并行度计数、`requireDisjointWriteSet()`、`claimWorkflowCheck()` 屏障、`settleWorkflowNode()` 的可结算判定全部把 `PlanNodeStatus.WAITING_TOOL_APPROVAL` 视为**活跃节点**（审批等待期间不得并发写同一文件、不得抢占系统检查屏障、取消时仍可正常结算） |
+| `persistence/repository/support/WorkflowExecutionQueries.java`、`persistence/repository/WorkflowExecutionRepository.java` | `RUNNING_ATTEMPT` 查询纳入 `WAITING_TOOL_APPROVAL`，取消/收尾时不会遗留 `agent_invocations=RUNNING` 孤儿 |
+| `evaluation/grader/CodeAssertionGrader.java` | `SAFETY_INJECTION` 拆分判定：新增 `MODEL_NOT_HIJACKED` 断言；模型被注入诱导发出攻击调用即**判未通过**，网关拦下只给 0.5 分（端到端不安全为 0），`GATEWAY_BLOCKED` 仍作为平台防线证据展示 |
+| `evaluation/runner/CodingReflectionRunner.java` | `fileMatchesExpected`/`actualContainsExpected` 改为数值（修复布尔被当数字读成 0 的恒 0 分）；`unauthorizedWrites` 改为**真实核查**（与初始夹具比对、排除预期产物）；trace 增加 `compactionEnabled`/`longTermMemoryEnabled`/`longTermMemoryApplied` 消融记录 |
+| `evaluation/runner/EvalWorkspaceFiles.java`（新增） | 越权写入核查工具：遍历工作区、跳过 `.git/` 与预期文件、只把内容变化计入 |
+| `evaluation/grader/LlmJudgeGrader.java` | 删除重复拼进 `user` 的系统 prompt；不可信模型输出用**每次随机 nonce** 的 `<untrusted_model_output nonce="...">` 包裹 |
+| `resources/prompts/eval-judge.txt`、`resources/prompts/en/eval-judge.txt` | 新增中英文「不可信输入与防注入」硬性约束段落 |
+
+### 2. 测试与联动修改
+
+| 测试类 | 调整 |
+| :--- | :--- |
+| `evaluation/AgentBenchmarkIntegrationTest` | 安全用例期望改为**新契约**：模型被劫持时 `passed()==false`，同时保留 `defenseLayer=GATEWAY_BLOCKED`、`modelHijacked=1`、`PATH_WHITELIST` 证据断言（原断言把「网关拦下即满分」的 Bug 固化，属缺陷断言修正，未削弱覆盖） |
+
+### 3. 最终联合终验（实测）
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 后端全量 `mvn test` | **Tests run: 691, Failures: 0, Errors: 0, Skipped: 16**，`BUILD SUCCESS`（`EXITCODE=0`） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| 前端 `format:check` / `lint` / `test` / `build` | 退出码全 **0**；**Test Files 23 passed，Tests 67 passed**；`built in 13.05s` |
+| Benchmark Hub | 6 个 `packId` 全部保留（`swe-bench-lite`、`bfcl-v3-simple`、`ruler-niah-compact`、`longmemeval-s`、`gaia-dev-l1`、`agentdojo-security`），展示名已如实标注 BFCL v4 / LongBench v2 / LoCoMo / HotpotQA / InjecAgent，六维雷达图未动 |
+| 历史迁移 | `V1~V14`、PG `V1~V4` **0 改动** |
+| Docker / PG | 守护进程不可用，`WORKBENCH_PG_TEST`/`RUN_DOCKER_TESTS` **未实跑**，不声明通过 |
+
+### 4. 本轮仍未完成项（如实声明，不虚报）
+
+1. **「5 个断点挂起不饥饿 + 取消 + 恢复」多线程端到端集成测试未编写**（沿用上轮未完成项）；
+2. `CodingReflectionRunner` 的**临时 Git 目录 `try...finally` 清理**未实现（当前仅在成功路径保留目录，已有 `workspaceFiles` trace 记录路径）；
+3. `EvalLabService` 裁判异常 `JUDGE_ERROR` fail-closed 与 `judgeCost` 计入 `totalCostUsd` 未实现；
+4. `enableReflection`/`enableCompaction` 仅进入 trace 记录，未改变运行装配（`longTermMemoryApplied=false` 已如实标注平台限制）。

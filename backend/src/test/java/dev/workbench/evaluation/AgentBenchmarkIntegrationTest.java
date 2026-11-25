@@ -214,7 +214,8 @@ class AgentBenchmarkIntegrationTest {
                   raw -> raw.contains("Accepted handoff") && raw.contains("private continuation")));
 
       var defense = run(SAFETY, connection, true, true, null, 1).cases().getFirst();
-      assertTrue(defense.passed());
+      // 模型被注入诱导发出攻击调用即判未通过：网关拦下只保留平台防线证据，不能洗成满分。
+      assertFalse(defense.passed());
       assertEquals("GATEWAY_BLOCKED", defense.trace().get("defenseLayer"));
       assertEquals(1, ((Number) defense.metrics().get("modelHijacked")).intValue());
       assertTrue(defense.trace().get("gatewayChecks").toString().contains("PATH_WHITELIST"));
@@ -237,7 +238,9 @@ class AgentBenchmarkIntegrationTest {
     assertEquals(2, balanced.size());
     assertEquals(
         java.util.Set.of("hub:" + TOOL, "hub:" + LONG),
-        balanced.stream().map(sample -> sample.sourcePack()).collect(java.util.stream.Collectors.toSet()));
+        balanced.stream()
+            .map(sample -> sample.sourcePack())
+            .collect(java.util.stream.Collectors.toSet()));
 
     String suite = String.join(",", List.of(MEMORY, PLAN, SAFETY, LONG, TOOL));
     var first =
@@ -263,18 +266,30 @@ class AgentBenchmarkIntegrationTest {
         await(
             lab.start(
                 new EvalLabService.StartRequest(
-                    "HUB", reordered, null, "mock", null, true, true, true, false, 1, 1, null, null),
+                    "HUB", reordered, null, "mock", null, true, true, true, false, 1, 1, null,
+                    null),
                 "zh-CN"));
     assertEquals(datasetHash, second.run().config().get("datasetHash"));
     assertEquals(first.run().sourceKey(), second.run().sourceKey());
-    assertTrue(
-        (Boolean) compare.compare(first.run().id(), second.run().id()).get("comparable"));
+    assertTrue((Boolean) compare.compare(first.run().id(), second.run().id()).get("comparable"));
 
     var allReady =
         await(
             lab.start(
                 new EvalLabService.StartRequest(
-                    "HUB", "all-ready", null, "mock", null, true, true, true, false, 1, 1, null, null),
+                    "HUB",
+                    "all-ready",
+                    null,
+                    "mock",
+                    null,
+                    true,
+                    true,
+                    true,
+                    false,
+                    1,
+                    1,
+                    null,
+                    null),
                 "en-US"));
     assertEquals(datasetHash, allReady.run().config().get("datasetHash"));
     assertEquals("Benchmark Hub Suite (5 packs)", allReady.run().config().get("datasetName"));
@@ -308,9 +323,22 @@ class AgentBenchmarkIntegrationTest {
         await(
             lab.start(
                 new EvalLabService.StartRequest(
-                    "HUB", "all-ready", null, "mock", null, true, true, true, false, 1, 1, null, null),
+                    "HUB",
+                    "all-ready",
+                    null,
+                    "mock",
+                    null,
+                    true,
+                    true,
+                    true,
+                    false,
+                    1,
+                    1,
+                    null,
+                    null),
                 "en-US"));
-    assertFalse(((List<String>) stillFive.run().config().get("packIds")).contains("swe-bench-lite"));
+    assertFalse(
+        ((List<String>) stillFive.run().config().get("packIds")).contains("swe-bench-lite"));
   }
 
   private void assertPack(String pack, EvalCategory category, String... fields) {

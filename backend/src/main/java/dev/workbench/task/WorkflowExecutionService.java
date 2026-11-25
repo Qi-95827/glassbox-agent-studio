@@ -17,7 +17,6 @@ import dev.workbench.framework.workflow.check.SystemCheckStatus;
 import dev.workbench.framework.workflow.plan.PlanNode;
 import dev.workbench.framework.workflow.plan.PlanNodeKind;
 import dev.workbench.framework.workflow.plan.PlanNodeStatus;
-import dev.workbench.planning.PlanService;
 import dev.workbench.framework.workflow.plan.WorkflowAttempt;
 import dev.workbench.framework.workflow.plan.WorkflowCheck;
 import dev.workbench.framework.workflow.plan.WorkflowHandoff;
@@ -28,6 +27,12 @@ import dev.workbench.persistence.repository.RunRepository;
 import dev.workbench.persistence.repository.SupplementRepository;
 import dev.workbench.persistence.repository.WorkflowExecutionRepository;
 import dev.workbench.persistence.repository.view.CheckReceipt;
+import dev.workbench.planning.PlanService;
+import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.RunCountStore;
+import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.store.RunStateStore;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.workspace.WorkspaceService;
 import java.time.Instant;
 import java.util.List;
@@ -35,15 +40,6 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-import dev.workbench.store.AgentAssemblyRecordService;
-import dev.workbench.store.RunCountStore;
-import dev.workbench.store.RunEvidenceRecordService;
-import dev.workbench.store.RunStateStore;
-import dev.workbench.store.TaskRecordService;
-import dev.workbench.store.HandoffValidator;
-import dev.workbench.store.ReviewCompletion;
-import dev.workbench.store.StopCompletion;
-import dev.workbench.planning.RecoveryLeaseService;
 
 /** 维护动态计划的尝试与交接，复用运行仓库的实例与终态事务。 */
 @Service
@@ -109,7 +105,12 @@ public class WorkflowExecutionService {
         ignored -> {
           var nodes = lockWorkflowRun(runId, version);
           long running =
-              nodes.stream().filter(node -> node.status() == PlanNodeStatus.RUNNING).count();
+              nodes.stream()
+                  .filter(
+                      node ->
+                          node.status() == PlanNodeStatus.RUNNING
+                              || node.status() == PlanNodeStatus.WAITING_TOOL_APPROVAL)
+                  .count();
           if (running >= Math.max(1, maxParallelNodes))
             throw new IllegalStateException("并行节点数量已经达到上限。");
           var node =
@@ -188,7 +189,8 @@ public class WorkflowExecutionService {
     var candidateWrites = writeSet(candidate, specs, task);
     if (candidateWrites.isEmpty()) return;
     for (var running : nodes) {
-      if (running.status() != PlanNodeStatus.RUNNING) continue;
+      if (running.status() != PlanNodeStatus.RUNNING
+          && running.status() != PlanNodeStatus.WAITING_TOOL_APPROVAL) continue;
       var writes = writeSet(running, specs, task);
       if (writes.stream().anyMatch(candidateWrites::contains))
         throw new IllegalStateException(
@@ -203,9 +205,7 @@ public class WorkflowExecutionService {
     if (!node.workspaceWrite()) return java.util.Set.of();
     var spec = specs.get(node.id());
     if (spec != null) return java.util.Set.copyOf(spec.writeFiles());
-    return task.fileScopes() == null
-        ? java.util.Set.of()
-        : java.util.Set.copyOf(task.fileScopes());
+    return task.fileScopes() == null ? java.util.Set.of() : java.util.Set.copyOf(task.fileScopes());
   }
 
   /** 认领时的工作区指纹；执行前必须仍一致。 */
@@ -228,7 +228,11 @@ public class WorkflowExecutionService {
     return tx.execute(
         ignored -> {
           var nodes = lockWorkflowRun(runId, version);
-          if (nodes.stream().anyMatch(node -> node.status() == PlanNodeStatus.RUNNING))
+          if (nodes.stream()
+              .anyMatch(
+                  node ->
+                      node.status() == PlanNodeStatus.RUNNING
+                          || node.status() == PlanNodeStatus.WAITING_TOOL_APPROVAL))
             throw new IllegalStateException("运行已有在途步骤。");
           var node = plans.nextReady(nodes);
           if (node == null || !nodeId.equals(node.id()))
@@ -364,7 +368,8 @@ public class WorkflowExecutionService {
                     elapsed,
                     StopCause.CHECK_FAILED);
                 evidence.event(runId, EventType.BLOCKED, "系统检查未通过：" + result.summary(), checkRef);
-                if (dev.workbench.domain.BlockReason.REPRODUCTION_MISSING_INFO.equals(result.reasonCode()))
+                if (dev.workbench.domain.BlockReason.REPRODUCTION_MISSING_INFO.equals(
+                    result.reasonCode()))
                   openSupplementRequest(runId, checked, result.reasonCode());
                 return true;
               }
@@ -490,10 +495,10 @@ public class WorkflowExecutionService {
    */
   private CheckEvidencePreflight prepareCheckEvidence(String runId, UUID nodeId) {
     var upstream = results(runId, nodeId);
-    if (upstream.stream().noneMatch(input -> input.kind() == PlanNodeKind.SYSTEM_CHECK)) return null;
+    if (upstream.stream().noneMatch(input -> input.kind() == PlanNodeKind.SYSTEM_CHECK))
+      return null;
     var task = tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString());
-    var dependencies =
-        upstream.stream().map(input -> input.dependencyNodeId().toString()).toList();
+    var dependencies = upstream.stream().map(input -> input.dependencyNodeId().toString()).toList();
     var evidence = new java.util.ArrayList<EvidenceSnapshot>();
     for (var input : upstream) {
       if (input.kind() != PlanNodeKind.SYSTEM_CHECK || input.checkId() == null) continue;
@@ -503,8 +508,7 @@ public class WorkflowExecutionService {
       var item =
           records
               .findExternalEvidence(external)
-              .orElseThrow(
-                  () -> new StaleEvidenceException("系统检查的外部证据已缺失，不能继续依赖。"));
+              .orElseThrow(() -> new StaleEvidenceException("系统检查的外部证据已缺失，不能继续依赖。"));
       if (!java.util.Objects.equals(task.bugId(), item.bugId())
           || !java.util.Objects.equals(task.workspaceId(), item.workspaceId()))
         throw new StaleEvidenceException("系统检查证据的 Bug 或工作区归属与当前任务不一致。");
@@ -554,8 +558,7 @@ public class WorkflowExecutionService {
   /** 短事务内只做数据库复核；不再调用 Git，也不重新计算外部指纹。 */
   private void verifyCheckEvidence(CheckEvidencePreflight preflight, List<WorkflowInput> upstream) {
     if (preflight == null) return;
-    var dependencies =
-        upstream.stream().map(input -> input.dependencyNodeId().toString()).toList();
+    var dependencies = upstream.stream().map(input -> input.dependencyNodeId().toString()).toList();
     if (!dependencies.equals(preflight.dependencies))
       throw new StaleEvidenceException("节点直接依赖在预检后发生变化，请重新认领。");
     for (var expected : preflight.evidence) {
@@ -572,8 +575,7 @@ public class WorkflowExecutionService {
       var current =
           records
               .findExternalEvidence(external)
-              .orElseThrow(
-                  () -> new StaleEvidenceException("系统检查的外部证据已缺失，不能继续依赖。"));
+              .orElseThrow(() -> new StaleEvidenceException("系统检查的外部证据已缺失，不能继续依赖。"));
       if (!java.util.Objects.equals(preflight.bugId, current.bugId())
           || !java.util.Objects.equals(preflight.workspaceId, current.workspaceId())
           || !java.util.Objects.equals(expected.bugId, current.bugId())
@@ -636,8 +638,8 @@ public class WorkflowExecutionService {
   /**
    * 结算节点并处理有界反思。
    *
-   * <p>{@code criticVerdictJson} 非空且审查判定需要修改时，在同一事务内把目标与审查节点退回待执行；
-   * 超过回边上限则阻塞运行并等待人工审核，绝不继续无界循环。返回的 {@code runEnded} 表示运行已经终止。
+   * <p>{@code criticVerdictJson} 非空且审查判定需要修改时，在同一事务内把目标与审查节点退回待执行； 超过回边上限则阻塞运行并等待人工审核，绝不继续无界循环。返回的
+   * {@code runEnded} 表示运行已经终止。
    */
   public NodeSettlement settleWorkflowNode(
       String runId,
@@ -654,7 +656,8 @@ public class WorkflowExecutionService {
           if (nodes.stream()
               .noneMatch(
                   node ->
-                      node.status() == PlanNodeStatus.RUNNING
+                      (node.status() == PlanNodeStatus.RUNNING
+                              || node.status() == PlanNodeStatus.WAITING_TOOL_APPROVAL)
                           && UUID.fromString(agentId).equals(node.agentId())))
             throw new IllegalStateException("运行中没有可结算的该节点实例。");
           var running =
@@ -668,10 +671,7 @@ public class WorkflowExecutionService {
             agents.finishAgent(agentId, InvocationStatus.FAILED, result);
             recordAttemptStop(agentId, StopCause.OUTPUT_MISSING);
             String reason =
-                running.label()
-                    + " 缺少必需产出："
-                    + String.join("、", missing)
-                    + "；已保存的变更和证据保留，等待人工核对。";
+                running.label() + " 缺少必需产出：" + String.join("、", missing) + "；已保存的变更和证据保留，等待人工核对。";
             runs.update(
                 runId,
                 RunStatus.BLOCKED,
@@ -716,10 +716,7 @@ public class WorkflowExecutionService {
                 return new NodeSettlement(false, true, message);
               }
               String reason =
-                  running.label()
-                      + " 已达到 "
-                      + edge.maxRevisions()
-                      + " 次修订上限，自动反思停止，等待人工审核。";
+                  running.label() + " 已达到 " + edge.maxRevisions() + " 次修订上限，自动反思停止，等待人工审核。";
               runs.update(
                   runId,
                   RunStatus.BLOCKED,
@@ -893,8 +890,11 @@ public class WorkflowExecutionService {
         || !plan.reviewRequired()
         || plan.approvedAt() != null) throw new IllegalStateException("当前运行没有待确认的该计划版本。");
     plans.checkedWorkflowNodes(runId, plan);
-    plan.requireTaskAuthorization(tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString()));
-    int changed = planRows.approveIfPending(version.toString(), runId, dev.workbench.domain.WorkbenchTime.now());
+    plan.requireTaskAuthorization(
+        tasks.taskDefinition(runs.runSnapshot(runId).taskId().toString()));
+    int changed =
+        planRows.approveIfPending(
+            version.toString(), runId, dev.workbench.domain.WorkbenchTime.now());
     if (changed != 1) throw new IllegalStateException("当前运行没有待确认的该计划版本。");
     evidence.event(
         runId, EventType.PLAN_APPROVED, "用户确认了工作流计划 " + version + "。", EventRef.plan(version));
@@ -964,8 +964,7 @@ public class WorkflowExecutionService {
         .toList();
   }
 
-  public List<CheckReceipt> workflowCheckReceipts(
-      String runId, UUID nodeId) {
+  public List<CheckReceipt> workflowCheckReceipts(String runId, UUID nodeId) {
     return records.findCheckReceipts(runId, nodeId.toString());
   }
 
