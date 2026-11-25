@@ -58,11 +58,30 @@ class PlanCandidateWorkspaceService {
   /** 按当前授权重新计算有效文件范围；与候选冻结范围不一致时拒绝确认。 */
   WorkspaceAuthorizationService.Prepared prepareScope(
       String workspaceId, PlanCandidateInput input) {
+    // 目录授权（含整个工作区 "."）已在生成时冻结有效文件，这里按目录与排除规则复验，而不是把
+    // 展开结果重新当作手工选择的显式文件。
+    if (!input.directoryScopes().isEmpty())
+      return workspaceAuthorization.reverifyDirectories(
+          workspaceId, input.directoryScopes(), input.excludedPaths(), input.fileScopes());
     var prepared =
         workspaceAuthorization.prepare(workspaceId, input.fileScopes(), java.util.List.of(), java.util.List.of());
     if (!new HashSet<>(prepared.effectiveFiles()).equals(new HashSet<>(input.fileScopes())))
       throw new IllegalStateException("候选文件范围与当前工作区授权不一致，请重新生成计划。");
     return prepared;
+  }
+
+  /**
+   * 生成候选前的目录授权展开：整个工作区 {@code "."} 或子目录都会展开成有效文件集合。
+   *
+   * <p>只有服务端可以执行这一步，展开结果随输入快照冻结；没有目录授权时保持原有显式文件语义。
+   */
+  PlanCandidateInput expandDirectories(PlanCandidateInput input) {
+    if (input.workspaceId() == null || input.directoryScopes().isEmpty()) return input;
+    var prepared =
+        workspaceAuthorization.prepare(
+            input.workspaceId(), input.fileScopes(), input.directoryScopes(), input.excludedPaths());
+    return input.withExpandedScope(
+        prepared.directories(), prepared.exclusions(), prepared.effectiveFiles());
   }
 
   /**

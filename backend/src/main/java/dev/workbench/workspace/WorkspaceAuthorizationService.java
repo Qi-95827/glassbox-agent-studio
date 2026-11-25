@@ -50,17 +50,65 @@ public class WorkspaceAuthorizationService {
         explicitFiles == null || explicitFiles.isEmpty()
             ? List.of()
             : new AuthorizedFileSet(explicitFiles).paths();
-    List<String> dirs = directories == null ? List.of() : List.copyOf(directories);
-    List<String> excluded = exclusions == null ? List.of() : List.copyOf(exclusions);
+    List<String> dirs = normalizeDirectories(directories);
+    List<String> excluded = normalizeExclusions(exclusions);
     if (dirs.isEmpty()) {
       return new Prepared(explicit, dirs, excluded, explicit);
     }
     if (workspaceId == null) throw new IllegalArgumentException("目录授权必须选择工作区。");
     var effective = new LinkedHashSet<>(workspaces.authorizedFiles(workspaceId, dirs, excluded));
     effective.addAll(explicit);
-    if (effective.size() > 200)
-      throw new IllegalArgumentException("目录授权展开后不能超过 200 个文件。");
+    if (effective.size() > AuthorizedFileSet.MAX_SCOPE)
+      throw new IllegalArgumentException(
+          AuthorizedFileSet.tooManyFilesMessage(AuthorizedFileSet.MAX_SCOPE));
     return new Prepared(explicit, dirs, excluded, List.copyOf(effective));
+  }
+
+  /**
+   * 候选确认与运行前复验：按保存的目录、排除规则核对已冻结的有效文件集合。
+   *
+   * <p>用于服务端已展开的范围（例如整个工作区 {@code "."}），不会把已冻结的 200 个文件重新当成用户手工
+   * 选择的显式文件；每条路径仍必须落在授权目录内、未被排除且当前可读。
+   */
+  public Prepared reverifyDirectories(
+      String workspaceId,
+      List<String> directories,
+      List<String> exclusions,
+      List<String> effectiveFiles) {
+    List<String> dirs = normalizeDirectories(directories);
+    List<String> excluded = normalizeExclusions(exclusions);
+    if (dirs.isEmpty())
+      throw new IllegalArgumentException("目录授权至少需要一个工作区内目录。");
+    if (workspaceId == null) throw new IllegalArgumentException("目录授权必须选择工作区。");
+    if (effectiveFiles == null || effectiveFiles.isEmpty())
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.fileRequired"));
+    if (effectiveFiles.size() > AuthorizedFileSet.MAX_SCOPE)
+      throw new IllegalArgumentException(
+          AuthorizedFileSet.tooManyFilesMessage(AuthorizedFileSet.MAX_SCOPE));
+    List<String> effective = AuthorizedFileSet.normalizeScope(effectiveFiles);
+    workspaces.requireDirectoryStillAuthorized(workspaceId, dirs, excluded, effective);
+    return new Prepared(List.of(), dirs, excluded, effective);
+  }
+
+  private static List<String> normalizeDirectories(List<String> directories) {
+    if (directories == null || directories.isEmpty()) return List.of();
+    var result = new java.util.ArrayList<String>();
+    for (String raw : directories) {
+      String normalized = AuthorizedFileSet.normalizeDirectory(raw);
+      if (!result.contains(normalized)) result.add(normalized);
+    }
+    return List.copyOf(result);
+  }
+
+  private static List<String> normalizeExclusions(List<String> exclusions) {
+    if (exclusions == null || exclusions.isEmpty()) return List.of();
+    var result = new java.util.ArrayList<String>();
+    for (String raw : exclusions) {
+      String normalized = AuthorizedFileSet.normalize(raw);
+      if (!result.contains(normalized)) result.add(normalized);
+    }
+    return List.copyOf(result);
   }
 
   /** 将已展开范围与任务一起保存；同一事务中失败不会留下半成品策略。 */
@@ -123,7 +171,7 @@ public class WorkspaceAuthorizationService {
         scopes
             .findById(taskId)
             .orElseThrow(() -> new IllegalArgumentException("该任务没有目录授权记录。"));
-    String normalized = AuthorizedFileSet.normalize(directory);
+    String normalized = AuthorizedFileSet.normalizeDirectory(directory);
     var directories = new ArrayList<>(readList(row.getDirectoryScopesJson()));
     if (!directories.remove(normalized))
       throw new IllegalArgumentException("该路径不在目录授权中。");

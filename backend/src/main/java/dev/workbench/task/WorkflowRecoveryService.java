@@ -436,7 +436,8 @@ public class WorkflowRecoveryService {
   /** 恢复前重新读取授权文件，证明分析时的版本与当前内容一致。*/
   private void verifyCurrentResources(
       dev.workbench.domain.TaskDefinition task, List<Evidence> evidence) {
-    var authorized = new AuthorizedFileSet(task.fileScopes());
+    // 任务范围可能来自整个工作区展开（最多 200 个文件），这里按集合核对而不是手工选择上限。
+    var authorized = new java.util.HashSet<>(AuthorizedFileSet.normalizeScope(task.fileScopes()));
     for (var item : evidence) {
       Map<String, String> versions;
       try {
@@ -447,10 +448,12 @@ public class WorkflowRecoveryService {
       for (var entry : versions.entrySet()) {
         String path;
         try {
-          path = authorized.require(entry.getKey());
+          path = AuthorizedFileSet.normalize(entry.getKey());
         } catch (IllegalArgumentException e) {
-          throw new UnsafeBoundaryException("工具读取的文件已不在当前授权范围，不能复用该结果。");
+          throw new UnsafeBoundaryException("工具读取的文件路径无效，不能复用该结果。");
         }
+        if (!authorized.contains(path))
+          throw new UnsafeBoundaryException("工具读取的文件已不在当前授权范围，不能复用该结果。");
         String current;
         try {
           current = workspaces.read(task.workspaceId(), path).sha256();

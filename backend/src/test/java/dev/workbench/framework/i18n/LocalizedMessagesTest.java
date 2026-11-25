@@ -28,6 +28,38 @@ class LocalizedMessagesTest {
     assertEquals("missing.key", LocalizedMessages.get(Locale.US, "missing.key"));
   }
 
+  /** 任务校验文案必须按 Accept-Language 解析成自然语言，而不是回退成裸键名。 */
+  @Test
+  void resolvesTaskValidationCopyForBothLanguages() {
+    var bundle = new ResourceBundleMessageSource();
+    bundle.setBasenames("i18n/messages");
+    bundle.setDefaultEncoding("UTF-8");
+    LocalizedMessages.configure(bundle);
+
+    assertEquals(
+        "请选择至少一个授权文件或目录。",
+        LocalizedMessages.get(Locale.SIMPLIFIED_CHINESE, "validation.task.fileRequired"));
+    assertEquals(
+        "Select at least one authorized file or directory.",
+        LocalizedMessages.get(Locale.US, "validation.task.fileRequired"));
+  }
+
+  /** 装配层注入空 MessageSource 时仍必须回退到内置资源包，不能把 key 交给页面。 */
+  @Test
+  void fallsBackToBundledMessagesWhenInjectedSourceIsEmpty() {
+    LocalizedMessages.configure(new org.springframework.context.support.DelegatingMessageSource());
+    try {
+      assertEquals(
+          "请选择至少一个授权文件或目录。",
+          LocalizedMessages.get(Locale.SIMPLIFIED_CHINESE, "validation.task.fileRequired"));
+      assertEquals(
+          "Select at least one authorized file or directory.",
+          LocalizedMessages.get(Locale.US, "validation.task.fileRequired"));
+    } finally {
+      LocalizedMessages.configure(null);
+    }
+  }
+
   @Test
   void defaultsToChineseWhenNoMessageSourceConfigured() {
     var bundle = new ResourceBundleMessageSource();

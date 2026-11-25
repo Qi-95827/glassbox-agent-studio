@@ -245,6 +245,32 @@ public class WorkspaceService {
     return create(repo.toString(), "main", true);
   }
 
+  /**
+   * 管理员一键导入前的路径校验：必须是可访问的 Git 仓库根目录。
+   *
+   * <p>只做只读校验，不创建授权或工作区记录；通过后再登记授权并创建独立 worktree。
+   */
+  public void requireImportableRepository(String repository) {
+    if (repository == null || repository.isBlank())
+      throw new IllegalArgumentException("请填写本地仓库目录与基础分支。");
+    Path repo;
+    try {
+      repo = Path.of(repository).toRealPath();
+    } catch (IOException | RuntimeException e) {
+      throw new IllegalArgumentException("仓库目录不存在或不可访问。");
+    }
+    if (!Files.isDirectory(repo)) throw new IllegalArgumentException("仓库路径不是目录。");
+    String top = git.runGit(repo, "rev-parse", "--show-toplevel").strip();
+    Path root;
+    try {
+      root = Path.of(top).toRealPath();
+    } catch (IOException e) {
+      throw new IllegalArgumentException("无法定位仓库根目录。");
+    }
+    if (!root.equals(repo))
+      throw new IllegalArgumentException("请填写仓库根目录，而不是子目录或非仓库目录。");
+  }
+
   public Workspace get(String id) {
     return workspaceRows
         .findById(id)

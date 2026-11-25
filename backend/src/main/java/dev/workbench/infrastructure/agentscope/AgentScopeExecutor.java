@@ -199,10 +199,11 @@ public class AgentScopeExecutor implements AgentExecutor {
     var runtime = request.runtime();
     if (stage != CheckpointStage.BEFORE_TOOL)
       throw new IllegalArgumentException("当前仅支持从 Agent 启动前恢复。");
+    // 目录（含整个工作区 "."）展开后的任务范围可达 200 个文件，因此沿用服务端范围规范化而不是手工选择上限。
     var scopedFiles =
-        workspaceId == null ? List.<String>of() : new AuthorizedFileSet(fileScopes).paths();
+        workspaceId == null ? List.<String>of() : AuthorizedFileSet.normalizeScope(fileScopes);
     var scopedWrites =
-        writeFiles.isEmpty() ? List.<String>of() : new AuthorizedFileSet(writeFiles).paths();
+        writeFiles.isEmpty() ? List.<String>of() : AuthorizedFileSet.normalizeScope(writeFiles);
     var assembly =
         assemblyPlanner.plan(
             role,

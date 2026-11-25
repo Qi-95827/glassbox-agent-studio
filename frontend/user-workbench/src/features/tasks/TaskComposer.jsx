@@ -32,12 +32,24 @@ import { workflowCompatible } from '../bug/bugEntryDefaults';
 import TaskIdeaDialog from './TaskIdeaDialog';
 import PlanCandidateDialog from './PlanCandidateDialog';
 import AdvancedRunConfig from './AdvancedRunConfig';
+import WorkspaceAuthorizationBar, {
+  SCOPE_DIRECTORY,
+  SCOPE_FILES,
+  SCOPE_WORKSPACE
+} from './WorkspaceAuthorizationBar';
 import NewWorkspaceDialog from '../workspaces/NewWorkspaceDialog';
 import BugVerifyDialog from '../bug/BugVerifyDialog';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
 
 const entryOptions = ['GENERAL', 'REQUIREMENT', 'DESIGN', 'CODE', 'TEST', 'BUG'];
+
+/** 代码与 Bug 入口默认允许修改；测试与通用入口保持只读，用户仍可随时切换。 */
+const writeDefaultEntries = ['CODE', 'BUG'];
+
+function writeDefaultFor(entryKind) {
+  return writeDefaultEntries.includes(entryKind);
+}
 
 const initialDraft = {
   entryKind: 'CODE',
@@ -47,6 +59,7 @@ const initialDraft = {
   workflowTemplate: null,
   reviewPlan: true,
   workspaceId: '',
+  authMode: SCOPE_WORKSPACE,
   fileScopes: '',
   directories: '',
   exclusions: '',
@@ -68,6 +81,26 @@ const initialDraft = {
   toolBudgets: {},
   nodeBudgets: {}
 };
+
+/**
+ * 把三档授权模式翻译成创建任务请求体。
+ *
+ * <p>整个工作区固定发送 {@code directoryScopes: ['.']} 与空文件列表，由服务端展开并排除噪音目录。
+ */
+export function scopePayload(draft) {
+  if (!draft.workspaceId) return { fileScopes: null, directoryScopes: null, excludedPaths: null };
+  if (draft.authMode === SCOPE_DIRECTORY) {
+    return {
+      fileScopes: [],
+      directoryScopes: splitLines(draft.directories),
+      excludedPaths: splitLines(draft.exclusions)
+    };
+  }
+  if (draft.authMode === SCOPE_FILES) {
+    return { fileScopes: splitLines(draft.fileScopes), directoryScopes: [], excludedPaths: [] };
+  }
+  return { fileScopes: [], directoryScopes: ['.'], excludedPaths: [] };
+}
 
 function draftReducer(state, action) {
   return { ...state, ...action };
@@ -136,10 +169,9 @@ export default function TaskComposer({ onCreated, onModelChange }) {
   const hasPlannableRoute =
     Boolean(draft.workflowTemplate) ||
     ['CODE', 'TEST', 'REQUIREMENT', 'DESIGN', 'BUG'].includes(draft.entryKind);
-  const fileScopes = splitLines(draft.fileScopes);
-  const directories = splitLines(draft.directories);
   const constraints = splitLines(draft.constraints);
   const acceptanceCriteria = splitLines(draft.acceptance);
+  const scope = scopePayload(draft);
   const workspaceState = {
     hasWorkspace: Boolean(draft.workspaceId),
     hasBug: Boolean(draft.bugId) || draft.entryKind === 'BUG',
@@ -170,6 +202,18 @@ export default function TaskComposer({ onCreated, onModelChange }) {
       toast.warning(t('composer.workflowMismatch'));
       return;
     }
+    if (
+      draft.workspaceId &&
+      draft.authMode === SCOPE_DIRECTORY &&
+      scope.directoryScopes.length === 0
+    ) {
+      toast.warning(t('composer.scopeDirectoryRequired'));
+      return;
+    }
+    if (draft.workspaceId && draft.authMode === SCOPE_FILES && scope.fileScopes.length === 0) {
+      toast.warning(t('composer.scopeFilesRequired'));
+      return;
+    }
     setSending(true);
     try {
       const result = await tasksApi.create({
@@ -193,9 +237,9 @@ export default function TaskComposer({ onCreated, onModelChange }) {
         maxSeconds: numberOrNull(draft.seconds),
         workspaceId: draft.workspaceId || null,
         fileScope: null,
-        fileScopes: draft.workspaceId ? fileScopes : null,
-        directoryScopes: draft.workspaceId ? directories : null,
-        excludedPaths: draft.workspaceId ? splitLines(draft.exclusions) : null,
+        fileScopes: scope.fileScopes,
+        directoryScopes: scope.directoryScopes,
+        excludedPaths: scope.excludedPaths,
         maxCostMicros: numberOrNull(draft.maxCost),
         writeEnabled: Boolean(draft.workspaceId && draft.writeEnabled),
         bugId: draft.entryKind === 'BUG' ? draft.bugId : null,
@@ -242,7 +286,14 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           exclusive
           size="small"
           value={draft.entryKind}
-          onChange={(_, value) => value && patch({ entryKind: value })}
+          onChange={(_, value) =>
+            value &&
+            patch({
+              entryKind: value,
+              // 入口切换后按新入口重置写入默认值：CODE/BUG 允许修改，其余保持只读。
+              writeEnabled: draft.workspaceId ? writeDefaultFor(value) : false
+            })
+          }
           aria-label={t('composer.entryAria')}
           sx={{ flexWrap: 'wrap', rowGap: 0.5 }}
         >
@@ -330,6 +381,8 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             </Button>
           </Stack>
         </Stack>
+
+        {draft.workspaceId && <WorkspaceAuthorizationBar draft={draft} patch={patch} />}
       </Box>
 
       <Menu
@@ -421,7 +474,9 @@ export default function TaskComposer({ onCreated, onModelChange }) {
             onClick={() => {
               patch({
                 workspaceId: item.id,
-                writeEnabled: false,
+                // 选定工作区即默认启用「整个工作区」授权，按入口决定是否允许修改。
+                authMode: SCOPE_WORKSPACE,
+                writeEnabled: writeDefaultFor(draft.entryKind),
                 memoryEnabled: false,
                 bugId: null
               });
@@ -505,7 +560,9 @@ export default function TaskComposer({ onCreated, onModelChange }) {
           candidateAgentIds: [],
           manualAgentId: null,
           manualAgentVersion: null,
-          fileScopes,
+          fileScopes: scope.fileScopes ?? [],
+          directoryScopes: scope.directoryScopes ?? [],
+          excludedPaths: scope.excludedPaths ?? [],
           constraints,
           acceptanceCriteria,
           deliverable: null,
@@ -517,7 +574,14 @@ export default function TaskComposer({ onCreated, onModelChange }) {
       <NewWorkspaceDialog
         open={workspaceDialog}
         onClose={() => setWorkspaceDialog(false)}
-        onCreated={created => patch({ workspaceId: created.id })}
+        onCreated={created =>
+          patch({
+            workspaceId: created.id,
+            authMode: SCOPE_WORKSPACE,
+            writeEnabled: writeDefaultFor(draft.entryKind),
+            memoryEnabled: false
+          })
+        }
       />
 
       <BugVerifyDialog

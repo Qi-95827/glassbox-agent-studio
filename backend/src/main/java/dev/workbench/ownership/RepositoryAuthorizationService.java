@@ -58,6 +58,27 @@ public class RepositoryAuthorizationService {
   @Transactional
   public GrantView grant(String username, String repositoryPath) {
     UserEntity admin = auth.requireAdmin();
+    return grantInternal(admin, username, repositoryPath);
+  }
+
+  /** 仅确认当前会话是管理员；供一键导入在触碰 Git 与数据库之前快速拒绝普通账号。 */
+  @Transactional(readOnly = true)
+  public void requireCurrentAdmin() {
+    auth.requireAdmin();
+  }
+
+  /**
+   * 为当前管理员登记仓库导入授权（幂等）。
+   *
+   * <p>管理员身份只来自服务端会话；调用方不需要、也不允许自行传入账号名。
+   */
+  @Transactional
+  public GrantView grantToCurrentAdmin(String repositoryPath) {
+    UserEntity admin = auth.requireAdmin();
+    return grantInternal(admin, admin.getUsername(), repositoryPath);
+  }
+
+  private GrantView grantInternal(UserEntity admin, String username, String repositoryPath) {
     if (username == null || username.isBlank())
       throw new IllegalArgumentException("请选择要授权的账号。");
     UserEntity user =

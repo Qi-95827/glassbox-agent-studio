@@ -72,6 +72,7 @@ class PlanCandidateIntegrationTest {
   @Autowired ObjectMapper json;
   @Autowired PlanCandidateService candidates;
   @Autowired WorkspaceService workspaces;
+  @Autowired dev.workbench.workspace.WorkspaceAuthorizationService workspaceAuthorization;
   @Autowired RunRecordService records;
 
   @BeforeEach
@@ -279,6 +280,70 @@ class PlanCandidateIntegrationTest {
   }
 
   private static final List<String> FILES = List.of("index.html", "sort.js", "style.css");
+
+  @Test
+  void wholeWorkspaceScopeIsExpandedBeforePlanning() {
+    String workspace = workspaces.createIdeaWorkspace(FILES).id();
+    REPLIES.offer(VALID);
+    var created =
+        candidates.generate(
+            new PlanCandidateService.GenerateRequest(
+                "req-scope-0001", wholeScopeInput(workspace), null, "draft-scope-0001"));
+    var view = await(created.id());
+
+    assertEquals("READY", view.status(), String.valueOf(view.errors()));
+    // 输入快照必须保存服务端展开后的有效文件集合与原始目录范围。
+    assertEquals(List.of("."), view.input().directoryScopes());
+    assertEquals(List.of(), view.input().excludedPaths());
+    assertEquals(FILES, view.input().fileScopes());
+    assertEquals(view.input().sha256(), view.inputSha256());
+    assertTrue(view.candidate().nodes().stream().anyMatch(node -> !node.readFiles().isEmpty()));
+  }
+
+  @Test
+  void wholeWorkspaceCandidateCanBeConfirmedIntoARun() throws Exception {
+    String workspace = workspaces.createIdeaWorkspace(FILES).id();
+    REPLIES.offer(VALID);
+    var created =
+        candidates.generate(
+            new PlanCandidateService.GenerateRequest(
+                "req-scope-confirm-0001", wholeScopeInput(workspace), null, "draft-scope-confirm"));
+    var view = await(created.id());
+    assertEquals("READY", view.status(), String.valueOf(view.errors()));
+
+    var confirmed =
+        candidates.confirm(
+            created.id(),
+            new PlanCandidateService.ConfirmRequest(
+                view.candidateSha256(), view.inputSha256(), view.inputVersion(), "mock", null));
+
+    // 候选被唯一消费：确认事务提交后再次确认返回同一运行。
+    assertEquals(confirmed.runId(), candidates.get(created.id()).runId());
+    // 运行沿用展开后的有效文件集合；工具边界仍按任务文件授权与目录范围复验。
+    assertEquals(FILES, records.taskDefinition(confirmed.taskId()).fileScopes());
+    workspaceAuthorization.requireCurrent(confirmed.taskId());
+  }
+
+  private PlanCandidateInput wholeScopeInput(String workspaceId) {
+    return new PlanCandidateInput(
+        "制作可单步演示的冒泡排序网页",
+        TaskEntryKind.CODE,
+        workspaceId,
+        true,
+        List.of(),
+        List.of("使用原生 JavaScript，不引入构建工具。"),
+        List.of("输入 5,1,4,2,8，单步执行后显示升序结果 1,2,4,5,8。"),
+        "冒泡排序网页",
+        "BUILTIN",
+        null,
+        null,
+        List.of(),
+        false,
+        null,
+        null,
+        List.of("."),
+        List.of());
+  }
 
   private PlanCandidateInput input(String workspaceId, String goal) {
     return new PlanCandidateInput(

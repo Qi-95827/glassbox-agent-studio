@@ -19,6 +19,22 @@ import java.util.regex.Pattern;
 /** 工作区文件授权：路径解析、读写、声明文件与摘要；不直接承载 Git 交付命令。 */
 final class WorkspaceFileService {
   private static final int FILE_LIMIT = 1_000_000;
+
+  /** 二进制嗅探窗口：命中 NUL 字节即视为非文本，避免把图片/压缩包当作可授权文本。 */
+  private static final int BINARY_SNIFF_BYTES = 8_192;
+
+  /**
+   * 展开整个工作区（{@code "."}）时默认排除的构建与依赖目录。
+   *
+   * <p>与用户显式填写的排除路径合并生效；用户仍可添加更多排除项，但不能因此取消这些默认规则。
+   */
+  static final List<String> DEFAULT_SCOPE_EXCLUSIONS =
+      List.of(
+          ".git", "node_modules", "target", "dist", "build", ".venv", "__pycache__", ".idea",
+          ".vscode");
+
+  /** 整个工作区范围标记；{@code "./"} 在规范化后同样是 {@code "."}。 */
+  static final String WORKSPACE_ROOT_SCOPE = ".";
   private static final Pattern IDEA_FILE =
       Pattern.compile(
           "[a-zA-Z0-9][a-zA-Z0-9_.-]{0,70}\\.(html|css|js|md|txt|json|py|ts|jsx|tsx|java|svg)",
@@ -286,13 +302,15 @@ final class WorkspaceFileService {
   /**
    * 目录授权展开：只列出 Git 跟踪或未忽略的普通文本文件，应用排除规则并限制数量。
    *
-   * <p>目录本身必须是工作区内真实目录；符号链接、{@code .git} 和排除项都不会进入结果。该结果是服务端冻结的授权快照，模型不能自行扩展。
+   * <p>目录本身必须是工作区内真实目录；{@code "."} 表示整个工作区根目录，此时额外排除常见构建/依赖
+   * 噪音目录。符号链接、{@code .git}、二进制与超大文件都不会进入结果。该结果是服务端冻结的授权快照，
+   * 模型不能自行扩展；超过上限时明确拒绝并提示缩小范围，不做静默截断。
    */
   List<String> authorizedFiles(
       WorkspaceService.Workspace workspace, List<String> directories, List<String> exclusions) {
     Path root = Path.of(workspace.workspacePath()).toAbsolutePath().normalize();
     List<String> normalizedDirectories = normalizeDirectories(root, directories);
-    List<String> normalizedExclusions = normalizeExclusions(exclusions);
+    List<String> normalizedExclusions = scopeExclusions(exclusions, normalizedDirectories);
     if (normalizedDirectories.isEmpty())
       throw new IllegalArgumentException("目录授权至少需要一个工作区内目录。");
     String output =
@@ -310,10 +328,13 @@ final class WorkspaceFileService {
       if (path.isEmpty() || !insideDirectories(path, normalizedDirectories)) continue;
       if (excluded(path, normalizedExclusions)) continue;
       if (!isFileCandidate(workspace, path)) continue;
+      if (result.size() >= AuthorizedFileSet.MAX_SCOPE)
+        throw new IllegalArgumentException(AuthorizedFileSet.tooManyFilesMessage(AuthorizedFileSet.MAX_SCOPE));
       result.add(path);
-      if (result.size() >= 200) break;
     }
-    if (result.isEmpty()) throw new IllegalArgumentException("授权目录内没有可用文本文件。");
+    if (result.isEmpty())
+      throw new IllegalArgumentException(
+          dev.workbench.framework.i18n.LocalizedMessages.get("validation.task.scopeEmpty"));
     return List.copyOf(result);
   }
 
@@ -325,7 +346,9 @@ final class WorkspaceFileService {
       List<String> files) {
     Path root = Path.of(workspace.workspacePath()).toAbsolutePath().normalize();
     List<String> normalizedDirectories = normalizeDirectories(root, directories);
-    List<String> normalizedExclusions = normalizeExclusions(exclusions);
+    List<String> normalizedExclusions = scopeExclusions(exclusions, normalizedDirectories);
+    if (normalizedDirectories.isEmpty())
+      throw new IllegalStateException("授权范围已撤销或目录配置缺失。");
     for (String path : files) {
       if (!insideDirectories(path, normalizedDirectories) || excluded(path, normalizedExclusions))
         throw new IllegalStateException("授权范围已撤销或排除规则已变化：" + path);
@@ -338,17 +361,19 @@ final class WorkspaceFileService {
     if (directories == null || directories.isEmpty()) return List.of();
     var result = new ArrayList<String>();
     for (String raw : directories) {
-      String normalized = AuthorizedFileSet.normalize(raw);
+      String normalized = AuthorizedFileSet.normalizeDirectory(raw);
       Path target = root.resolve(normalized).normalize();
       if (!target.startsWith(root) || !Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS))
         throw new IllegalArgumentException("授权目录不存在或不是普通目录：" + raw);
       Path current = root;
-      for (Path part : root.relativize(target)) {
-        current = current.resolve(part);
-        if (Files.isSymbolicLink(current))
-          throw new IllegalArgumentException("授权目录不能包含符号链接：" + raw);
-      }
-      result.add(normalized);
+      // 整个工作区根目录本身就是解析后的真实路径，只有其下各级目录需要检查符号链接。
+      if (!WORKSPACE_ROOT_SCOPE.equals(normalized))
+        for (Path part : root.relativize(target)) {
+          current = current.resolve(part);
+          if (Files.isSymbolicLink(current))
+            throw new IllegalArgumentException("授权目录不能包含符号链接：" + raw);
+        }
+      if (!result.contains(normalized)) result.add(normalized);
     }
     return List.copyOf(result);
   }
@@ -356,13 +381,34 @@ final class WorkspaceFileService {
   private static List<String> normalizeExclusions(List<String> exclusions) {
     if (exclusions == null || exclusions.isEmpty()) return List.of();
     var result = new ArrayList<String>();
-    for (String raw : exclusions) result.add(AuthorizedFileSet.normalize(raw));
+    for (String raw : exclusions) {
+      String normalized = AuthorizedFileSet.normalize(raw);
+      if (!result.contains(normalized)) result.add(normalized);
+    }
     return List.copyOf(result);
   }
 
+  /** 用户排除项与默认噪音目录合并；默认项只在展开整个工作区时追加。 */
+  private static List<String> scopeExclusions(
+      List<String> exclusions, List<String> normalizedDirectories) {
+    var result = new ArrayList<String>();
+    if (normalizedDirectories.contains(WORKSPACE_ROOT_SCOPE))
+      result.addAll(DEFAULT_SCOPE_EXCLUSIONS);
+    for (String value : normalizeExclusions(exclusions))
+      if (!result.contains(value)) result.add(value);
+    return List.copyOf(result);
+  }
+
+  /**
+   * 路径是否落在授权目录内；{@code "."} 覆盖工作区内全部相对路径。
+   *
+   * <p>这只是第一层过滤，符号链接、{@code .git}、二进制与超大文件仍由 {@link #isFileCandidate} 拒绝。
+   */
   private static boolean insideDirectories(String path, List<String> directories) {
-    for (String directory : directories)
+    for (String directory : directories) {
+      if (WORKSPACE_ROOT_SCOPE.equals(directory)) return true;
       if (path.equals(directory) || path.startsWith(directory + "/")) return true;
+    }
     return false;
   }
 
@@ -378,10 +424,24 @@ final class WorkspaceFileService {
       if (!relative.strip().equals(relative)
           || !AuthorizedFileSet.normalize(relative).equals(relative)) return false;
       Path target = resolveFile(workspace, relative);
-      return Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
-          && Files.size(target) <= FILE_LIMIT;
+      if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
+          || Files.size(target) > FILE_LIMIT) return false;
+      return !looksBinary(target);
     } catch (IllegalArgumentException | IOException e) {
       return false;
     }
+  }
+
+  /** 以 NUL 字节作为二进制判据；读取失败同样视为不可授权候选。 */
+  private static boolean looksBinary(Path target) {
+    byte[] buffer = new byte[BINARY_SNIFF_BYTES];
+    int read;
+    try (var input = Files.newInputStream(target)) {
+      read = input.read(buffer);
+    } catch (IOException e) {
+      return true;
+    }
+    for (int index = 0; index < read; index++) if (buffer[index] == 0) return true;
+    return false;
   }
 }

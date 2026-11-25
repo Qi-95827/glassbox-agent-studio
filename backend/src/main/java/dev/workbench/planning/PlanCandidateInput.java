@@ -9,6 +9,9 @@ import java.util.Objects;
  * 用户已确认的规划输入快照。
  *
  * <p>只包含任务目标、约束、验收条件、交付物和工作区文件白名单；不包含模型凭据、命令、 工具权限或审批结果。文件白名单在生成候选时冻结，确认运行时仍必须按当前权限重新核对。
+ *
+ * <p>目录范围（{@code directoryScopes}）在整个工作区 {@code "."} 时由服务端展开为有效文件集合，展开结果
+ * 写回 {@code fileScopes} 并随候选一起冻结；排除规则一并保存，确认运行时重新核对。
  */
 public record PlanCandidateInput(
     String goal,
@@ -25,7 +28,9 @@ public record PlanCandidateInput(
     List<String> candidateAgentIds,
     boolean readOnly,
     String modelConnectionId,
-    String locale) {
+    String locale,
+    List<String> directoryScopes,
+    List<String> excludedPaths) {
   /** 兼容未选择自带 Key 连接、也未记录语言的旧候选与客户端。 */
   public PlanCandidateInput(
       String goal,
@@ -57,7 +62,9 @@ public record PlanCandidateInput(
         candidateAgentIds,
         readOnly,
         modelConnectionId,
-        null);
+        null,
+        List.of(),
+        List.of());
   }
 
   /** 兼容未选择自带 Key 连接的旧候选与客户端。 */
@@ -94,6 +101,8 @@ public record PlanCandidateInput(
 
   private static final int MAX_ITEMS = 10;
   private static final int MAX_ITEM_LENGTH = 300;
+  private static final int MAX_DIRECTORIES = 20;
+  private static final int MAX_EXCLUSIONS = 20;
 
   /** 兼容旧候选与旧客户端：未指定 Agent 时沿用内置定义映射。 */
   public PlanCandidateInput(
@@ -128,10 +137,15 @@ public record PlanCandidateInput(
     if (entryKind != TaskEntryKind.CODE) throw new IllegalArgumentException("本期只为代码入口生成执行计划草稿。");
     if (readOnly && writeEnabled) throw new IllegalArgumentException("只读计划不能同时申请写入授权。");
     if (!readOnly && !writeEnabled) throw new IllegalArgumentException("生成执行计划需要用户确认的写入授权。");
+    directoryScopes = directories(directoryScopes, workspaceId);
+    excludedPaths = exclusions(excludedPaths);
     fileScopes =
         fileScopes == null || fileScopes.isEmpty()
             ? List.of()
-            : new AuthorizedFileSet(fileScopes).paths();
+            // 目录展开结果允许超过手工选择上限；没有目录授权时仍按显式文件上限校验。
+            : directoryScopes.isEmpty()
+                ? new AuthorizedFileSet(fileScopes).paths()
+                : AuthorizedFileSet.normalizeScope(fileScopes);
     if (workspaceId == null && fileScopes.isEmpty())
       throw new IllegalArgumentException("独立交付需要先确认至少一个交付文件。");
     constraints = items(constraints, MAX_ITEMS, "约束", false);
@@ -196,7 +210,9 @@ public record PlanCandidateInput(
         candidateAgentIds,
         readOnly,
         modelConnectionId,
-        normalized);
+        normalized,
+        directoryScopes,
+        excludedPaths);
   }
 
   /** 已确认的授权快照；模型节点只能引用其中的文件。 */
@@ -222,7 +238,32 @@ public record PlanCandidateInput(
         candidateAgentIds,
         readOnly,
         connectionId,
-        locale);
+        locale,
+        directoryScopes,
+        excludedPaths);
+  }
+
+  /** 目录展开后的服务端快照：保留目录与排除规则，同时冻结有效文件集合。 */
+  public PlanCandidateInput withExpandedScope(
+      List<String> directories, List<String> exclusions, List<String> effectiveFiles) {
+    return new PlanCandidateInput(
+        goal,
+        entryKind,
+        workspaceId,
+        writeEnabled,
+        effectiveFiles,
+        constraints,
+        acceptanceCriteria,
+        deliverable,
+        agentMode,
+        manualAgentId,
+        manualAgentVersion,
+        candidateAgentIds,
+        readOnly,
+        modelConnectionId,
+        locale,
+        directories,
+        exclusions);
   }
 
   /** 输入摘要进入候选摘要；同一内容的重复请求得到同一指纹。 */
@@ -235,6 +276,13 @@ public record PlanCandidateInput(
             .field(writeEnabled ? "write" : "read")
             .field(fileScopes.size());
     for (String path : fileScopes) digest.field(path);
+    // 仅在声明目录授权时扩展摘要，历史候选的输入指纹保持完全不变。
+    if (!directoryScopes.isEmpty()) {
+      digest.field("directory-scopes-v1").field(directoryScopes.size());
+      for (String directory : directoryScopes) digest.field(directory);
+      digest.field(excludedPaths.size());
+      for (String path : excludedPaths) digest.field(path);
+    }
     digest.field(constraints.size());
     for (String item : constraints) digest.field(item);
     digest.field(acceptanceCriteria.size());
@@ -252,6 +300,32 @@ public record PlanCandidateInput(
     // 未选择自带 Key 时保持历史输入摘要不变，旧候选仍可读取和校验。
     if (modelConnectionId != null) digest.field(modelConnectionId);
     return digest.hex();
+  }
+
+  /** 目录授权规范化：允许 {@code "."} 表示整个工作区，最多 20 个范围项。 */
+  private static List<String> directories(List<String> values, String workspaceId) {
+    if (values == null || values.isEmpty()) return List.of();
+    if (values.size() > MAX_DIRECTORIES)
+      throw new IllegalArgumentException("目录范围最多 " + MAX_DIRECTORIES + " 条。");
+    if (workspaceId == null) throw new IllegalArgumentException("目录授权必须选择工作区。");
+    var result = new java.util.ArrayList<String>();
+    for (String value : values) {
+      String normalized = AuthorizedFileSet.normalizeDirectory(value);
+      if (!result.contains(normalized)) result.add(normalized);
+    }
+    return List.copyOf(result);
+  }
+
+  private static List<String> exclusions(List<String> values) {
+    if (values == null || values.isEmpty()) return List.of();
+    if (values.size() > MAX_EXCLUSIONS)
+      throw new IllegalArgumentException("排除路径最多 " + MAX_EXCLUSIONS + " 条。");
+    var result = new java.util.ArrayList<String>();
+    for (String value : values) {
+      String normalized = AuthorizedFileSet.normalize(value);
+      if (!result.contains(normalized)) result.add(normalized);
+    }
+    return List.copyOf(result);
   }
 
   private static String required(String value, int maximum, String name) {

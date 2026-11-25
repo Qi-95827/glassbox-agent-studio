@@ -81,6 +81,8 @@ class PlanCandidateGenerationService {
     PlanCandidateInput input = Objects.requireNonNull(request.input(), "任务输入不能为空");
     ExecutionScope scope = scopes.current();
     if (input.workspaceId() != null) ownership.requireWorkspace(input.workspaceId());
+    // 目录授权（含整个工作区 "."）先展开并冻结，后续摘要、快照与模型输入都使用同一份有效文件集合。
+    input = workspaces.expandDirectories(input);
     String planningConnection = connections == null ? null : input.modelConnectionId();
     if (planningConnection != null)
       planningConnection = connections.requireEnabledOwned(planningConnection);

@@ -12,6 +12,7 @@ public class WorkspaceController {
   private final WorkspaceFileCatalog catalog;
   private final GitDeliveryService deliveries;
   private final dev.workbench.ownership.OwnershipService ownership;
+  private final dev.workbench.ownership.RepositoryAuthorizationService repositoryAuthorization;
 
   public WorkspaceController(
       WorkspaceService service,
@@ -19,22 +20,29 @@ public class WorkspaceController {
       WorkspaceCommitService commits,
       WorkspaceFileCatalog catalog,
       GitDeliveryService deliveries,
-      dev.workbench.ownership.OwnershipService ownership) {
+      dev.workbench.ownership.OwnershipService ownership,
+      dev.workbench.ownership.RepositoryAuthorizationService repositoryAuthorization) {
     this.service = service;
     this.approvals = approvals;
     this.commits = commits;
     this.catalog = catalog;
     this.deliveries = deliveries;
     this.ownership = ownership;
+    this.repositoryAuthorization = repositoryAuthorization;
   }
 
   private void require(String workspaceId) {
     ownership.requireWorkspace(workspaceId);
   }
 
-  public record CreateWorkspace(String repositoryPath, String baseBranch, String workBranch) {
+  public record CreateWorkspace(
+      String repositoryPath, String baseBranch, String workBranch, Boolean autoGrantForAdmin) {
     public CreateWorkspace(String repositoryPath, String baseBranch) {
       this(repositoryPath, baseBranch, null);
+    }
+
+    public CreateWorkspace(String repositoryPath, String baseBranch, String workBranch) {
+      this(repositoryPath, baseBranch, workBranch, null);
     }
   }
 
@@ -73,7 +81,24 @@ public class WorkspaceController {
 
   @PostMapping
   public Object create(@RequestBody CreateWorkspace request) {
+    grantRepositoryForAdmin(request);
     return service.create(request.repositoryPath(), request.baseBranch(), request.workBranch());
+  }
+
+  /**
+   * 管理员一键导入：为当前管理员登记目标仓库后再创建独立 worktree。
+   *
+   * <p>安全边界：只有经过服务端会话确认的管理员可以触发；普通用户携带该标记会被拒绝（403），且不会写入
+   * 任何授权记录或工作区。未携带该字段的旧请求体保持原有行为，完全不受影响。
+   */
+  private void grantRepositoryForAdmin(CreateWorkspace request) {
+    if (!Boolean.TRUE.equals(request.autoGrantForAdmin())) return;
+    // 管理员身份只来自服务端会话；普通用户在这里就被拒绝（403），不会产生授权或工作区。
+    repositoryAuthorization.requireCurrentAdmin();
+    // 先做只读校验，路径无效或不是仓库根目录时不落库授权。
+    service.requireImportableRepository(request.repositoryPath());
+    // grant 幂等：已授权时直接返回既有记录，不产生重复行。
+    repositoryAuthorization.grantToCurrentAdmin(request.repositoryPath());
   }
 
   @PostMapping("/from-idea")

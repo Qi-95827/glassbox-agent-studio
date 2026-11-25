@@ -13,16 +13,17 @@ import {
   Typography
 } from '@mui/material';
 import ExpandMoreRounded from '@mui/icons-material/ExpandMoreRounded';
+import SavingsOutlined from '@mui/icons-material/SavingsOutlined';
 import TuneRounded from '@mui/icons-material/TuneRounded';
 import { splitLines } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
 import { workflowCompatible } from '../bug/bugEntryDefaults';
-import AuthorizedFilePicker from '../workspaces/AuthorizedFilePicker';
 import RoleBudgetEditor from '../agents/RoleBudgetEditor';
 import ToolBudgetEditor from '../tools/ToolBudgetEditor';
 import NodeBudgetEditor from '../workflows/NodeBudgetEditor';
 import EntryRoutePreview from '../workflows/EntryRoutePreview';
 import { useI18n } from '../../i18n/I18nProvider';
+import { SCOPE_WORKSPACE } from './WorkspaceAuthorizationBar';
 
 const workflows = [
   ['compatibility', true],
@@ -44,13 +45,15 @@ const limits = [
 ];
 
 /**
- * 高级运行配置：低频的限额、工作流、授权范围与预算全部折叠。
- * 只编辑任务草稿；兼容性判断只是前端预检，最终由服务端校验。
+ * 高级运行配置：工作流、约束、验收条件与低频预算。
+ *
+ * <p>授权范围与写入开关在主卡片下方的状态条，这里不再重复；8 个数值限额和三类预算编辑收进二级折叠，
+ * 默认收起，展开高级配置时也保持清爽。
  */
 export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onOpenPlan }) {
   const { t } = useI18n();
-  const fileScopes = splitLines(draft.fileScopes);
   const directories = splitLines(draft.directories);
+  const fileScopes = splitLines(draft.fileScopes);
   const acceptance = splitLines(draft.acceptance);
   const hasPlannableRoute =
     Boolean(draft.workflowTemplate) ||
@@ -69,6 +72,8 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
   };
   const mismatch =
     Boolean(draft.workflowTemplate) && !workflowCompatible(draft.workflowTemplate, state);
+  const scopeReady =
+    draft.authMode === SCOPE_WORKSPACE || fileScopes.length > 0 || directories.length > 0;
 
   return (
     <Accordion sx={{ mt: 1.5, bgcolor: 'transparent', border: 'none' }}>
@@ -169,85 +174,8 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
             />
           </Box>
 
-          {draft.workspaceId && (
-            <Box
-              sx={{
-                border: `1px solid ${googleTokens.outline}`,
-                borderRadius: 3,
-                p: 1.75,
-                bgcolor: '#FBFCFD'
-              }}
-            >
-              <Typography sx={{ fontSize: 13, fontWeight: 600, mb: 0.75 }}>
-                {t('advanced.scope')}
-              </Typography>
-              <Stack spacing={1.5}>
-                <TextField
-                  size="small"
-                  label={t('advanced.files')}
-                  multiline
-                  minRows={2}
-                  value={draft.fileScopes}
-                  onChange={event => patch({ fileScopes: event.target.value })}
-                  placeholder={t('advanced.filesPlaceholder')}
-                  helperText={t('advanced.filesHint')}
-                />
-                <AuthorizedFilePicker
-                  workspaceId={draft.workspaceId}
-                  value={draft.fileScopes}
-                  onChange={next => patch({ fileScopes: next })}
-                />
-                <Box
-                  sx={{
-                    display: 'grid',
-                    gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0,1fr))' },
-                    gap: 1.5
-                  }}
-                >
-                  <TextField
-                    size="small"
-                    label={t('advanced.directories')}
-                    multiline
-                    minRows={2}
-                    value={draft.directories}
-                    onChange={event => patch({ directories: event.target.value })}
-                  />
-                  <TextField
-                    size="small"
-                    label={t('advanced.exclusions')}
-                    multiline
-                    minRows={2}
-                    value={draft.exclusions}
-                    onChange={event => patch({ exclusions: event.target.value })}
-                  />
-                </Box>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={draft.writeEnabled}
-                        onChange={event => patch({ writeEnabled: event.target.checked })}
-                      />
-                    }
-                    label={<Typography variant="body2">{t('advanced.allowWrite')}</Typography>}
-                  />
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={draft.memoryEnabled}
-                        onChange={event => patch({ memoryEnabled: event.target.checked })}
-                      />
-                    }
-                    label={<Typography variant="body2">{t('advanced.memory')}</Typography>}
-                  />
-                </Stack>
-                {draft.writeEnabled && (
-                  <Alert severity="warning">{t('advanced.writeWarning')}</Alert>
-                )}
-              </Stack>
-            </Box>
+          {draft.writeEnabled && draft.workspaceId && (
+            <Alert severity="warning">{t('advanced.writeWarning')}</Alert>
           )}
 
           {draft.entryKind === 'BUG' && (
@@ -265,43 +193,83 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
             </Stack>
           )}
 
-          <Box
+          <Accordion
+            disableGutters
             sx={{
-              display: 'grid',
-              gridTemplateColumns: {
-                xs: '1fr',
-                sm: 'repeat(2, minmax(0,1fr))',
-                lg: 'repeat(4, minmax(0,1fr))'
-              },
-              gap: 1.5
+              border: '1px solid',
+              borderColor: 'divider',
+              borderRadius: 2.5,
+              boxShadow: 'none',
+              bgcolor: '#FBFCFD',
+              '&:before': { display: 'none' }
             }}
           >
-            {limits.map(key => (
-              <TextField
-                key={key}
-                size="small"
-                type="number"
-                label={t(`advanced.limit.${key}`)}
-                value={draft[key]}
-                onChange={event => patch({ [key]: event.target.value })}
-                placeholder={['rounds', 'tools'].includes(key) ? t('advanced.noLimit') : undefined}
-              />
-            ))}
-          </Box>
+            <AccordionSummary
+              expandIcon={<ExpandMoreRounded fontSize="small" />}
+              aria-label={t('advanced.budget.title')}
+            >
+              <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+                <SavingsOutlined sx={{ fontSize: 17, color: googleTokens.textSecondary }} />
+                <Stack sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {t('advanced.budget.title')}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {t('advanced.budget.subtitle')}
+                  </Typography>
+                </Stack>
+              </Stack>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Stack spacing={1.5}>
+                <Typography variant="caption" color="text.secondary">
+                  {t('advanced.budget.note')}
+                </Typography>
+                <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                  {t('advanced.budget.limits')}
+                </Typography>
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: {
+                      xs: '1fr',
+                      sm: 'repeat(2, minmax(0,1fr))',
+                      lg: 'repeat(4, minmax(0,1fr))'
+                    },
+                    gap: 1.5
+                  }}
+                >
+                  {limits.map(key => (
+                    <TextField
+                      key={key}
+                      size="small"
+                      type="number"
+                      label={t(`advanced.limit.${key}`)}
+                      value={draft[key]}
+                      onChange={event => patch({ [key]: event.target.value })}
+                      placeholder={
+                        ['rounds', 'tools'].includes(key) ? t('advanced.noLimit') : undefined
+                      }
+                    />
+                  ))}
+                </Box>
 
-          <RoleBudgetEditor
-            value={draft.roleBudgets}
-            onChange={value => patch({ roleBudgets: value })}
-          />
-          <ToolBudgetEditor
-            value={draft.toolBudgets}
-            onChange={value => patch({ toolBudgets: value })}
-          />
-          <NodeBudgetEditor
-            template={draft.workflowTemplate}
-            value={draft.nodeBudgets}
-            onChange={value => patch({ nodeBudgets: value })}
-          />
+                <RoleBudgetEditor
+                  value={draft.roleBudgets}
+                  onChange={value => patch({ roleBudgets: value })}
+                />
+                <ToolBudgetEditor
+                  value={draft.toolBudgets}
+                  onChange={value => patch({ toolBudgets: value })}
+                />
+                <NodeBudgetEditor
+                  template={draft.workflowTemplate}
+                  value={draft.nodeBudgets}
+                  onChange={value => patch({ nodeBudgets: value })}
+                />
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
 
           {hasPlannableRoute && (
             <FormControlLabel
@@ -327,41 +295,41 @@ export default function AdvancedRunConfig({ draft, patch, policy, onOpenBug, onO
               }}
             >
               <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.4 }}>
-                入口约定 · {policy.label}
+                {t('advanced.entryPolicy.title', { label: policy.label })}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                必填：{policy.requiredInputs.join('；')}
+                {t('advanced.entryPolicy.required', { items: policy.requiredInputs.join('；') })}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                交付物：{policy.deliverables.join('；')}
+                {t('advanced.entryPolicy.deliverables', {
+                  items: policy.deliverables.join('；')
+                })}
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                默认验收：{policy.defaultAcceptance.join('；')}
+                {t('advanced.entryPolicy.acceptance', {
+                  items: policy.defaultAcceptance.join('；')
+                })}
               </Typography>
             </Box>
           )}
 
-          {mismatch && (
-            <Alert severity="warning">
-              当前任务设置与所选工作流不兼容，请调整工作区或写入授权。
-            </Alert>
-          )}
+          {mismatch && <Alert severity="warning">{t('advanced.workflowMismatch')}</Alert>}
 
           <EntryRoutePreview
             entryKind={draft.entryKind}
             workspaceId={draft.workspaceId}
             writeEnabled={draft.writeEnabled}
             fileScopes={fileScopes}
-            directoryScopes={directories}
+            directoryScopes={draft.authMode === SCOPE_WORKSPACE ? ['.'] : directories}
             workflowTemplate={draft.workflowTemplate}
           />
 
           {draft.entryKind === 'CODE' &&
             draft.workspaceId &&
-            fileScopes.length > 0 &&
+            scopeReady &&
             acceptance.length > 0 && (
               <Button variant="outlined" onClick={onOpenPlan} sx={{ alignSelf: 'flex-start' }}>
-                生成执行计划草稿
+                {t('advanced.openPlanDraft')}
               </Button>
             )}
         </Stack>
