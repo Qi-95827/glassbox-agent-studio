@@ -129,6 +129,11 @@ class WorkflowScheduler {
     return template;
   }
 
+  /** 清理指定运行已放行的断点缓存，供断点取消终结时调用。 */
+  void clearReleasedBreakpoints(String runId) {
+    if (runId != null) releasedBreakpoints.remove(runId);
+  }
+
   WorkflowPlan plan(String runId) {
     return plans.workflowPlan(runId);
   }
@@ -144,6 +149,17 @@ class WorkflowScheduler {
   /** 认领与提交使用同一进程的控制边界，模型执行期间释放运行控制锁。 */
   void execute(
       String runId, WorkflowPlan plan, TaskDefinition task, RunControl control, Object stateLock) {
+    execute(runId, plan, task, control, stateLock, false);
+  }
+
+  /** 支持断点恢复重入执行：{@code resuming=true} 时跳过重复启动事件与首节点检查点落库。 */
+  void execute(
+      String runId,
+      WorkflowPlan plan,
+      TaskDefinition task,
+      RunControl control,
+      Object stateLock,
+      boolean resuming) {
     var activeAgents = java.util.concurrent.ConcurrentHashMap.<UUID>newKeySet();
     try {
       plan.requireTaskAuthorization(task);
@@ -158,13 +174,15 @@ class WorkflowScheduler {
           privateAgents.requireRunUse(ownerScope, node.definitionRef());
       workspaceAuthorization.requireCurrent(task.id().toString());
       sourceArtifacts.requireCurrent(task.id().toString());
-      evidence.event(runId, EventType.RUN_STARTED, "已保存的工作流开始执行。");
-      control.atBoundary(
-          stateLock,
-          () -> {
-            workflowRuns.checkpointBeforeFirstNode(runId, plan.id(), control.elapsed());
-            return null;
-          });
+      if (!resuming) {
+        evidence.event(runId, EventType.RUN_STARTED, "已保存的工作流开始执行。");
+        control.atBoundary(
+            stateLock,
+            () -> {
+              workflowRuns.checkpointBeforeFirstNode(runId, plan.id(), control.elapsed());
+              return null;
+            });
+      }
       executeDag(runId, plan, task, control, stateLock, activeAgents);
     } catch (dev.workbench.framework.control.PauseYield pause) {
       // 暂停发生在未认领节点的安全边界：运行保持 PAUSED，工作线程立即归还执行器，等待 /resume 重新派发。

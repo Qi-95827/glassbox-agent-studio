@@ -105,6 +105,7 @@ final class RunCommandService {
                 null));
         paused.remove(id);
         clearControl(id);
+        if (workflows != null) workflows.clearReleasedBreakpoints(id);
       } else {
         cancelled.add(id);
         Object monitor = pauseMonitors.get(id);

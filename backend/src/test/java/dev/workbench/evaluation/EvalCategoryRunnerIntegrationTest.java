@@ -82,12 +82,33 @@ class EvalCategoryRunnerIntegrationTest {
   }
 
   @Test
-  void codingRunnerCreatesRealRunAndTempWorkspace() {
+  void codingRunnerCreatesRealRunAndTempWorkspace() throws Exception {
+    java.nio.file.Path tmpRoot = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"));
+    java.util.Set<java.nio.file.Path> existingTempRepos;
+    try (var stream = java.nio.file.Files.list(tmpRoot)) {
+      existingTempRepos =
+          stream
+              .filter(path -> path.getFileName().toString().startsWith("eval-coding-"))
+              .collect(java.util.stream.Collectors.toSet());
+    }
+
     var execution =
         runner(EvalCategory.CODING_REFLECTION).run(sample("code-01"), CONFIG, "LOCAL");
     assertNotNull(execution.linkedRunId(), String.valueOf(execution.trace().get("executionError")));
     assertEquals(Boolean.TRUE, execution.evidence().get("terminal"));
     assertNotNull(execution.metrics().get("runStatus"));
     assertTrue(execution.trace().containsKey("workspacePath"));
+
+    java.nio.file.Path worktreePath =
+        java.nio.file.Path.of(String.valueOf(execution.trace().get("workspacePath")));
+    assertFalse(java.nio.file.Files.exists(worktreePath), "评测结束后临时 worktree 目录必须被清理");
+    try (var stream = java.nio.file.Files.list(tmpRoot)) {
+      var leakedRepos =
+          stream
+              .filter(path -> path.getFileName().toString().startsWith("eval-coding-"))
+              .filter(path -> !existingTempRepos.contains(path))
+              .toList();
+      assertTrue(leakedRepos.isEmpty(), "评测结束后不得遗留临时源 Git 仓库：" + leakedRepos);
+    }
   }
 }

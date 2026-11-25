@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.persistence.entity.AgentScopeSessionEntity;
 import dev.workbench.persistence.entity.EvalLabCaseResultEntity;
+import dev.workbench.persistence.entity.EvalLabRunEntity;
 import dev.workbench.persistence.entity.KnowledgeChunkEntity;
 import dev.workbench.persistence.entity.MemoryRecordEntity;
 import dev.workbench.persistence.entity.ModelCallPayloadEntity;
@@ -137,104 +138,139 @@ class PostgresPgVectorIntegrationTest {
     String chunkId = java.util.UUID.randomUUID().toString();
     String memoryId = java.util.UUID.randomUUID().toString();
     String modelCallId = java.util.UUID.randomUUID().toString();
+    String evalRunId = java.util.UUID.randomUUID().toString();
     String caseId = java.util.UUID.randomUUID().toString();
     String now = java.time.Instant.now().toString();
 
-    template.executeWithoutResult(
-        status -> {
-          em.persist(new AgentScopeSessionEntity(sessionId, "agent_state", 0, LONG_TEXT, 7L));
-          em.persist(
-              new KnowledgeChunkEntity(
-                  chunkId,
-                  java.util.UUID.randomUUID().toString(),
-                  java.util.UUID.randomUUID().toString(),
-                  0,
-                  "长文本章节",
-                  LONG_TEXT,
-                  LONG_TEXT.length() / 2,
-                  "[" + "0.1,".repeat(10) + "0.1]",
-                  "pg-it-model",
-                  now));
-          em.persist(
-              new MemoryRecordEntity(
-                  memoryId,
-                  java.util.UUID.randomUUID().toString(),
-                  dev.workbench.domain.MemoryCategory.PROJECT_CONVENTION,
-                  "长文本记忆",
-                  dev.workbench.domain.MemorySource.USER_CONFIRMED,
-                  dev.workbench.domain.MemoryStatus.ACTIVE,
-                  1,
-                  now,
-                  now));
-          em.persist(
-              new ModelCallPayloadEntity(
-                  modelCallId,
-                  java.util.UUID.randomUUID().toString(),
-                  LONG_TEXT,
-                  "[]",
-                  LONG_TEXT,
-                  "[]",
-                  true,
-                  now));
-          em.persist(
-              new EvalLabCaseResultEntity(
-                  caseId,
-                  java.util.UUID.randomUUID().toString(),
-                  "CODING_REFLECTION",
-                  "sample-" + suffix,
-                  "长文本用例",
-                  "long text case",
-                  "mini-coding-reflection",
-                  1,
-                  null,
-                  true,
-                  1.0,
-                  4.5,
-                  "{}",
-                  "[]",
-                  "{}",
-                  LONG_TEXT,
-                  LONG_TEXT,
-                  1_000L,
-                  10,
-                  20,
-                  0.01,
-                  now));
-          em.flush();
-          em.clear();
-        });
+    try {
+      template.executeWithoutResult(
+          status -> {
+            em.persist(new AgentScopeSessionEntity(sessionId, "agent_state", 0, LONG_TEXT, 7L));
+            em.persist(
+                new KnowledgeChunkEntity(
+                    chunkId,
+                    java.util.UUID.randomUUID().toString(),
+                    java.util.UUID.randomUUID().toString(),
+                    0,
+                    "长文本章节",
+                    LONG_TEXT,
+                    LONG_TEXT.length() / 2,
+                    "[" + "0.1,".repeat(10) + "0.1]",
+                    "pg-it-model",
+                    now));
+            var memoryRecord =
+                new MemoryRecordEntity(
+                    memoryId,
+                    java.util.UUID.randomUUID().toString(),
+                    dev.workbench.domain.MemoryCategory.PROJECT_CONVENTION,
+                    "长文本记忆",
+                    dev.workbench.domain.MemorySource.USER_CONFIRMED,
+                    dev.workbench.domain.MemoryStatus.ACTIVE,
+                    1,
+                    now,
+                    now);
+            // content 列上限 VARCHAR(300)，将 >12KB 长文本写入 embeddingJson（TEXT 列）验证回读。
+            memoryRecord.embed(LONG_TEXT, "pg-it-model");
+            em.persist(memoryRecord);
+            em.persist(
+                new ModelCallPayloadEntity(
+                    modelCallId,
+                    java.util.UUID.randomUUID().toString(),
+                    LONG_TEXT,
+                    "[]",
+                    LONG_TEXT,
+                    "[]",
+                    true,
+                    now));
+            // eval_lab_case_results.eval_run_id 存在外键 fk_eval_lab_case_run，必须先落库父批次。
+            em.persist(
+                new EvalLabRunEntity(
+                    evalRunId,
+                    "LOCAL",
+                    "COMPLETED",
+                    "MINI",
+                    "pg-it",
+                    "[]",
+                    "{}",
+                    "0".repeat(64),
+                    false,
+                    null,
+                    "zh-CN",
+                    now));
+            em.persist(
+                new EvalLabCaseResultEntity(
+                    caseId,
+                    evalRunId,
+                    "CODING_REFLECTION",
+                    "sample-" + suffix,
+                    "长文本用例",
+                    "long text case",
+                    "mini-coding-reflection",
+                    1,
+                    null,
+                    true,
+                    1.0,
+                    4.5,
+                    "{}",
+                    "[]",
+                    "{}",
+                    LONG_TEXT,
+                    LONG_TEXT,
+                    1_000L,
+                    10,
+                    20,
+                    0.01,
+                    now));
+            em.flush();
+            em.clear();
+          });
 
-    template.executeWithoutResult(
-        status -> {
-          var session =
-              em.find(
-                  AgentScopeSessionEntity.class,
-                  new AgentScopeSessionEntity.Id(sessionId, "agent_state", 0));
-          assertNotNull(session, "AgentScope 会话必须可回读");
-          assertEquals(LONG_TEXT, session.getStateData());
+      template.executeWithoutResult(
+          status -> {
+            var session =
+                em.find(
+                    AgentScopeSessionEntity.class,
+                    new AgentScopeSessionEntity.Id(sessionId, "agent_state", 0));
+            assertNotNull(session, "AgentScope 会话必须可回读");
+            assertEquals(LONG_TEXT, session.getStateData());
 
-          var chunk = em.find(KnowledgeChunkEntity.class, chunkId);
-          assertNotNull(chunk, "知识库分块必须可回读");
-          assertEquals(LONG_TEXT, chunk.getContent());
+            var chunk = em.find(KnowledgeChunkEntity.class, chunkId);
+            assertNotNull(chunk, "知识库分块必须可回读");
+            assertEquals(LONG_TEXT, chunk.getContent());
 
-          var memory = em.find(MemoryRecordEntity.class, memoryId);
-          assertNotNull(memory, "记忆正文必须可回读");
+            var memory = em.find(MemoryRecordEntity.class, memoryId);
+            assertNotNull(memory, "记忆正文必须可回读");
+            assertEquals(LONG_TEXT, memory.getEmbeddingJson());
 
-          var payload = em.find(ModelCallPayloadEntity.class, modelCallId);
-          assertNotNull(payload, "模型调用透视必须可回读");
-          assertEquals(LONG_TEXT, payload.getRequestMessagesJson());
+            var payload = em.find(ModelCallPayloadEntity.class, modelCallId);
+            assertNotNull(payload, "模型调用透视必须可回读");
+            assertEquals(LONG_TEXT, payload.getRequestMessagesJson());
 
-          var caseResult = em.find(EvalLabCaseResultEntity.class, caseId);
-          assertNotNull(caseResult, "评测用例结果必须可回读");
-          assertEquals(LONG_TEXT, caseResult.getRawOutput());
-
-          em.remove(session);
-          em.remove(chunk);
-          em.remove(memory);
-          em.remove(payload);
-          em.remove(caseResult);
-          em.flush();
-        });
+            var caseResult = em.find(EvalLabCaseResultEntity.class, caseId);
+            assertNotNull(caseResult, "评测用例结果必须可回读");
+            assertEquals(LONG_TEXT, caseResult.getRawOutput());
+          });
+    } finally {
+      template.executeWithoutResult(
+          status -> {
+            var caseResult = em.find(EvalLabCaseResultEntity.class, caseId);
+            if (caseResult != null) em.remove(caseResult);
+            var evalRun = em.find(EvalLabRunEntity.class, evalRunId);
+            if (evalRun != null) em.remove(evalRun);
+            var payload = em.find(ModelCallPayloadEntity.class, modelCallId);
+            if (payload != null) em.remove(payload);
+            var memory = em.find(MemoryRecordEntity.class, memoryId);
+            if (memory != null) em.remove(memory);
+            var chunk = em.find(KnowledgeChunkEntity.class, chunkId);
+            if (chunk != null) em.remove(chunk);
+            var session =
+                em.find(
+                    AgentScopeSessionEntity.class,
+                    new AgentScopeSessionEntity.Id(sessionId, "agent_state", 0));
+            if (session != null) em.remove(session);
+            em.flush();
+          });
+    }
   }
 
   private static String buildLongText() {

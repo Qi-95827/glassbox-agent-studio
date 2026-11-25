@@ -128,7 +128,7 @@ final class RunExecutionEngine {
             task.roleBudgets(),
             task.toolBudgets());
     try {
-      workflows.execute(id, plan, task, control, stateLock);
+      workflows.execute(id, plan, task, control, stateLock, true);
     } finally {
       commands.clearControl(id);
     }

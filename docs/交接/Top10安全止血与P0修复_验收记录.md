@@ -926,3 +926,32 @@ mvn test
 | Docker / PG 集成验证 | ⚠️ 待本机开启 Docker 后执行 `RUN_DOCKER_TESTS=true` / `WORKBENCH_PG_TEST=true` |
 
 **结论**：安全与并发类缺陷已全部修实；剩余 3 项均为「测试覆盖缺口 / 已知边界 / 环境待跑」，不含已知未修复的功能缺陷。
+---
+
+## 实机终验与遗留缺陷收官（PostgreSQL 16 + Docker 全量全绿）
+
+- **完成时间**：2026-11-25
+
+### 1. 本轮发现并修复的 5 项遗留缺陷与测试缺口
+
+| # | 位置 | 问题描述与根因 | 修复方案 |
+| :--- | :--- | :--- | :--- |
+| 1 | `evaluation/EvalLabService.java` | `row.finish(...)`（L534、L545）仍传 `modelCost`，导致评测结束后 `totalCostUsd` 覆盖丢失 `judgeCost`；未启用裁判时 `judgeBudgetExceeded` 误写入 `judgeSkippedReason=BUDGET_EXCEEDED` | `finish(...)` 统一传入 `modelCost + judgeCost`；`judgeBudgetExceeded` 增加 `config.judgeEnabled()` 前置；新增 `EvalLabJudgeGovernanceTest`（4 例）覆盖总费用、`JUDGE_ERROR`、`BUDGET_EXCEEDED` 与未启用裁判场景 |
+| 2 | `evaluation/runner/CodingReflectionRunner.java` | `createWorkspace` 创建 `%TEMP%/eval-coding-*` 源 Git 仓库后只清理 worktree 目录，源仓库长期泄漏；Windows `.git/objects` 只读属性导致 `File.delete()` 静默失败 | 引入 `TempEvalWorkspace` 跟踪 `sourceRepo` 与 `workspace`；创建异常与 `finally` 均清理两端目录；清理前清除 `dos:readonly` 与设写权限；在 `EvalCategoryRunnerIntegrationTest` 补强断言校验 worktree 与 `eval-coding-*` 零残留 |
+| 3 | `orchestration/WorkflowScheduler.java`、`orchestration/RunExecutionEngine.java`、`persistence/repository/WorkflowCheckpointRepository.java`、`task/WorkflowRecoveryService.java`、`orchestration/RunCommandService.java` | **真并发/重入缺陷（由本轮新增并发测试暴露）**：首个节点命中断点让出线程后执行 `/resume`，重入 `WorkflowScheduler.execute` 再次调用 `checkpointBeforeFirstNode`，向 `workflow_checkpoints` 插入重复 `(plan_id, 0)` 撞唯一索引 `23505` 导致运行崩溃 `FAILED`；断点让出态取消时未清理 `releasedBreakpoints` | `WorkflowScheduler.execute` 增加 `resuming` 重载（`executeResume` 传 `true`），恢复重入跳过重复 `RUN_STARTED` 与首节点检查点；`WorkflowRecoveryService.saveBoundary` 增加 `existsByPlanIdAndCompletedNodes` 幂等防御；断点让出取消时清理 `releasedBreakpoints` |
+| 4 | `persistence/PostgresPgVectorIntegrationTest.java` | PG 16 实测触发 `fk_eval_lab_case_run` 外键失败：插入 `EvalLabCaseResultEntity` 前未落库父 `EvalLabRunEntity`；记忆长文本未覆盖 `embedding_json` | 先持久化 `EvalLabRunEntity` 并通过 `embed(LONG_TEXT, ...)` 验证 `memory_records.embedding_json` 的 `TEXT` 读写（`content` 保持在 `VARCHAR(300)` 内），并在 `try...finally` 内按外键倒序清理全部测试行 |
+| 5 | `orchestration/BreakpointConcurrencyIntegrationTest.java`（新增） | 补充「5 断点挂起不饥饿 4 线程池 + 第 6 个无断点运行完成 + 断点取消立即 `CANCELLED` + `/resume` 越过断点抵达 `COMPLETED`」端到端并发集成测试 | 实跑通过（1/1） |
+
+### 2. 实机全量终验结果（Docker Desktop + PostgreSQL 16 + pgvector + python:3.12-alpine）
+
+| 门禁项 | 命令 / 范围 | 实测结果 |
+| :--- | :--- | :--- |
+| **PostgreSQL 16 + pgvector 专项** | `$env:WORKBENCH_PG_TEST="true"; mvn "-Dtest=PostgresPgVectorIntegrationTest" test` | **Tests run: 3, Failures: 0, Errors: 0, Skipped: 0**，`BUILD SUCCESS`（Flyway `migration-pg` 至 v4，pgvector HNSW、工作区隔离、6 实体 >12KB `TEXT` 读写全通过） |
+| **后端全量 + 真实 Docker 集成** | `$env:RUN_DOCKER_TESTS="true"; mvn test` | **Tests run: 696, Failures: 0, Errors: 0, Skipped: 5**，`BUILD SUCCESS`（5 个跳过为：PG 专项 3 例——已单独 3/3 实跑通过——以及 2 个 Unix/POSIX 环境条件用例） |
+| **核心与专项测试明细** | `ArchitectureGuardTest` 5/5、`FlywayMigrationCompatibilityTest` 4/4、`LegacyH2DoubleStartupIntegrationTest` 1/1、`BugDockerIntegrationTest` 4/4、`BugDynamicWorkflowIntegrationTest` 21/21、`BugWorkflowIntegrationTest` 1/1、`BreakpointConcurrencyIntegrationTest` 1/1、`EvalLabJudgeGovernanceTest` 4/4、`EvalCategoryRunnerIntegrationTest` 6/6 | **全部 0 失败、0 错误** |
+| **前端四步门禁**（此前提交基线，本轮前端 0 改动） | `npm run format:check` / `npm run lint` / `npm test` / `npm run build` | 退出码全 **0**；Vitest **23 test files / 67 tests passed**；Vite 构建通过 |
+| **红线检查** | `git diff --name-only` | 历史迁移 `db/migration/V1~V14`、`db/migration-pg/V1~V4` **0 改动**；`frontend/` **0 改动**；`config/*`、`data/*` **未读取/未提交**；仅本地提交，**未 `git push`** |
+
+### 3. 已知边界（未改动公开 API）
+
+- `CreateTaskRequest` 公开签名保持不变，`CodingReflectionRunner` 内 `longTermMemoryApplied=false` 保持如实上报平台当前消融边界。

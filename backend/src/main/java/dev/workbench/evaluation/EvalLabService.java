@@ -412,9 +412,10 @@ public class EvalLabService {
                     || (reference == null
                         ? !execution.rawOutput().isBlank()
                         : answer instanceof String text && !text.isBlank());
-            // 调用裁判前复核预算：裁决费用可能比被测模型更贵，超预算时不再发起裁判调用。
+            // 调用裁判前复核预算：裁决费用可能比被测模型更贵，超预算时不再发起裁判调用；未启用裁判不标记超支。
             boolean judgeBudgetExceeded =
-                config.maxCostUsd() != null
+                config.judgeEnabled()
+                    && config.maxCostUsd() != null
                     && modelCost + judgeCost + Math.max(0, execution.costUsd())
                         >= config.maxCostUsd();
             var verdict =
@@ -531,7 +532,7 @@ public class EvalLabService {
                 .count());
       }
       var finished = WorkbenchTime.now();
-      row.finish(finalStatus, write(summary), modelCost, tokens, duration, null);
+      row.finish(finalStatus, write(summary), modelCost + judgeCost, tokens, duration, null);
       runs.save(row);
       audit.record(
           "EVAL_LAB_FINISH",
@@ -542,7 +543,8 @@ public class EvalLabService {
     } catch (RuntimeException e) {
       fatal = safe(e.getMessage());
       finalStatus = "FAILED";
-      row.finish("FAILED", write(Map.of("error", fatal)), modelCost, tokens, duration, fatal);
+      row.finish(
+          "FAILED", write(Map.of("error", fatal)), modelCost + judgeCost, tokens, duration, fatal);
       runs.save(row);
       audit.record("EVAL_LAB_FINISH", "EVAL_LAB_RUN", id, "FAILED", fatal);
     } finally {

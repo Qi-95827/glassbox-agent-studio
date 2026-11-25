@@ -114,6 +114,10 @@ public class WorkflowRecoveryService {
       runEvents.event(runId, EventType.CHECKPOINT_SKIPPED, "当前边界不能安全恢复，已跳过检查点：" + e.getMessage());
       return;
     }
+    if (checkpointRepository.existsByPlanIdAndCompletedNodes(
+        plan.id().toString(), boundary.completedNodes())) {
+      return;
+    }
     checkpointRepository.saveAndFlush(
         new WorkflowCheckpointEntity(
             plan.id().toString(),

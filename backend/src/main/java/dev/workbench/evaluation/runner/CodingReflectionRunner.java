@@ -70,7 +70,8 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
     int maxTools = Math.max(1, Math.min(12, (int) number(setup.get("maxTools"), 3)));
     int maxSeconds = Math.max(10, Math.min(180, (int) number(setup.get("maxSeconds"), 45)));
 
-    WorkspaceService.Workspace workspace = createWorkspace(files);
+    TempEvalWorkspace tempWorkspace = createWorkspace(files);
+    WorkspaceService.Workspace workspace = tempWorkspace.workspace();
     try {
       String runId = null;
       RunStatus status = RunStatus.BLOCKED;
@@ -192,32 +193,56 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
           outputTokens,
           cost);
     } finally {
-      // 评测临时 Git 仓库必须清理：长期跑评测会持续堆积磁盘垃圾，删除失败只记 WARN 不覆盖主结果。
-      deleteWorkspaceDirectory(workspace);
+      // 评测临时 Git worktree 与源仓库都必须清理：长期跑评测会持续堆积磁盘垃圾，删除失败只记 WARN 不覆盖主结果。
+      deleteDirectoryQuietly(
+          workspace == null || workspace.workspacePath() == null
+              ? null
+              : Path.of(workspace.workspacePath()));
+      deleteDirectoryQuietly(tempWorkspace.sourceRepo());
     }
   }
 
-  /** 递归删除临时评测仓库目录；失败仅记录告警。 */
-  private static void deleteWorkspaceDirectory(WorkspaceService.Workspace workspace) {
-    if (workspace == null || workspace.workspacePath() == null) return;
-    java.nio.file.Path root;
+  private record TempEvalWorkspace(Path sourceRepo, WorkspaceService.Workspace workspace) {}
+
+  /** 递归清理临时评测目录（含 Windows 只读 Git 对象文件）；失败仅记录告警。 */
+  private static void deleteDirectoryQuietly(Path target) {
+    if (target == null) return;
+    Path root;
     try {
-      root = java.nio.file.Path.of(workspace.workspacePath()).toAbsolutePath().normalize();
+      root = target.toAbsolutePath().normalize();
     } catch (RuntimeException invalid) {
       return;
     }
-    if (!java.nio.file.Files.isDirectory(root)) return;
-    try (var paths = java.nio.file.Files.walk(root)) {
-      paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> path.toFile().delete());
-    } catch (java.io.IOException cleanupFailed) {
+    if (!Files.exists(root)) return;
+    Exception lastError = null;
+    try (var paths = Files.walk(root)) {
+      var ordered = paths.sorted(java.util.Comparator.reverseOrder()).toList();
+      for (Path path : ordered) {
+        try {
+          try {
+            Files.setAttribute(path, "dos:readonly", false);
+          } catch (UnsupportedOperationException | java.io.IOException ignored) {
+            // 非 DOS 文件系统或不可设属性时退回 File.setWritable。
+          }
+          path.toFile().setWritable(true);
+          Files.deleteIfExists(path);
+        } catch (java.io.IOException deleteFailed) {
+          lastError = deleteFailed;
+        }
+      }
+    } catch (java.io.IOException walkFailed) {
+      lastError = walkFailed;
+    }
+    if (Files.exists(root)) {
       org.slf4j.LoggerFactory.getLogger(CodingReflectionRunner.class)
-          .warn("评测临时目录清理失败：{}", root, cleanupFailed);
+          .warn("评测临时目录清理未完全成功：{}", root, lastError);
     }
   }
 
-  private WorkspaceService.Workspace createWorkspace(Map<String, String> files) {
+  private TempEvalWorkspace createWorkspace(Map<String, String> files) {
+    Path repo = null;
     try {
-      Path repo = Files.createTempDirectory("eval-coding-");
+      repo = Files.createTempDirectory("eval-coding-");
       git(repo, "init", "-b", "main");
       git(repo, "config", "user.email", "eval@example.invalid");
       git(repo, "config", "user.name", "EvalLab");
@@ -229,8 +254,9 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
       }
       git(repo, "add", ".");
       git(repo, "commit", "-m", "eval fixture");
-      return workspaces.create(repo.toString(), "main");
+      return new TempEvalWorkspace(repo, workspaces.create(repo.toString(), "main"));
     } catch (Exception e) {
+      deleteDirectoryQuietly(repo);
       throw new IllegalStateException("评测工作区创建失败。", e);
     }
   }

@@ -13,4 +13,6 @@ public interface WorkflowCheckpointRepository
 
   Optional<WorkflowCheckpointData> findByIdAndPlanIdAndVersion(
       String id, String planId, int version);
+
+  boolean existsByPlanIdAndCompletedNodes(String planId, int completedNodes);
 }
