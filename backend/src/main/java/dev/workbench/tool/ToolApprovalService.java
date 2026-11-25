@@ -23,8 +23,8 @@ import org.springframework.stereotype.Service;
 /**
  * Gate 5.5 工具级动态审批。
  *
- * <p>高危调用创建持久化审批单后，节点进入 {@code WAITING_TOOL_APPROVAL}。等待使用有界短轮询，
- * 不调用 {@code Thread.sleep} 死等，也不长期占用业务线程；超时后审批单过期并停止运行，等待人工审核。
+ * <p>高危调用创建持久化审批单后，节点进入 {@code WAITING_TOOL_APPROVAL}。等待使用有界短轮询， 不调用 {@code Thread.sleep}
+ * 死等，也不长期占用业务线程；超时后审批单过期并停止运行，等待人工审核。
  */
 @Service
 public class ToolApprovalService {
@@ -130,7 +130,8 @@ public class ToolApprovalService {
             "High-risk tool approval timed out; the tool was not executed. Review and retry."));
   }
 
-  /** 用户决策；只允许 PENDING 且未过期的审批单。 */
+  /** 用户决策；只允许 PENDING 且未过期的审批单，并以条件更新保证并发安全。 */
+  @org.springframework.transaction.annotation.Transactional
   public ApprovalView decide(
       String runId,
       String approvalId,
@@ -168,14 +169,42 @@ public class ToolApprovalService {
           case APPROVE_WITH_EDITED_ARGS -> ToolApprovalStatus.APPROVED_WITH_EDITED_ARGS;
           case REJECT -> ToolApprovalStatus.REJECTED;
         };
-    row.decide(
-        status,
-        action.name(),
-        action == ToolApprovalAction.APPROVE_WITH_EDITED_ARGS ? editedArgsJson : null,
-        reason,
-        Instant.now().toString());
-    approvals.save(row);
-    return view(row);
+    int updated =
+        approvals.decideIfPending(
+            row.getId(),
+            runId,
+            ToolApprovalStatus.PENDING,
+            status,
+            action.name(),
+            action == ToolApprovalAction.APPROVE_WITH_EDITED_ARGS ? editedArgsJson : null,
+            reason,
+            Instant.now().toString());
+    if (updated != 1) throw new IllegalStateException("审批单已经处理或已过期，不能重复决策。");
+    return find(runId, row.getId());
+  }
+
+  /**
+   * 级联作废某运行的遗留待审批单：取消、超时与重启清理都必须终结 PENDING，避免审批单悬空。
+   *
+   * @return 被作废的审批单数量
+   */
+  public int cancelPending(String runId) {
+    if (runId == null || runId.isBlank()) return 0;
+    int expired =
+        approvals.expirePendingForRun(
+            runId,
+            ToolApprovalStatus.PENDING,
+            ToolApprovalStatus.EXPIRED,
+            Instant.now().toString());
+    if (expired > 0)
+      evidence.event(
+          runId,
+          EventType.TOOL_APPROVAL_DECIDED,
+          localized(
+              "已作废 " + expired + " 条遗留待审批单，工具不会执行。",
+              "Cancelled " + expired + " pending tool approvals; the tools will not run."),
+          dev.workbench.domain.EventRef.empty());
+    return expired;
   }
 
   public ApprovalView find(String runId, String approvalId) {
@@ -190,10 +219,11 @@ public class ToolApprovalService {
     return approvals.findByRunIdOrderByRequestedAtDesc(runId).stream()
         .filter(
             row ->
-                nodeId.toString().equals(row.getNodeId())
+                java.util.Objects.equals(nodeId.toString(), row.getNodeId())
                     && toolName.equals(row.getToolName())
-                    && argsJson.equals(row.getOriginalArgsJson())
-                    && row.getStatus() != ToolApprovalStatus.EXPIRED)
+                    && java.util.Objects.equals(argsJson, row.getOriginalArgsJson())
+                    && row.getStatus() != ToolApprovalStatus.EXPIRED
+                    && row.getStatus() != ToolApprovalStatus.PENDING)
         .findFirst()
         .orElse(null);
   }

@@ -386,7 +386,14 @@ final class ControlledAgentRuntime implements AgentRuntime {
     } catch (IllegalArgumentException invalid) {
       return ToolApprovalDecision.reject("节点标识无效，高危工具不会自动执行。");
     }
-    return approvals.await(runId, node, agentId, toolName, version, argsJson, risk, control::check);
+    // 审批等待不属于运行执行时间：等待期间不推进 elapsed，避免人工审批触发 TIME_LIMIT。
+    control.beginApprovalWait();
+    try {
+      return approvals.await(
+          runId, node, agentId, toolName, version, argsJson, risk, control::check);
+    } finally {
+      control.endApprovalWait();
+    }
   }
 
   @Override

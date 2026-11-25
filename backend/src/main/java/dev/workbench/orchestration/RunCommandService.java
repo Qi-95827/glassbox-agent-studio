@@ -87,17 +87,24 @@ final class RunCommandService {
       RunSnapshot run = runs.runSnapshot(id);
       if (!run.status().canCancel()) throw new IllegalStateException("运行已结束，不能取消。");
       evidence.event(id, EventType.CANCEL_REQUESTED, "用户请求取消。");
-      if (run.status() == RunStatus.PENDING) {
+      // 断点让出的运行后台没有活线程，仅置内存标记永远不会被消费，必须在此直接终结。
+      boolean yieldedWithoutWorker = yielded.remove(id);
+      if (run.status() == RunStatus.PENDING
+          || (run.status() == RunStatus.PAUSED && yieldedWithoutWorker)) {
+        String reason =
+            run.status() == RunStatus.PENDING ? "用户取消了排队中的运行，尚未启动 Agent。" : "用户取消了已暂停（断点让出线程）的运行。";
         runs.finishStoppedRun(
             new StopCompletion(
                 java.util.UUID.fromString(id),
                 null,
                 StopCause.USER_CANCELLED,
-                "用户取消了排队中的运行，尚未启动 Agent。",
+                reason,
                 run.rounds(),
                 run.tools(),
                 run.elapsedMs(),
                 null));
+        paused.remove(id);
+        clearControl(id);
       } else {
         cancelled.add(id);
         Object monitor = pauseMonitors.get(id);

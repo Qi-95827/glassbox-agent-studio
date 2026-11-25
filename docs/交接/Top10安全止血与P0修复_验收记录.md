@@ -772,3 +772,44 @@ mvn test
 1. **`WAITING_TOOL_APPROVAL` 全链路状态机**（并行度计数、写集互斥、系统检查屏障、取消收尾、重启清理、审批等待不计入 elapsed）与 `ToolApprovalRequestEntity` 乐观锁原子 `decide()`、`latestReusable()` 排除 PENDING/EXPIRED —— **未实现**。
 2. **`RunControl` 轮次/工具配额判限的原子化**（当前仅做到写库降频）—— 未实现。
 3. 端到端集成测试「同时挂起 5+ 个断点运行、第 6 个不饥饿；随后恢复全部跑通」—— 未编写（当前仅有断点让出的单元级行为验证）。
+---
+
+## 倒数第 1 步 · 5 处复核 Bug 修复 + 审批/预算并发加固
+
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `orchestration/RunExecutionEngine.java` | `execute()` 改传 `commands.yielded()`（修复断点恢复永远不重派的 P0）；`executeResume()` 在 `stateLock` 内复核 `PAUSED`、校验计划已批准并原子切回 `RUNNING` 后才进入调度，防并发双 `/resume` 重入与 DB 滞留 `PAUSED` |
+| `orchestration/RunCommandService.java` | `cancel()` 对「断点已让出线程的 PAUSED」直接 `finishStoppedRun(USER_CANCELLED)` 并清理暂停/控制态（修复永久僵死）；新增共享 `yielded()` |
+| `orchestration/WorkflowScheduler.java` | 已放行断点改为**按 runId 托管在进程级** `ConcurrentHashMap`（修复恢复后无限重中断点），终态时清理；仅在 `inFlight.isEmpty()` 的安全边界触发断点让出，避免丢弃在途并行节点 |
+| `framework/control/RunControl.java` | `lastSavedStatus` 以真实运行状态初始化；`rounds`/`tools` 改 CAS 循环「判限+递增」原子完成（修复并行击穿硬限额）；新增 `beginApprovalWait()/endApprovalWait()` 并把审批等待从 `elapsed()` 扣除 |
+| `orchestration/ControlledAgentRuntime.java` | `approvalDecision` 用 `try/finally` 包住审批等待，等待时长不计入运行执行时间 |
+| `task/CostService.java` | `Reservation` 携带 `runId`；`settle()`/`cancel()` 先 `limits.lockByRunId(runId)` 再首次读取预留，避免 Hibernate 一级缓存旧快照造成双扣/双释放 |
+| `persistence/repository/ToolApprovalRequestRepository.java` | 新增条件更新 `decideIfPending(...)`（`WHERE id AND runId AND status=PENDING`，返回影响行数）与 `expirePendingForRun(...)`；**未改任何历史迁移脚本**（不新增版本列） |
+| `tool/ToolApprovalService.java` | `decide()` 加 `@Transactional` 并改用条件更新，影响行数 ≠ 1 即拒绝；`latestReusable()` 排除 `PENDING`/`EXPIRED` 且空值安全；新增 `cancelPending(runId)` 级联作废 |
+| `store/RunStateStore.java` | 运行终结与启动清理时级联作废该运行遗留 `PENDING` 审批单 |
+
+### 2. 测试
+
+| 测试类 | 用例数 | 覆盖 |
+| :--- | ---: | :--- |
+| `framework/control/RunControlAtomicBudgetTest`（新增） | 4 | 24 线程并发抢 5 个工具额度**恰好 5 个通过**（回归断言旧 check-then-increment）；审批等待从 `elapsed()` 扣除；嵌套等待只计一次；额度耗尽后继续拒绝 |
+| `tool/ToolApprovalServiceTest`（重写决策用例） | 5 | 决策走条件更新并校验参数；**并发第二次决策影响 0 行 → 抛异常且不落库**（防覆写） |
+
+### 3. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 691, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+| 历史迁移脚本 | 0 改动 |
+
+### 4. 未完成项（如实声明）
+
+1. **「5 个断点运行全部让出后第 6 个不饥饿 / 恢复跑通 / 取消立即终结」的多线程端到端集成测试未编写**：仅完成断点让出、取消终结、恢复切态的单元级验证；
+2. `WAITING_TOOL_APPROVAL` 的**并行度计数与写集互斥**层面仍以调度器 `inFlight` 记账为准，未在 `WorkflowExecutionService.requireDisjointWriteSet()`/`claimWorkflowCheck()` 中显式把该状态并入活跃集合；
+3. `WorkflowExecutionService.finishParallelStoppedRun()` 未额外级联审批单（改由 `RunStateStore` 统一作废）。

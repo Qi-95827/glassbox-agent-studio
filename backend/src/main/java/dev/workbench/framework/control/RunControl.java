@@ -34,8 +34,11 @@ public final class RunControl {
   private final Object pauseMonitor;
   private long pausedNanos, pauseStartedNanos;
 
+  /** 人工审批等待时长：不计入运行执行时间，避免等待审批触发 TIME_LIMIT。 */
+  private long approvalNanos, approvalStartedNanos;
+
   /** 最近一次落库的运行状态：只在状态真正迁移时写库，消除高频检查造成的写风暴与 PAUSED 覆写。 */
-  private volatile RunStatus lastSavedStatus = RunStatus.RUNNING;
+  private volatile RunStatus lastSavedStatus;
 
   private final Integer maxRounds, maxTools, maxPerTool, maxSeconds;
   private final Long maxReportedTokens;
@@ -63,6 +66,7 @@ public final class RunControl {
       Map<ToolKind, Integer> toolBudgets) {
     this.yielded = yielded == null ? ConcurrentHashMap.newKeySet() : yielded;
     this.runId = runId;
+    this.lastSavedStatus = run.status();
     this.repository = repository;
     this.pauseMonitor = pauseMonitor;
     this.paused = paused;
@@ -130,6 +134,22 @@ public final class RunControl {
     throw new PauseYield(runId);
   }
 
+  /** 进入人工审批等待：暂停计时累积到审批等待，不计入运行执行时间。 */
+  public void beginApprovalWait() {
+    synchronized (pauseMonitor) {
+      if (approvalStartedNanos == 0) approvalStartedNanos = System.nanoTime();
+    }
+  }
+
+  /** 结束人工审批等待：多次嵌套调用只按最外层计量。 */
+  public void endApprovalWait() {
+    synchronized (pauseMonitor) {
+      if (approvalStartedNanos == 0) return;
+      approvalNanos += System.nanoTime() - approvalStartedNanos;
+      approvalStartedNanos = 0;
+    }
+  }
+
   /** 抓取此次装配对应的配置，不以剩余额度替代政策上限。 */
   public AgentBudgetPolicy budgetPolicy(AgentRole profile, NodePolicy node) {
     return new AgentBudgetPolicy(
@@ -161,6 +181,9 @@ public final class RunControl {
     synchronized (pauseMonitor) {
       long current = System.nanoTime();
       long totalPaused = pausedNanos + (pauseStartedNanos == 0 ? 0 : current - pauseStartedNanos);
+      long totalApproval =
+          approvalNanos + (approvalStartedNanos == 0 ? 0 : current - approvalStartedNanos);
+      totalPaused += totalApproval;
       return previousMs + TimeUnit.NANOSECONDS.toMillis(current - startedNanos - totalPaused);
     }
   }
@@ -216,6 +239,30 @@ public final class RunControl {
     }
   }
 
+  /**
+   * 原子占用一次模型轮次：判限与递增在同一 CAS 循环内完成。
+   *
+   * <p>旧实现先 `get()` 判限再 `incrementAndGet()`，并行节点可同时通过检查后一起递增，击穿硬限额。
+   */
+  private void incrementRounds() {
+    while (true) {
+      int current = rounds.get();
+      if (maxRounds != null && current >= maxRounds)
+        throw new StopExecution(StopCause.MODEL_ROUND_LIMIT, "Agent 轮次达到上限。");
+      if (rounds.compareAndSet(current, current + 1)) return;
+    }
+  }
+
+  /** 原子占用一次工具调用：判限与递增在同一 CAS 循环内完成，避免并行击穿上限。 */
+  private void incrementTools() {
+    while (true) {
+      int current = tools.get();
+      if (maxTools != null && current >= maxTools)
+        throw new StopExecution(StopCause.TOOL_CALL_LIMIT, "工具调用次数达到上限。");
+      if (tools.compareAndSet(current, current + 1)) return;
+    }
+  }
+
   /** 先检查所有适用的预算，再记录一次已启动的模型调用。 */
   public void beginModel(String agentId, ModelKind model, NodePolicy node) {
     modelCall(agentId, node);
@@ -234,7 +281,7 @@ public final class RunControl {
       if (roleLimit != null && used >= roleLimit)
         throw new StopExecution(StopCause.ROLE_MODEL_LIMIT, "当前角色的单实例模型调用次数达到上限。");
     }
-    rounds.incrementAndGet();
+    incrementRounds();
     // 仅当状态确实从暂停/终态回到运行中时才写库。
     if (lastSavedStatus != RunStatus.RUNNING) {
       save(RunStatus.RUNNING, null, null);
@@ -297,8 +344,6 @@ public final class RunControl {
 
   private void toolCall(String agentId, ToolKind kind, String fingerprint, NodePolicy node) {
     check();
-    if (maxTools != null && tools.get() >= maxTools)
-      throw new StopExecution(StopCause.TOOL_CALL_LIMIT, "工具调用次数达到上限。");
     if (node != null
         && node.budget().maxToolCalls() != null
         && repository.countNodeToolCalls(runId, node.nodeId()) >= node.budget().maxToolCalls())
@@ -325,7 +370,7 @@ public final class RunControl {
         && repository.consecutiveToolAttempts(runId, kind, fingerprint, maxIdenticalTools)
             >= maxIdenticalTools)
       throw new StopExecution(StopCause.REPEATED_TOOL_LIMIT, "连续相同工具调用达到上限：" + kind.recordName());
-    tools.incrementAndGet();
+    incrementTools();
     // 仅当状态确实从暂停/终态回到运行中时才写库。
     if (lastSavedStatus != RunStatus.RUNNING) {
       save(RunStatus.RUNNING, null, null);

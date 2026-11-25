@@ -68,6 +68,10 @@ class WorkflowScheduler {
   private final dev.workbench.tool.ToolApprovalService approvals;
   private final org.springframework.context.ApplicationEventPublisher publisher;
 
+  /** 每个运行已放行的断点节点；重入调度后仍有效，运行终结时清理。 */
+  private final Map<String, Set<String>> releasedBreakpoints =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
   WorkflowScheduler(
       RunEvidenceRecordService evidence,
       AgentAssemblyRecordService agents,
@@ -183,6 +187,9 @@ class WorkflowScheduler {
       stop(runId, activeAgents, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行被拒绝：" + detail);
     } catch (Exception e) {
       stop(runId, activeAgents, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行失败，请查看节点与调用记录。");
+    } finally {
+      // 终态运行不再需要断点放行记录；暂停中的运行保留，供 /resume 重入后越过已放行断点。
+      if (!runs.runSnapshot(runId).status().canCancel()) releasedBreakpoints.remove(runId);
     }
   }
 
@@ -203,7 +210,10 @@ class WorkflowScheduler {
     int effectiveMax =
         parallelAllPlans || !plans.revisionEdges(runId).isEmpty() ? maxParallelNodes : 1;
     var inFlight = new java.util.LinkedHashMap<UUID, Future<NodeOutcome>>();
-    var releasedBreakpoints = new java.util.HashSet<String>();
+    // 已放行断点必须按 runId 托管在进程级：/,resume 会重新进入本方法，栈内局部集合会被重置而无限重中断点。
+    var releasedBreakpoints =
+        this.releasedBreakpoints.computeIfAbsent(
+            runId, ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet());
     boolean checkInFlight = false;
     boolean draining = false;
     boolean fanOut = false;
@@ -221,7 +231,8 @@ class WorkflowScheduler {
               if (!node.systemCheck() && inFlight.size() >= effectiveMax) break;
               if (!inFlight.isEmpty() && (effectiveMax <= 1 || !fanOut)) continue;
               if (!inFlight.isEmpty() && !parallelSafe(runId, node, inFlight.keySet())) continue;
-              if (traces != null
+              if (inFlight.isEmpty()
+                  && traces != null
                   && !releasedBreakpoints.contains(node.id().toString())
                   && traces.planControl(runId).breakpoints().contains(node.id().toString())) {
                 releasedBreakpoints.add(node.id().toString());

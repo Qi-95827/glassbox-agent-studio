@@ -328,7 +328,8 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
               row.getId(),
               estimate,
               price.getInputTokenUpperBound(),
-              price.getOutputTokenUpperBound());
+              price.getOutputTokenUpperBound(),
+              row.getRunId());
         });
   }
 
@@ -342,12 +343,12 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
     Settlement result =
         settlementTx.execute(
             ignored -> {
-              var probe = reservations.findById(reservation.id()).orElse(null);
-              if (probe == null) return Settlement.none();
-              // 先锁运行预算行再重读预留：否则两个并发结算会各自读到 RESERVED 并重复扣费。
+              // 先锁运行预算行，再首次读取预留：提前 findById 会让实体进入 Hibernate 一级缓存，锁后重查仍拿到旧快照。
+              String runId = reservation.runId();
+              if (runId == null) return Settlement.none();
               RunCostLimitEntity limit =
                   limits
-                      .lockByRunId(probe.getRunId())
+                      .lockByRunId(runId)
                       .orElseThrow(() -> new IllegalStateException("费用预算记录缺失。"));
               var row = reservations.findById(reservation.id()).orElse(null);
               if (row == null || !"RESERVED".equals(row.getStatus())) return Settlement.none();
@@ -382,10 +383,10 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
     if (reservation == null || reservation.id() == null) return;
     settlementTx.executeWithoutResult(
         ignored -> {
-          var probe = reservations.findById(reservation.id()).orElse(null);
-          if (probe == null) return;
-          // 与结算同序加锁：先锁运行预算行，再重读预留，避免与结算并发时双重释放额度。
-          RunCostLimitEntity limit = limits.lockByRunId(probe.getRunId()).orElse(null);
+          String runId = reservation.runId();
+          if (runId == null) return;
+          // 与结算同序加锁：先锁运行预算行，再首次读取预留，避免一级缓存旧快照与并发双释放。
+          RunCostLimitEntity limit = limits.lockByRunId(runId).orElse(null);
           var row = reservations.findById(reservation.id()).orElse(null);
           if (row == null || !"RESERVED".equals(row.getStatus())) return;
           if (limit != null) {
@@ -469,8 +470,17 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
   }
 
   public record Reservation(
-      String id, long reservedMicros, Integer inputTokenUpperBound, Integer outputTokenUpperBound) {
-    public static final Reservation NONE = new Reservation(null, 0, null, null);
+      String id,
+      long reservedMicros,
+      Integer inputTokenUpperBound,
+      Integer outputTokenUpperBound,
+      String runId) {
+    public static final Reservation NONE = new Reservation(null, 0, null, null, null);
+
+    /** 兼容既有四参调用。 */
+    public Reservation(String id, long reservedMicros, Integer input, Integer output) {
+      this(id, reservedMicros, input, output, null);
+    }
   }
 
   public record Settlement(

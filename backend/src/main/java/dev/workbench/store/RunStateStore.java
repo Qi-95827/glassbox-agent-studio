@@ -26,6 +26,9 @@ public class RunStateStore {
   private final RunCheckpointStore checkpoints;
   private final RunCompletionWaiter completionWaiter;
 
+  /** 终结运行/重启清理时级联作废遗留待审批单，避免审批单悬空、工具被延迟放行。 */
+  private final dev.workbench.persistence.repository.ToolApprovalRequestRepository approvals;
+
   public RunStateStore(
       TransactionTemplate tx,
       RunRepository runRows,
@@ -35,7 +38,8 @@ public class RunStateStore {
       AgentAssemblyRecordService agents,
       RunCreationStore creation,
       RunCheckpointStore checkpoints,
-      RunCompletionWaiter completionWaiter) {
+      RunCompletionWaiter completionWaiter,
+      dev.workbench.persistence.repository.ToolApprovalRequestRepository approvals) {
     this.tx = tx;
     this.runRows = runRows;
     this.invocationRows = invocationRows;
@@ -45,6 +49,7 @@ public class RunStateStore {
     this.creation = creation;
     this.checkpoints = checkpoints;
     this.completionWaiter = completionWaiter;
+    this.approvals = approvals;
   }
 
   public Map<String, Object> run(String id) {
@@ -95,7 +100,8 @@ public class RunStateStore {
       Integer maxPerTool,
       Integer maxSeconds,
       long elapsed) {
-    creation.createRun(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxSeconds, elapsed);
+    creation.createRun(
+        id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxSeconds, elapsed);
   }
 
   public void createRun(
@@ -110,7 +116,18 @@ public class RunStateStore {
       Long maxReportedTokens,
       Integer maxSeconds,
       long elapsed) {
-    creation.createRun(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxReportedTokens, maxSeconds, elapsed);
+    creation.createRun(
+        id,
+        taskId,
+        parent,
+        rounds,
+        tools,
+        maxRounds,
+        maxTools,
+        maxPerTool,
+        maxReportedTokens,
+        maxSeconds,
+        elapsed);
   }
 
   public void createRun(
@@ -126,7 +143,19 @@ public class RunStateStore {
       Integer maxSeconds,
       long elapsed,
       boolean includeCoder) {
-    creation.createRun(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxReportedTokens, maxSeconds, elapsed, includeCoder);
+    creation.createRun(
+        id,
+        taskId,
+        parent,
+        rounds,
+        tools,
+        maxRounds,
+        maxTools,
+        maxPerTool,
+        maxReportedTokens,
+        maxSeconds,
+        elapsed,
+        includeCoder);
   }
 
   public void createRun(
@@ -143,7 +172,20 @@ public class RunStateStore {
       Integer maxSeconds,
       long elapsed,
       boolean includeCoder) {
-    creation.createRun(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxReportedTokens, maxIdenticalTools, maxSeconds, elapsed, includeCoder);
+    creation.createRun(
+        id,
+        taskId,
+        parent,
+        rounds,
+        tools,
+        maxRounds,
+        maxTools,
+        maxPerTool,
+        maxReportedTokens,
+        maxIdenticalTools,
+        maxSeconds,
+        elapsed,
+        includeCoder);
   }
 
   public void createRun(
@@ -162,11 +204,25 @@ public class RunStateStore {
       boolean includeCoder,
       Integer maxAgentRounds,
       Integer maxAgentTools) {
-    creation.createRun(id, taskId, parent, rounds, tools, maxRounds, maxTools, maxPerTool, maxReportedTokens, maxIdenticalTools, maxSeconds, elapsed, includeCoder, maxAgentRounds, maxAgentTools);
+    creation.createRun(
+        id,
+        taskId,
+        parent,
+        rounds,
+        tools,
+        maxRounds,
+        maxTools,
+        maxPerTool,
+        maxReportedTokens,
+        maxIdenticalTools,
+        maxSeconds,
+        elapsed,
+        includeCoder,
+        maxAgentRounds,
+        maxAgentTools);
   }
 
-  public void createRecoveryRun(
-      UUID runId, RunSnapshot original, CheckpointSnapshot checkpoint) {
+  public void createRecoveryRun(UUID runId, RunSnapshot original, CheckpointSnapshot checkpoint) {
     creation.createRecoveryRun(runId, original, checkpoint);
   }
 
@@ -228,13 +284,14 @@ public class RunStateStore {
   private void signalAfterCommit(String runId) {
     if (org.springframework.transaction.support.TransactionSynchronizationManager
         .isSynchronizationActive()) {
-      org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
-          new org.springframework.transaction.support.TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-              completionWaiter.signal(runId);
-            }
-          });
+      org.springframework.transaction.support.TransactionSynchronizationManager
+          .registerSynchronization(
+              new org.springframework.transaction.support.TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                  completionWaiter.signal(runId);
+                }
+              });
     } else {
       completionWaiter.signal(runId);
     }
@@ -260,14 +317,11 @@ public class RunStateStore {
               completion.tools(),
               completion.elapsedMs(),
               completion.stopCause(),
-              RecordSupport.now()))
-            throw new IllegalStateException("运行已暂停或不在执行中，不能提交审查终态。");
+              RecordSupport.now())) throw new IllegalStateException("运行已暂停或不在执行中，不能提交审查终态。");
           plans.settle(runId, RecordSupport.now());
           if (completion.status() == RunStatus.BLOCKED)
             evidence.event(runId, EventType.BLOCKED, completion.reason());
-          else
-            evidence.event(
-                runId, EventType.RUN_COMPLETED, "Agent 协作已结束；代码修改和测试需以实际证据为准。");
+          else evidence.event(runId, EventType.RUN_COMPLETED, "Agent 协作已结束；代码修改和测试需以实际证据为准。");
         });
     if (!completion.status().canCancel()) signalAfterCommit(completion.runId().toString());
   }
@@ -290,9 +344,20 @@ public class RunStateStore {
               completion.rounds(),
               completion.tools(),
               completion.elapsedMs());
+          expirePendingApprovals(runId);
           if (completion.systemHandoff() != null)
             evidence.handoff(HandoffDirection.RESULT, completion.systemHandoff());
         });
+  }
+
+  /** 把该运行遗留的 PENDING 审批单级联作废；重复调用是幂等的。 */
+  private void expirePendingApprovals(String runId) {
+    if (approvals == null) return;
+    approvals.expirePendingForRun(
+        runId,
+        dev.workbench.framework.tool.ToolApprovalStatus.PENDING,
+        dev.workbench.framework.tool.ToolApprovalStatus.EXPIRED,
+        RecordSupport.now());
   }
 
   public void settleStoppedRun(
@@ -338,6 +403,7 @@ public class RunStateStore {
             String id = row.id();
             runRows.interrupt(id, "进程中断；未结束的调用结果未知。", RecordSupport.now());
             plans.settle(id, RecordSupport.now());
+            expirePendingApprovals(id);
             evidence.event(
                 id,
                 EventType.INTERRUPTED,

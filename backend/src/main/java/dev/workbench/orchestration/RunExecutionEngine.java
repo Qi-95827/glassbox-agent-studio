@@ -41,6 +41,7 @@ final class RunExecutionEngine {
   void execute(String id, CheckpointStage stage, String previousResult, boolean recovery) {
     Prepared prepared = prepare(id);
     if (prepared == null) return;
+    // 必须共享命令服务的 yielded 集合：否则断点让出后 /resume 永远判定不到「线程已退出」，运行卡死在 PAUSED。
     RunControl control =
         new RunControl(
             id,
@@ -49,6 +50,7 @@ final class RunExecutionEngine {
             commands.pauseMonitor(id),
             commands.paused(),
             commands.cancelled(),
+            commands.yielded(),
             prepared.task().roleBudgets(),
             prepared.task().toolBudgets());
     if (prepared.workflow() != null) {
@@ -72,15 +74,47 @@ final class RunExecutionEngine {
    * <p>让出发生在未认领任何节点的边界，因此这里不会出现 {@code RUNNING} 认领孤儿；已完成节点由计划状态 天然跳过，不会被重复执行。
    */
   void executeResume(String id) {
-    RunSnapshot run = runs.runSnapshot(id);
-    if (run.status() != dev.workbench.domain.RunStatus.PAUSED) return;
-    WorkflowPlan plan = workflows.plan(id);
-    if (plan == null) return;
+    RunSnapshot run;
     TaskDefinition task;
-    try {
-      task = tasks.taskDefinition(run.taskId().toString());
-    } catch (RuntimeException invalid) {
-      return;
+    WorkflowPlan plan;
+    // 与取消/恢复共享同一把锁：原子复核 PAUSED 并切回 RUNNING，防止并发双 /resume 重复执行。
+    synchronized (stateLock) {
+      run = runs.runSnapshot(id);
+      if (run.status() != dev.workbench.domain.RunStatus.PAUSED) return;
+      plan = workflows.plan(id);
+      if (plan == null) return;
+      try {
+        task = tasks.taskDefinition(run.taskId().toString());
+      } catch (RuntimeException invalid) {
+        return;
+      }
+      if (plan.approvedAt() == null) return;
+      runs.update(
+          id,
+          dev.workbench.domain.RunStatus.RUNNING,
+          null,
+          null,
+          run.rounds(),
+          run.tools(),
+          run.elapsedMs());
+      // 让 RunControl 以真实状态初始化，后续 check() 才能在暂停解除时正确回写 RUNNING。
+      run =
+          new RunSnapshot(
+              run.id(),
+              run.taskId(),
+              run.parentId(),
+              dev.workbench.domain.RunStatus.RUNNING,
+              run.rounds(),
+              run.tools(),
+              run.maxRounds(),
+              run.maxTools(),
+              run.maxPerTool(),
+              run.maxReportedTokens(),
+              run.maxIdenticalTools(),
+              run.maxSeconds(),
+              run.elapsedMs(),
+              run.maxAgentRounds(),
+              run.maxAgentTools());
     }
     RunControl control =
         new RunControl(
