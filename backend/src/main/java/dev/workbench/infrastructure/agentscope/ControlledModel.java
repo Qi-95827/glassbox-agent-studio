@@ -176,17 +176,25 @@ public record ControlledModel(
                     })
                 .onErrorMap(
                     error -> {
+                      // 失败或取消时必须显式释放预留：否则一次失败的调用会永久占用运行费用额度。
+                      releaseReservation();
                       if (latest.get() != null || !rateLimitRejection.test(error)) return error;
                       var rejected = new ModelRateLimitException();
                       // 使用安全消息传播拒绝原因，不将供应商响应正文写入轨迹。
                       failure.compareAndSet(null, rejected);
                       return failure.get();
-                    });
+                    })
+                .doOnCancel(this::releaseReservation);
           } catch (RuntimeException e) {
             failure.set(e);
             return Flux.error(e);
           }
         });
+  }
+
+  /** 失败/取消时释放本轮的模型费用预留；运行时自身保证重复释放是幂等的。 */
+  private void releaseReservation() {
+    runtime.modelFailed();
   }
 
   /**

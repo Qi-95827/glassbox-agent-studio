@@ -654,3 +654,45 @@ mvn test
 - 该改造横跨 `RunExecutionEngine`、`WorkflowScheduler`、`RunCommandService` 三处并需要新增恢复语义，超出「最小修复」的安全边界，本轮未实现；已在验收记录中标注，不做「已修复」的虚假声明。
 
 **未实跑**：未做真实 MCP 子进程（node/npx）超时回放；PG/Docker 未启动，未运行 PG 专项。
+---
+
+## Task 09 · 费用预留释放、报告脱敏与凭据覆盖（部分交付）
+
+- **对应审计编号**：`F-12`（预留释放）、`F-09`（报告脱敏）
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `framework/agent/execution/AgentRuntime.java` | 新增 `default void modelFailed()`：模型调用失败/取消时释放预留 |
+| `orchestration/ControlledAgentRuntime.java` | `modelFailed()` 在同一把锁内重查 `costReservation` 后 `costs.cancel(...)` 并置 `NONE`，与正常结算互斥，避免双扣或漏放 |
+| `infrastructure/agentscope/ControlledModel.java` | 流式调用 `onErrorMap` 与 `doOnCancel` 均调用 `releaseReservation()`；成功路径不释放，仍走 `modelResult` 结算 |
+| `report/SensitiveTextRedactor.java` | 重写规则集：PEM 私钥整段、JWT、AWS AccessKey、Google API Key、GitHub/GitLab Token、OpenAI Key、Bearer、URL 内嵌凭据、单/双/转义引号键值对；Windows 盘符规则要求盘符前非字母数字，修复 `https://` 被当作盘符路径吞掉；Unix 路径 lookbehind 排除 `:`/`/`，修复把 `//host/path` 二次脱敏成 `postgres:/[已脱敏路径]` |
+
+### 2. 新增测试
+
+| 测试类 | 用例数 | 覆盖 |
+| :--- | ---: | :--- |
+| `agent/ControlledModelReservationReleaseTest` | 3 | 上游报错释放预留；取消订阅释放预留；成功调用不释放且正常结算 |
+| `report/SensitiveTextRedactorTest` | 7 | `https://` 不再被误判为盘符路径；Windows 路径仍被脱敏；AWS/Google/GitHub/GitLab/OpenAI 令牌；JWT、PEM 私钥、URL 内嵌密码（保留主机名）；单引号键值；普通正文与邮箱 |
+
+### 3. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 673, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+
+### 4. 未完成项（如实声明）
+
+以下 Task 09 子项**未实现**，不做虚假声明：
+
+1. `WAITING_TOOL_APPROVAL` 纳入活跃节点集合（并行度计数、写集互斥、`SYSTEM_CHECK` 屏障、取消/重启清理）与审批等待时间从 `RunControl.elapsed()` 扣除；
+2. `ToolApprovalRequestEntity` 乐观锁/原子条件更新与 `@Transactional` 决策；
+3. `RunControl` 预算计数原子化与「仅状态变化才写库」的写放大消除；
+4. 并行 `runEnded()` 立即取消在途节点；
+5. `GlassboxTraceStore` 序列化前结构化裁剪。
+
+原因：上述改动集中在运行状态机与并发认领逻辑，需要与 Task 08 未完成的「暂停让出线程 + 恢复重派」一并设计，否则会产生认领孤儿或重复结算；在未完成该状态机改造前单点修改风险高于收益，故本轮只交付可独立验证的费用释放与脱敏修复。

@@ -233,6 +233,15 @@ final class ControlledAgentRuntime implements AgentRuntime {
     }
   }
 
+  /** 失败/取消时释放预留；先在同一把锁内重查，避免与正常结算并发造成双扣或漏放。 */
+  @Override
+  public synchronized void modelFailed() {
+    if (costs != null && costReservation != CostService.Reservation.NONE) {
+      costs.cancel(costReservation);
+      costReservation = CostService.Reservation.NONE;
+    }
+  }
+
   @Override
   public void modelResult(Integer input, Integer output) {
     control.finishModel(agentId, InvocationStatus.COMPLETED, input, output, null);

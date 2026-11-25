@@ -23,6 +23,9 @@ public interface AgentRuntime {
   default void contextCompacted(ContextBreakdown breakdown) {}
 
   /** 模型流式片段；仅用于瞬态 SSE 推送，不写入高膨胀事件表。 */
+  /** 本轮模型调用失败或被取消：必须释放已预留的费用额度（重复调用需幂等）。 */
+  default void modelFailed() {}
+
   default void modelDelta(String text) {}
 
   /**
