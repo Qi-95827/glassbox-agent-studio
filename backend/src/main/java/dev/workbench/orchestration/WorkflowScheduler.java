@@ -162,6 +162,9 @@ class WorkflowScheduler {
             return null;
           });
       executeDag(runId, plan, task, control, stateLock, activeAgents);
+    } catch (dev.workbench.framework.control.PauseYield pause) {
+      // 暂停发生在未认领节点的安全边界：运行保持 PAUSED，工作线程立即归还执行器，等待 /resume 重新派发。
+      return;
     } catch (StopExecution e) {
       stop(runId, activeAgents, control, e.stopCause(), e.getMessage());
     } catch (InterruptedException e) {
@@ -355,8 +358,10 @@ class WorkflowScheduler {
                         criticVerdict));
         if (settlement.runEnded()) {
           if (!inFlight.isEmpty()) {
+            // 运行已终止（完成/阻塞/取消）：立即取消在途并行节点，绝不留下 RUNNING 孤儿等待自然结束。
             draining = true;
-            continue;
+            cancelAll(completion, inFlight);
+            inFlight.clear();
           }
           return;
         }

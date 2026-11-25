@@ -736,3 +736,39 @@ mvn test
 | 历史迁移脚本 | 未改动任何文件 |
 
 **未实跑**：PG/Docker 专项（本机 Docker 未启动），已如实标注。
+---
+
+## 收官第 2 步 · 断点暂停非阻塞让出线程 + 恢复重派（部分交付）
+
+- **完成时间**：2026-11-25
+
+### 1. 改动文件清单
+
+| 文件 | 改动要点 |
+| :--- | :--- |
+| `framework/control/PauseYield.java`（新增） | 断点暂停让出线程的信号（携带 runId，明确「不是终止原因」） |
+| `framework/control/RunControl.java` | `pauseAtBreakpoint()` 在状态边界内落库 `PAUSED` + 断点原因后**立即抛 `PauseYield`**，不再阻塞等待；新增共享 `yielded` 集合（9 参构造，保留 8 参兼容）；`lastSavedStatus` 去重写库：`check()`/`beginModel`/`beginTool` 仅在状态真迁移时写 RUNNING，消除 200ms 高频写与 PAUSED 覆写 |
+| `orchestration/WorkflowScheduler.java` | 顶层捕获 `PauseYield` 直接返回（运行保持 PAUSED，线程归还执行器）；`settlement.runEnded()` 且仍有并行在途节点时，立即 `cancelAll()` 并清空在途集合，不再 `draining=true` 等待孤儿 |
+| `orchestration/RunCommandService.java` | 新增共享 `yielded()`；`resume()` 区分两种暂停：断点让出（`yielded` 命中）→ 出锁后 `dispatcher.dispatchResume(id)`；普通暂停 → 只唤醒等待线程 |
+| `orchestration/RunDispatchService.java` | 新增 `dispatchResume(runId)`：重新投递到执行器，拒绝时把运行保持 PAUSED 并给出原因 |
+| `orchestration/RunExecutionEngine.java` | 新增 `executeResume(id)`：仅在状态仍为 PAUSED 且存在工作流计划时重建控制并重新进入 `workflows.execute`（让出发生在未认领节点的边界，因此不会留下 RUNNING 孤儿；已完成节点由计划状态跳过） |
+
+### 2. 测试
+
+| 测试类 | 用例数 | 覆盖 |
+| :--- | ---: | :--- |
+| `framework/control/RunControlBreakpointOrderingTest`（重写） | 2 | 断点：先落库 `PAUSED` 状态、再写断点原因事件，随后**立即抛 `PauseYield`**（不再阻塞）；`paused` 与 `yielded` 标记同时置位；预算策略仍可用 |
+
+### 3. 实测与门禁
+
+| 项目 | 实测结果 |
+| :--- | :--- |
+| 全量测试 | **Tests run: 686, Failures: 0, Errors: 0, Skipped: 16** |
+| 构建 | `BUILD SUCCESS`（`EXITCODE=0`） |
+| `ArchitectureGuardTest` | **5/5 通过** |
+
+### 4. 未完成项（如实声明）
+
+1. **`WAITING_TOOL_APPROVAL` 全链路状态机**（并行度计数、写集互斥、系统检查屏障、取消收尾、重启清理、审批等待不计入 elapsed）与 `ToolApprovalRequestEntity` 乐观锁原子 `decide()`、`latestReusable()` 排除 PENDING/EXPIRED —— **未实现**。
+2. **`RunControl` 轮次/工具配额判限的原子化**（当前仅做到写库降频）—— 未实现。
+3. 端到端集成测试「同时挂起 5+ 个断点运行、第 6 个不饥饿；随后恢复全部跑通」—— 未编写（当前仅有断点让出的单元级行为验证）。

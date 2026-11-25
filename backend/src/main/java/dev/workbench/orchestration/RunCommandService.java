@@ -10,8 +10,8 @@ import dev.workbench.domain.TaskDefinition;
 import dev.workbench.store.RunCreationStore;
 import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.store.RunStateStore;
-import dev.workbench.store.TaskRecordService;
 import dev.workbench.store.StopCompletion;
+import dev.workbench.store.TaskRecordService;
 import dev.workbench.task.CostService;
 import dev.workbench.workspace.RunHandoverService;
 import java.util.Map;
@@ -32,6 +32,7 @@ final class RunCommandService {
   private final RunDispatchService dispatcher;
   private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
   private final Set<String> paused = ConcurrentHashMap.newKeySet();
+  private final Set<String> yielded = ConcurrentHashMap.newKeySet();
   private final Map<String, Object> pauseMonitors = new ConcurrentHashMap<>();
 
   RunCommandService(
@@ -59,6 +60,11 @@ final class RunCommandService {
 
   Set<String> cancelled() {
     return cancelled;
+  }
+
+  /** 因断点让出线程的运行集合；恢复时据此决定是否重新派发。 */
+  Set<String> yielded() {
+    return yielded;
   }
 
   Set<String> paused() {
@@ -107,16 +113,15 @@ final class RunCommandService {
   void pause(String id) {
     synchronized (stateLock) {
       RunSnapshot run = runs.runSnapshot(id);
-      if (run.status() != RunStatus.RUNNING)
-        throw new IllegalStateException("只有运行中的任务可以请求暂停。");
+      if (run.status() != RunStatus.RUNNING) throw new IllegalStateException("只有运行中的任务可以请求暂停。");
       if (paused.add(id))
-        evidence.event(
-            id, EventType.PAUSE_REQUESTED, "已请求暂停，等待安全检查点；在途调用可能继续结束。");
+        evidence.event(id, EventType.PAUSE_REQUESTED, "已请求暂停，等待安全检查点；在途调用可能继续结束。");
     }
   }
 
   /** 恢复当前进程内的暂停；进程重启后的恢复仍使用检查点。 */
   void resume(String id) {
+    boolean resumeDispatch = false;
     synchronized (stateLock) {
       RunSnapshot run = runs.runSnapshot(id);
       if (run.status() != RunStatus.PAUSED
@@ -125,6 +130,7 @@ final class RunCommandService {
       String handoverBlock = handovers.resumeBlockReason(id);
       if (handoverBlock != null) throw new IllegalStateException(handoverBlock);
       paused.remove(id);
+      resumeDispatch = yielded.remove(id);
       evidence.event(id, EventType.RESUMED, "用户请求继续执行。");
       Object monitor = pauseMonitors.get(id);
       if (monitor != null)
@@ -132,6 +138,8 @@ final class RunCommandService {
           monitor.notifyAll();
         }
     }
+    // 断点暂停已让出工作线程，必须重新派发；普通暂停只是唤醒仍在等待的线程，不重复派发。
+    if (resumeDispatch && dispatcher != null) dispatcher.dispatchResume(id);
   }
 
   /** 从有效快照创建新运行，不覆盖历史。此处的同步只覆盖本进程； 外部副作用和分布式并发恢复尚未实现。 */

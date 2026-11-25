@@ -8,8 +8,8 @@ import dev.workbench.domain.TaskDefinition;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.store.RunStateStore;
-import dev.workbench.store.TaskRecordService;
 import dev.workbench.store.StopCompletion;
+import dev.workbench.store.TaskRecordService;
 
 /** 运行执行入口：认领待运行、构建运行控制、选择动态计划或直接执行路径。 */
 final class RunExecutionEngine {
@@ -61,15 +61,43 @@ final class RunExecutionEngine {
     }
     var state =
         new DirectRunExecutor.ExecutionState(
-            id,
-            prepared.run(),
-            prepared.task(),
-            control,
-            stage,
-            previousResult,
-            recovery);
+            id, prepared.run(), prepared.task(), control, stage, previousResult, recovery);
     state.agentId = dev.workbench.domain.WorkbenchIds.newId();
     direct.execute(state);
+  }
+
+  /**
+   * 恢复因断点让出线程的运行：只在状态仍为 {@code PAUSED} 时重新进入调度，继续认领剩余节点。
+   *
+   * <p>让出发生在未认领任何节点的边界，因此这里不会出现 {@code RUNNING} 认领孤儿；已完成节点由计划状态 天然跳过，不会被重复执行。
+   */
+  void executeResume(String id) {
+    RunSnapshot run = runs.runSnapshot(id);
+    if (run.status() != dev.workbench.domain.RunStatus.PAUSED) return;
+    WorkflowPlan plan = workflows.plan(id);
+    if (plan == null) return;
+    TaskDefinition task;
+    try {
+      task = tasks.taskDefinition(run.taskId().toString());
+    } catch (RuntimeException invalid) {
+      return;
+    }
+    RunControl control =
+        new RunControl(
+            id,
+            run,
+            controls,
+            commands.pauseMonitor(id),
+            commands.paused(),
+            commands.cancelled(),
+            commands.yielded(),
+            task.roleBudgets(),
+            task.toolBudgets());
+    try {
+      workflows.execute(id, plan, task, control, stateLock);
+    } finally {
+      commands.clearControl(id);
+    }
   }
 
   private Prepared prepare(String id) {

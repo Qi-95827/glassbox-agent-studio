@@ -24,11 +24,19 @@ public final class RunControl {
   private static final long MODEL_RETRY_DELAY_MS = 1000;
   private final RunControlStore repository;
   private final Set<String> paused, cancelled;
+
+  /** 因断点让出线程的运行：恢复时必须重新派发，普通暂停只唤醒等待线程。 */
+  private final Set<String> yielded;
+
   private final String runId;
   private final long previousMs;
   private final long startedNanos = System.nanoTime();
   private final Object pauseMonitor;
   private long pausedNanos, pauseStartedNanos;
+
+  /** 最近一次落库的运行状态：只在状态真正迁移时写库，消除高频检查造成的写风暴与 PAUSED 覆写。 */
+  private volatile RunStatus lastSavedStatus = RunStatus.RUNNING;
+
   private final Integer maxRounds, maxTools, maxPerTool, maxSeconds;
   private final Long maxReportedTokens;
   private final Integer maxIdenticalTools;
@@ -50,8 +58,10 @@ public final class RunControl {
       Object pauseMonitor,
       Set<String> paused,
       Set<String> cancelled,
+      Set<String> yielded,
       Map<AgentRole, RoleBudget> roleBudgets,
       Map<ToolKind, Integer> toolBudgets) {
+    this.yielded = yielded == null ? ConcurrentHashMap.newKeySet() : yielded;
     this.runId = runId;
     this.repository = repository;
     this.pauseMonitor = pauseMonitor;
@@ -72,26 +82,52 @@ public final class RunControl {
     this.toolBudgets = Map.copyOf(toolBudgets);
   }
 
+  /** 兼容未共享让出标记的装配。 */
+  public RunControl(
+      String runId,
+      RunSnapshot run,
+      RunControlStore repository,
+      Object pauseMonitor,
+      Set<String> paused,
+      Set<String> cancelled,
+      Map<AgentRole, RoleBudget> roleBudgets,
+      Map<ToolKind, Integer> toolBudgets) {
+    this(
+        runId,
+        run,
+        repository,
+        pauseMonitor,
+        paused,
+        cancelled,
+        ConcurrentHashMap.newKeySet(),
+        roleBudgets,
+        toolBudgets);
+  }
+
   /** 本运行已累计的模型轮次，包含恢复时继承的消耗。 */
   public int rounds() {
     return rounds.get();
   }
 
   /**
-   * 在节点断点处主动挂起运行，复用协作式暂停与恢复机制等待用户人工放行。
+   * 在节点断点处主动挂起运行：落库暂停状态与断点原因后**立即让出调度线程**。
    *
-   * <p>顺序必须是「先标记暂停、在同一边界内立即写入断点事件」：若先标记暂停再调用边界，边界内的 {@link #check()} 会先落库通用 PAUSED
-   * 事件并进入等待，断点原因只能等到恢复后才写入，事件序列倒置。
+   * <p>旧实现先标记暂停再进入协作式等待，断点会长期占用固定大小的执行线程池，且通用 PAUSED 事件 先于断点原因落库。现在：状态与原因在同一状态边界内落库，随后抛出 {@link
+   * PauseYield} 让调度器退出， 运行保持 {@code PAUSED}；用户点「继续」时由恢复路径重新派发。
    */
   public void pauseAtBreakpoint(Object stateLock, String reason) {
     atBoundary(
         stateLock,
         () -> {
           paused.add(runId);
+          if (pauseStartedNanos == 0) pauseStartedNanos = System.nanoTime();
+          save(RunStatus.PAUSED, null, null);
+          lastSavedStatus = RunStatus.PAUSED;
           repository.event(runId, EventType.PAUSED, reason);
+          yielded.add(runId);
           return null;
         });
-    check();
+    throw new PauseYield(runId);
   }
 
   /** 抓取此次装配对应的配置，不以剩余额度替代政策上限。 */
@@ -144,6 +180,7 @@ public final class RunControl {
       if (paused.contains(runId) && pauseStartedNanos == 0) {
         pauseStartedNanos = System.nanoTime();
         save(RunStatus.PAUSED, null, null);
+        lastSavedStatus = RunStatus.PAUSED;
         repository.event(runId, EventType.PAUSED, "已暂停新增动作；在途外部请求可能仍在结束。");
       }
       while (paused.contains(runId) && !cancelled.contains(runId)) {
@@ -162,7 +199,11 @@ public final class RunControl {
     if (cancelled.contains(runId)) throw new StopExecution(StopCause.USER_CANCELLED, "用户已取消运行。");
     if (maxSeconds != null && elapsed() >= maxSeconds * 1000L)
       throw new StopExecution(StopCause.TIME_LIMIT, "运行时间达到上限。");
-    save(RunStatus.RUNNING, null, null);
+    // 仅当状态确实从暂停/终态回到运行中时才写库。
+    if (lastSavedStatus != RunStatus.RUNNING) {
+      save(RunStatus.RUNNING, null, null);
+      lastSavedStatus = RunStatus.RUNNING;
+    }
   }
 
   /** 在与暂停、取消相同的锁内认领或提交状态，等待暂停时不持有这把锁。 */
@@ -194,7 +235,11 @@ public final class RunControl {
         throw new StopExecution(StopCause.ROLE_MODEL_LIMIT, "当前角色的单实例模型调用次数达到上限。");
     }
     rounds.incrementAndGet();
-    save(RunStatus.RUNNING, null, null);
+    // 仅当状态确实从暂停/终态回到运行中时才写库。
+    if (lastSavedStatus != RunStatus.RUNNING) {
+      save(RunStatus.RUNNING, null, null);
+      lastSavedStatus = RunStatus.RUNNING;
+    }
   }
 
   private void checkModelBudget(NodePolicy node) {
@@ -281,7 +326,11 @@ public final class RunControl {
             >= maxIdenticalTools)
       throw new StopExecution(StopCause.REPEATED_TOOL_LIMIT, "连续相同工具调用达到上限：" + kind.recordName());
     tools.incrementAndGet();
-    save(RunStatus.RUNNING, null, null);
+    // 仅当状态确实从暂停/终态回到运行中时才写库。
+    if (lastSavedStatus != RunStatus.RUNNING) {
+      save(RunStatus.RUNNING, null, null);
+      lastSavedStatus = RunStatus.RUNNING;
+    }
   }
 
   /** 角色来自已保存的实例，不接受模型提供的角色名称。 */

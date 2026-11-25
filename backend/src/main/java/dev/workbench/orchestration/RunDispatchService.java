@@ -19,10 +19,7 @@ final class RunDispatchService {
   private volatile RunExecutionEngine engine;
 
   RunDispatchService(
-      RunStateStore runs,
-      RunCreationStore creation,
-      ExecutorService executor,
-      RunService owner) {
+      RunStateStore runs, RunCreationStore creation, ExecutorService executor, RunService owner) {
     this.runs = runs;
     this.creation = creation;
     this.executor = executor;
@@ -77,6 +74,22 @@ final class RunDispatchService {
   /** 候选确认事务提交后派发；调用方不得在未提交事务中调用。 */
   void dispatchConfirmed(String runId) {
     dispatchInitial(runId);
+  }
+
+  /** 恢复因断点让出线程的运行：重新投递回执行器，继续认领剩余 PENDING 节点。 */
+  void dispatchResume(String runId) {
+    try {
+      executor.submit(() -> engine.executeResume(runId));
+    } catch (RejectedExecutionException e) {
+      runs.update(
+          runId,
+          dev.workbench.domain.RunStatus.PAUSED,
+          "恢复请求未能加入执行队列，运行保持暂停，可稍后再次继续。",
+          null,
+          0,
+          0,
+          0);
+    }
   }
 
   void dispatchRecovery(String nextId, CheckpointStage stage, String previousResult) {
