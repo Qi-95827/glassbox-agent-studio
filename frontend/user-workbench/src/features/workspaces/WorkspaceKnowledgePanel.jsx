@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Alert, Box, Button, Chip, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, Paper, Stack, TextField, Typography } from '@mui/material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { workspacesApi } from '../../api/workspaces';
+import { memoryApi } from '../../api/memory';
+import RagRetrievalXRayPanel from '../memory/RagRetrievalXRayPanel';
 import { useToast } from '../../components/ToastProvider';
 import EmptyState from '../../components/EmptyState';
 import { googleTokens } from '../../theme/googleTheme';
@@ -18,6 +20,7 @@ export default function WorkspaceKnowledgePanel({ workspaceId }) {
   const [content, setContent] = useState('');
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState(null);
+  const [xray, setXray] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const documents = useQuery({
@@ -60,7 +63,13 @@ export default function WorkspaceKnowledgePanel({ workspaceId }) {
   const search = async () => {
     if (!query.trim()) return;
     try {
-      setHits(await workspacesApi.searchKnowledge(workspaceId, query.trim(), 5));
+      const [result, evidence] = await Promise.all([
+        workspacesApi.searchKnowledge(workspaceId, query.trim(), 5),
+        // 同一次检索另取一份带 BM25/向量/RRF 明细的证据，供「召回透视」漏斗使用。
+        memoryApi.knowledgeXray(workspaceId, query.trim(), 5)
+      ]);
+      setHits(result);
+      setXray(evidence);
     } catch (error) {
       toast.error(error.message);
     }
@@ -139,6 +148,7 @@ export default function WorkspaceKnowledgePanel({ workspaceId }) {
             color="inherit"
             onClick={() => {
               setHits(null);
+              setXray(null);
               setQuery('');
             }}
           >
@@ -146,6 +156,12 @@ export default function WorkspaceKnowledgePanel({ workspaceId }) {
           </Button>
         )}
       </Stack>
+
+      {xray && (
+        <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 3 }}>
+          <RagRetrievalXRayPanel evidence={xray} />
+        </Paper>
+      )}
 
       {hits && (
         <Stack spacing={1}>

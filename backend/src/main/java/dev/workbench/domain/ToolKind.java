@@ -10,6 +10,10 @@ public enum ToolKind {
   WORKSPACE_SEARCH("搜索授权文件"),
   /** 写入用户授权的单个工作区文件。 */
   WORKSPACE_WRITE("修改授权文件"),
+  /** 检索工作区知识库并返回带 BM25 / 向量 / RRF 证据的片段。 */
+  KNOWLEDGE_SEARCH("检索知识库"),
+  /** 回读本次运行被 L1 卸载的上下文产物原文。 */
+  CONTEXT_ARTIFACT_READ("回读上下文产物"),
   /** 外部 MCP 工具；名称由适配层使用命名空间暴露，执行仍经过 Tool Gateway。 */
   MCP("MCP 外部工具");
 

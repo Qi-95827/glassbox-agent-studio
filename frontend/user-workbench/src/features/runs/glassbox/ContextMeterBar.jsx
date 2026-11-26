@@ -1,4 +1,8 @@
-import { Box, Chip, Stack, Typography } from '@mui/material';
+import { useState } from 'react';
+import { Box, Button, Chip, Collapse, Divider, Stack, Typography } from '@mui/material';
+import ExpandLessRounded from '@mui/icons-material/ExpandLessRounded';
+import ExpandMoreRounded from '@mui/icons-material/ExpandMoreRounded';
+import ContextMicroscopePanel from './ContextMicroscopePanel';
 import { googleTokens } from '../../../theme/googleTheme';
 import { useI18n } from '../../../i18n/I18nProvider';
 
@@ -13,9 +17,13 @@ const SEGMENTS = [
 
 /**
  * 玻璃盒上下文占比条：纯 CSS 分段，不注入 HTML；数据来自每次 ModelCall 的预算快照。
+ *
+ * <p>传入完整 `models` 时下方会出现「上下文显微镜」：多轮水位堆叠面积图、L1/L2/L3 阈值
+ * 参考线与压缩前后逐条对照。没有 `models` 时只保留原有的单次占比条，行为完全不变。
  */
-export default function ContextMeterBar({ context }) {
+export default function ContextMeterBar({ context, models }) {
   const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
   if (!context) return null;
   const limit = Math.max(1, context.modelContextLimit || 0);
   const segments = context.segmentTokens || {};
@@ -138,6 +146,33 @@ export default function ContextMeterBar({ context }) {
         >
           {t('context.summary', { preview: String(context.summaryPreview).slice(0, 240) })}
         </Typography>
+      )}
+
+      {Array.isArray(models) && models.length > 0 && (
+        <>
+          <Divider sx={{ my: 1 }} />
+          <Button
+            size="small"
+            variant="text"
+            data-testid="microscope-toggle"
+            startIcon={
+              expanded ? (
+                <ExpandLessRounded sx={{ fontSize: 16 }} />
+              ) : (
+                <ExpandMoreRounded sx={{ fontSize: 16 }} />
+              )
+            }
+            onClick={() => setExpanded(value => !value)}
+            sx={{ minHeight: 26, py: 0, fontSize: 12 }}
+          >
+            {expanded ? t('microscope.collapse') : t('microscope.expand')}
+          </Button>
+          <Collapse in={expanded} unmountOnExit>
+            <Box sx={{ mt: 1 }}>
+              <ContextMicroscopePanel models={models} />
+            </Box>
+          </Collapse>
+        </>
       )}
     </Box>
   );

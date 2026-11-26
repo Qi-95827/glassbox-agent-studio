@@ -8,13 +8,17 @@ public final class ToolContracts {
   public static final int SINGLE_FILE_VERSION = 1;
   public static final int MULTI_FILE_VERSION = 2;
   public static final int SEARCH_VERSION = 1;
+  /** 作用域只读工具（知识库检索、上下文产物回读）的契约版本。 */
+  public static final int READ_SCOPE_VERSION = 1;
 
   private ToolContracts() {}
 
   /** 操作性质由受控工具类型决定。 */
   public static ToolEffect effectFor(ToolKind kind) {
     return switch (kind) {
-      case SIMULATED_INSPECTION, WORKSPACE_READ, WORKSPACE_SEARCH -> ToolEffect.READ_ONLY;
+      case SIMULATED_INSPECTION, WORKSPACE_READ, WORKSPACE_SEARCH, KNOWLEDGE_SEARCH,
+              CONTEXT_ARTIFACT_READ ->
+          ToolEffect.READ_ONLY;
       case WORKSPACE_WRITE, MCP -> ToolEffect.WRITE;
     };
   }
@@ -25,6 +29,9 @@ public final class ToolContracts {
       throw new IllegalArgumentException("工具契约参数无效。");
     return switch (kind) {
       case SIMULATED_INSPECTION -> SIMULATED_VERSION;
+      case KNOWLEDGE_SEARCH, CONTEXT_ARTIFACT_READ ->
+          // 这两个只读工具的作用域由运行与工作区标识决定，与授权文件数量无关。
+          READ_SCOPE_VERSION;
       case WORKSPACE_SEARCH -> {
         if (fileCount == 0) throw new IllegalArgumentException("搜索工具需要授权文件。");
         yield SEARCH_VERSION;

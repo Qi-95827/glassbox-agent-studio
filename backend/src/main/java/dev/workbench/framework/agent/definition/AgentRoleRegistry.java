@@ -77,7 +77,10 @@ public class AgentRoleRegistry {
               "coding-agent",
               role.version(),
               PromptResourceLoader.load("agents/coder.md"),
-              Set.of(ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH, ToolKind.WORKSPACE_WRITE));
+              Set.of(
+                  ToolKind.WORKSPACE_READ,
+                  ToolKind.WORKSPACE_SEARCH,
+                  ToolKind.WORKSPACE_WRITE));
       case REVIEWER ->
           new AgentRoleDefinition(
               role,

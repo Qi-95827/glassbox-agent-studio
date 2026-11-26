@@ -48,7 +48,8 @@ public final class AgentToolRegistry {
                   context.workspaceId(),
                   writes ? context.writePaths() : context.authorizedPaths(),
                   context.scenario(),
-                  context.locale()));
+                  context.locale(),
+                  context.runId()));
       if (spec == null) throw new IllegalStateException("工具提供者未声明工具：" + entry.getKey());
       if (toolkit.getTool(spec.name()) != null)
         throw new IllegalStateException("工具名称重复：" + spec.name());
@@ -101,7 +102,11 @@ public final class AgentToolRegistry {
       var original =
           provider.create(
               new AgentToolProvider.Scope(
-                  context.workspaceId(), filtered, context.scenario(), context.locale()));
+                  context.workspaceId(),
+                  filtered,
+                  context.scenario(),
+                  context.locale(),
+                  context.runId()));
       if (original == null) throw new IllegalStateException("私有工具执行器未声明工具。");
       var spec = privateSpec(original, tool, context.locale());
       if (toolkit.getTool(spec.name()) != null)

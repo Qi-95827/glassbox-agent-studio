@@ -53,6 +53,27 @@ public class KnowledgeController {
     return knowledge.retrieve(workspaceId, q, limit);
   }
 
+  /** 工作区切片透视：查看某篇文档被切出的分块边界与预览。 */
+  @GetMapping("/{documentId}/chunks")
+  public List<KnowledgeRagService.ChunkView> chunks(
+      @PathVariable String workspaceId, @PathVariable String documentId) {
+    return knowledge.chunks(workspaceId, documentId);
+  }
+
+  /**
+   * 召回透视：返回单次检索的完整候选与 BM25 / 向量 / RRF 明细。
+   *
+   * <p>与 {@code /search} 共用同一套阈值与截断规则，区别只是把「没入选的候选以及原因」
+   * 也一并返回。工作区归属由 {@code requireWorkspace} 统一校验。
+   */
+  @GetMapping("/xray")
+  public KnowledgeRagService.RetrievalEvidence xray(
+      @PathVariable String workspaceId,
+      @RequestParam String q,
+      @RequestParam(defaultValue = "5") int limit) {
+    return knowledge.retrieveWithEvidence(workspaceId, q, limit);
+  }
+
   @DeleteMapping("/{documentId}")
   public Map<String, Object> delete(
       @PathVariable String workspaceId, @PathVariable String documentId) {

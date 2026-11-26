@@ -74,6 +74,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     String summaryPreview = "";
     String structuredAnchors = "";
     String retainedPreview = "";
+    var offloadDetails = new ArrayList<ContextBreakdown.OffloadDetail>();
 
     if (ratio(before, limit) >= request.l1Threshold()) {
       var result = offloadToolOutputs(working, request.offloadAfterTurns(), focus, request.scope());
@@ -81,18 +82,35 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
         working = result.messages();
         offloaded.addAll(result.ids());
         artifactRefs.addAll(result.refs());
+        offloadDetails.addAll(result.details());
         retainedPreview = result.preview();
         tier = CompactionTier.L1_TOOL_OFFLOAD;
       }
     }
     int afterL1 = estimate(working);
+    int mergedFrom = -1;
+    int mergedTo = -1;
+    int mergedCount = 0;
     if (ratio(afterL1, limit) >= request.l2Threshold()) {
+      // 合并范围要在摘要发生前留底：摘要后原消息已被替换，无法再回推是哪一段被压掉了。
+      var beforeL2 = List.copyOf(working);
       var result = anchoredSummarize(working, request, focus);
       if (result.changed()) {
         working = result.messages();
         summaryPreview = result.preview();
         structuredAnchors = result.anchor();
         tier = CompactionTier.L2_SLIDING_SUMMARY;
+        var surviving = new java.util.HashSet<Integer>();
+        for (var message : working)
+          if (message.originalIndex() != null) surviving.add(message.originalIndex());
+        for (var message : beforeL2) {
+          if (message.originalIndex() == null || surviving.contains(message.originalIndex()))
+            continue;
+          mergedCount++;
+          int index = message.originalIndex();
+          if (mergedFrom < 0 || index < mergedFrom) mergedFrom = index;
+          if (index > mergedTo) mergedTo = index;
+        }
       }
     }
     int afterL2 = estimate(working);
@@ -104,6 +122,12 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
         tier = CompactionTier.L3_HARD_GUARD;
       }
     }
+
+    // L3 之后仍然保留的工具调用标识，就是被硬保底保护下来的「原子对」名单。
+    var protectedToolCalls = new ArrayList<String>();
+    for (var message : working)
+      if (message.toolCallId() != null && !protectedToolCalls.contains(message.toolCallId()))
+        protectedToolCalls.add(message.toolCallId());
 
     int total = estimate(working);
     var breakdown =
@@ -119,7 +143,13 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
             summaryPreview,
             List.copyOf(artifactRefs),
             retainedPreview,
-            structuredAnchors);
+            structuredAnchors,
+            new ContextBreakdown.CompactionDetail(
+                List.copyOf(offloadDetails),
+                mergedFrom,
+                mergedTo,
+                mergedCount,
+                List.copyOf(protectedToolCalls)));
     return new CompactionResult(working, breakdown);
   }
 
@@ -205,6 +235,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     var updated = new ArrayList<ContextMessage>(messages.size());
     var ids = new ArrayList<String>();
     var refs = new ArrayList<String>();
+    var details = new ArrayList<ContextBreakdown.OffloadDetail>();
     var preview = new StringBuilder();
     boolean changed = false;
     for (int index = 0; index < messages.size(); index++) {
@@ -220,13 +251,16 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
         updated.add(new ContextMessage(message.role(), message.name(), replacement, id));
         ids.add(id);
         refs.add(ref);
+        details.add(
+            new ContextBreakdown.OffloadDetail(
+                id, ref, message.content().length(), replacement.length()));
         if (preview.isEmpty()) preview.append(excerpt.preview());
         changed = true;
         continue;
       }
       updated.add(message);
     }
-    return new OffloadResult(updated, ids, refs, preview.toString(), changed);
+    return new OffloadResult(updated, ids, refs, preview.toString(), changed, details);
   }
 
   private static int excerptBudget(String content) {
@@ -847,7 +881,8 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
       List<String> ids,
       List<String> refs,
       String preview,
-      boolean changed) {}
+      boolean changed,
+      List<ContextBreakdown.OffloadDetail> details) {}
 
   private record SummaryResult(
       List<ContextMessage> messages, String preview, String anchor, boolean changed) {

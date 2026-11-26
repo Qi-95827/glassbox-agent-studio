@@ -15,10 +15,20 @@ public interface AgentToolProvider {
   ToolSpecification<?> create(Scope scope);
 
   record Scope(
-      String workspaceId, List<String> authorizedPaths, Scenario scenario, String locale) {
+      String workspaceId,
+      List<String> authorizedPaths,
+      Scenario scenario,
+      String locale,
+      String runId) {
     /** 旧调用没有任务语言；工具描述回退中文。 */
     public Scope(String workspaceId, List<String> authorizedPaths, Scenario scenario) {
-      this(workspaceId, authorizedPaths, scenario, null);
+      this(workspaceId, authorizedPaths, scenario, null, null);
+    }
+
+    /** 兼容尚未传递运行标识的装配路径；需要运行归属的工具会拒绝装配。 */
+    public Scope(
+        String workspaceId, List<String> authorizedPaths, Scenario scenario, String locale) {
+      this(workspaceId, authorizedPaths, scenario, locale, null);
     }
 
     public Scope {
@@ -29,6 +39,7 @@ public interface AgentToolProvider {
               : locale.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
                   ? "en-US"
                   : "zh-CN";
+      runId = runId == null || runId.isBlank() ? null : runId.strip();
     }
   }
 }

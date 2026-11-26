@@ -259,7 +259,8 @@ public class AgentScopeExecutor implements AgentExecutor {
             runtime,
             failure,
             scopedWrites,
-            request.locale());
+            request.locale(),
+            request.context().runId());
     Toolkit toolkit =
         assembly.privateTools().isEmpty()
             ? tools.assemble(assembly.toolVersions(), toolContext)

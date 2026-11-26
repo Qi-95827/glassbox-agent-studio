@@ -16,7 +16,30 @@ public record AgentToolContext(
     AgentRuntime runtime,
     AtomicReference<RuntimeException> failure,
     List<String> writePaths,
-    String locale) {
+    String locale,
+    String runId) {
+  /** 旧调用没有运行标识；需要运行归属的工具会拒绝装配。 */
+  public AgentToolContext(
+      ObjectMapper json,
+      String workspaceId,
+      List<String> authorizedPaths,
+      Scenario scenario,
+      AgentRuntime runtime,
+      AtomicReference<RuntimeException> failure,
+      List<String> writePaths,
+      String locale) {
+    this(
+        json,
+        workspaceId,
+        authorizedPaths,
+        scenario,
+        runtime,
+        failure,
+        writePaths,
+        locale,
+        null);
+  }
+
   /** 旧调用没有任务语言；工具描述回退中文。 */
   public AgentToolContext(
       ObjectMapper json,
@@ -26,7 +49,7 @@ public record AgentToolContext(
       AgentRuntime runtime,
       AtomicReference<RuntimeException> failure,
       List<String> writePaths) {
-    this(json, workspaceId, authorizedPaths, scenario, runtime, failure, writePaths, null);
+    this(json, workspaceId, authorizedPaths, scenario, runtime, failure, writePaths, null, null);
   }
 
   /** 旧调用没有节点级写范围时，写工具沿用整个授权文件集合。 */
@@ -37,7 +60,16 @@ public record AgentToolContext(
       Scenario scenario,
       AgentRuntime runtime,
       AtomicReference<RuntimeException> failure) {
-    this(json, workspaceId, authorizedPaths, scenario, runtime, failure, authorizedPaths, null);
+    this(
+        json,
+        workspaceId,
+        authorizedPaths,
+        scenario,
+        runtime,
+        failure,
+        authorizedPaths,
+        null,
+        null);
   }
 
   public AgentToolContext {
@@ -60,5 +92,6 @@ public record AgentToolContext(
             : locale.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
                 ? "en-US"
                 : "zh-CN";
+    runId = runId == null || runId.isBlank() ? null : runId.strip();
   }
 }

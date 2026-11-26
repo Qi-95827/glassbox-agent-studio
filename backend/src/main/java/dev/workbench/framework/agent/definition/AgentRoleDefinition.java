@@ -28,6 +28,8 @@ public record AgentRoleDefinition(
       result.remove(ToolKind.WORKSPACE_READ);
       result.remove(ToolKind.WORKSPACE_SEARCH);
       result.remove(ToolKind.WORKSPACE_WRITE);
+      // 知识库按工作区隔离：没有工作区就没有可检索的语料，装配了也只会命中空集。
+      result.remove(ToolKind.KNOWLEDGE_SEARCH);
     } else if (!writeEnabled) {
       result.remove(ToolKind.WORKSPACE_WRITE);
     }

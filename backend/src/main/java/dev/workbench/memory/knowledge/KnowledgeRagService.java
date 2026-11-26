@@ -165,6 +165,45 @@ public class KnowledgeRagService {
         .toList();
   }
 
+  /** 分块预览窗口：只回传前若干字符，避免把整篇分块正文推到浏览器。 */
+  private static final int CHUNK_PREVIEW_CHARS = 400;
+
+  /**
+   * 单篇文档的分块边界预览。
+   *
+   * @param index 分块在文档内的顺序号。
+   * @param charCount 该分块原始字符数；与 {@code preview} 长度不同即表示被预览截断。
+   */
+  public record ChunkView(
+      int index,
+      String sectionTitle,
+      int tokenEstimate,
+      int charCount,
+      String preview,
+      boolean previewTruncated) {}
+
+  /** 工作区切片透视：读取某篇知识库文档被切出的分块边界与预览。 */
+  @Transactional(readOnly = true)
+  public List<ChunkView> chunks(String workspaceId, String documentId) {
+    documents
+        .findByIdAndWorkspaceId(documentId, workspaceId)
+        .orElseThrow(() -> new IllegalArgumentException("知识库文档不存在或不属于当前工作区。"));
+    return chunks.findByDocumentIdOrderByChunkIndexAsc(documentId).stream()
+        .map(
+            row -> {
+              String content = row.getContent() == null ? "" : row.getContent();
+              boolean truncated = content.length() > CHUNK_PREVIEW_CHARS;
+              return new ChunkView(
+                  row.getChunkIndex(),
+                  row.getSectionTitle() == null ? "" : row.getSectionTitle(),
+                  row.getTokenEstimate(),
+                  content.length(),
+                  truncated ? content.substring(0, CHUNK_PREVIEW_CHARS) : content,
+                  truncated);
+            })
+        .toList();
+  }
+
   @Transactional
   public void delete(String workspaceId, String documentId) {
     var document =
@@ -187,9 +226,70 @@ public class KnowledgeRagService {
    * </ul>
    */
   public List<RagHit> retrieve(String workspaceId, String query, int limit) {
-    if (query == null || query.isBlank()) return List.of();
+    var evidence = retrieveWithEvidence(workspaceId, query, limit);
+    var hits = new ArrayList<RagHit>();
+    for (var item : evidence.items()) {
+      if (!item.selected()) continue;
+      hits.add(
+          new RagHit(
+              item.chunkId(),
+              item.documentId(),
+              item.title(),
+              item.sourcePath(),
+              item.sectionTitle(),
+              item.content(),
+              item.tokenEstimate(),
+              item.score(),
+              String.format(
+                  java.util.Locale.ROOT,
+                  "bm25=%.2f, vector=%.2f, rrf=%.2f",
+                  item.bm25(),
+                  item.vector(),
+                  item.rrf())));
+    }
+    return List.copyOf(hits);
+  }
+
+  /** 透明召回证据：单次检索的每个候选及其 BM25 / 向量 / RRF 得分与入选/裁剪原因。 */
+  public record RetrievalEvidence(
+      String query,
+      boolean vectorEnabled,
+      List<EvidenceItem> items,
+      int selectedCount,
+      int injectedTokens) {}
+
+  /**
+   * 单个候选分块的召回证据。
+   *
+   * @param selected 是否最终注入 Prompt。
+   * @param droppedReason 未入选原因：{@code BELOW_THRESHOLD} / {@code OVER_LIMIT}；入选时为空串。
+   */
+  public record EvidenceItem(
+      String chunkId,
+      String documentId,
+      String title,
+      String sourcePath,
+      String sectionTitle,
+      String content,
+      int tokenEstimate,
+      double bm25,
+      double vector,
+      double rrf,
+      double score,
+      boolean selected,
+      String droppedReason) {}
+
+  /**
+   * 带证据的混合检索。
+   *
+   * <p>与 {@link #retrieve(String, String, int)} 共用同一套打分与阈值：入选集合、排序与截断
+   * 完全一致，额外只多保留了「没进来的那些以及为什么没进来」。前端因此可以画真实漏斗，
+   * 而不是根据最终结果反推过程。
+   */
+  public RetrievalEvidence retrieveWithEvidence(String workspaceId, String query, int limit) {
+    if (query == null || query.isBlank()) return new RetrievalEvidence("", false, List.of(), 0, 0);
     var summaries = chunks.summarizeByWorkspace(workspaceId);
-    if (summaries.isEmpty()) return List.of();
+    if (summaries.isEmpty()) return new RetrievalEvidence(query, false, List.of(), 0, 0);
     var provider = provider();
     float[] queryVector = provider == null ? null : embedOne(provider, query);
     if (queryVector != null && queryVector.length == 0) queryVector = null;
@@ -209,36 +309,68 @@ public class KnowledgeRagService {
     var documentTitles = new HashMap<String, KnowledgeDocumentEntity>();
     for (var document : documents.findByWorkspaceIdOrderByUpdatedAtDescIdAsc(workspaceId))
       documentTitles.put(document.getId(), document);
-    var hits = new ArrayList<RagHit>();
+
+    int cap = Math.max(1, Math.min(50, limit));
+    var scored = new ArrayList<ScoredChunk>();
     for (var summary : summaries) {
       var score = ranked.get(summary.getId());
-      if (score == null || Math.max(score.bm25(), score.vector()) < MIN_RELEVANCE) continue;
+      if (score == null) continue;
       var document = documentTitles.get(summary.getDocumentId());
       double semantic =
           queryVector == null ? score.bm25() : 0.40 * score.bm25() + 0.60 * score.vector();
       double total = 0.60 * score.rrf() + 0.40 * semantic;
-      hits.add(
-          new RagHit(
-              summary.getId(),
-              summary.getDocumentId(),
+      scored.add(
+          new ScoredChunk(
+              summary,
+              document,
+              score.bm25(),
+              score.vector(),
+              score.rrf(),
+              Math.round(total * 10_000.0) / 10_000.0,
+              Math.max(score.bm25(), score.vector())));
+    }
+    scored.sort((left, right) -> Double.compare(right.score(), left.score()));
+    int injectedTokens = 0;
+    int selected = 0;
+    var items = new ArrayList<EvidenceItem>(scored.size());
+    for (var row : scored) {
+      boolean aboveThreshold = row.relevance() >= MIN_RELEVANCE;
+      boolean withinLimit = aboveThreshold && selected < cap;
+      String reason = !aboveThreshold ? "BELOW_THRESHOLD" : withinLimit ? "" : "OVER_LIMIT";
+      if (withinLimit) {
+        selected++;
+        injectedTokens += row.summary().getTokenEstimate();
+      }
+      var document = row.document();
+      items.add(
+          new EvidenceItem(
+              row.summary().getId(),
+              row.summary().getDocumentId(),
               document == null ? "" : document.getTitle(),
               document == null ? "" : document.getSourcePath(),
-              summary.getSectionTitle() == null ? "" : summary.getSectionTitle(),
-              summary.getContent(),
-              summary.getTokenEstimate(),
-              Math.round(total * 10_000.0) / 10_000.0,
-              String.format(
-                  java.util.Locale.ROOT,
-                  "bm25=%.2f, vector=%.2f, rrf=%.2f",
-                  score.bm25(),
-                  score.vector(),
-                  score.rrf())));
+              row.summary().getSectionTitle() == null ? "" : row.summary().getSectionTitle(),
+              row.summary().getContent(),
+              row.summary().getTokenEstimate(),
+              row.bm25(),
+              row.vector(),
+              row.rrf(),
+              row.score(),
+              withinLimit,
+              reason));
     }
-    return hits.stream()
-        .sorted((left, right) -> Double.compare(right.score(), left.score()))
-        .limit(Math.max(1, Math.min(50, limit)))
-        .toList();
+    return new RetrievalEvidence(
+        query, queryVector != null, List.copyOf(items), selected, injectedTokens);
   }
+
+  /** 打分中间态：排序后再决定谁真的进入 Prompt。 */
+  private record ScoredChunk(
+      dev.workbench.persistence.view.KnowledgeChunkSummary summary,
+      KnowledgeDocumentEntity document,
+      double bm25,
+      double vector,
+      double rrf,
+      double score,
+      double relevance) {}
 
   /** 候选集 = 词法 Top-N ∪ 向量下推命中；规模有上界，避免整库向量反序列化。 */
   private static java.util.Set<String> candidateIds(

@@ -72,7 +72,7 @@ export default function LlmTracePanel({ models }) {
               </Typography>
             ) : (
               <Stack spacing={1}>
-                <ContextMeterBar context={payload.context} />
+                <ContextMeterBar context={payload.context} models={models} />
 
                 {payload.truncated && (
                   <Alert severity="info" sx={{ py: 0 }}>
