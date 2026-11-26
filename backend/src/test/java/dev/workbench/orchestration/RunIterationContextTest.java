@@ -196,6 +196,64 @@ class RunIterationContextTest {
     assertEquals("", empty.text(), "首轮运行不得被注入任何额外要求");
   }
 
+  @Test
+  void effectiveTaskAppliesIterationModelOverrideWithoutMutatingBaseTask() {
+    var row =
+        new RunIterationEntity(
+            runId,
+            taskId,
+            "parent-run",
+            2,
+            null,
+            "user",
+            "conn-byok-2",
+            "改用自带模型复核",
+            null,
+            "2026-01-01T00:00:00Z");
+    when(iterationRows.findByRunId(runId)).thenReturn(Optional.of(row));
+    var recordService = new RunIterationRecordService(iterationRows);
+    TaskDefinition base = task(null);
+    TaskDefinition effective = WorkflowScheduler.effectiveTask(runId, base, recordService);
+    assertEquals(ModelMode.USER, effective.modelMode());
+    assertEquals("conn-byok-2", effective.modelConnectionId());
+    assertEquals(ModelMode.MOCK, base.modelMode(), "原始任务定义必须保持不可变");
+    assertNull(base.modelConnectionId());
+
+    when(iterationRows.findByRunId("first-round")).thenReturn(Optional.empty());
+    assertSame(base, WorkflowScheduler.effectiveTask("first-round", base, recordService));
+  }
+
+  @Test
+  void refusesIterationWhileAnotherRunInSameTaskIsCancelling() {
+    when(iterationRows.findByTaskIdOrderByRoundIndexAsc(taskId)).thenReturn(List.of());
+    when(taskRows.lockForUpdate(taskId)).thenReturn(true);
+    when(runRows.findByTaskId(taskId)).thenReturn(List.of(run("CANCELLING")));
+    var realTx = new TransactionTemplate(transactionManager());
+    var realService =
+        new RunIterationService(
+            tasks,
+            runRows,
+            taskRows,
+            plans,
+            planCopies,
+            authorization,
+            runCreation,
+            dispatcher,
+            connections,
+            evidence,
+            new RunIterationRecordService(iterationRows),
+            costs,
+            realTx);
+    var error =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                realService.iterate(
+                    runId, new RunIterationService.Request("补充说明", null, null, null)));
+    assertTrue(error.getMessage().contains("已有进行中的运行"));
+    verify(dispatcher, never()).dispatchConfirmed(anyString());
+  }
+
   private org.springframework.transaction.PlatformTransactionManager transactionManager() {
     var manager = mock(org.springframework.transaction.PlatformTransactionManager.class);
     when(manager.getTransaction(any()))

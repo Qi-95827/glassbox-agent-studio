@@ -666,6 +666,57 @@ class WorkflowScheduler {
   }
 
   /**
+   * 为同任务调改迭代覆盖本轮生效的模型模式与 BYOK 连接；首轮或未覆盖时原样返回。
+   *
+   * <p>不修改数据库中的 {@code tasks} 记录，从而保证首轮与历史轮次的原始任务定义不可变，
+   * 同时确保动态工作流、恢复重入与遗留直线执行路径都真实按本轮选定的模型运行。
+   */
+  TaskDefinition effectiveTask(String runId, TaskDefinition task) {
+    return effectiveTask(runId, task, iterations);
+  }
+
+  static TaskDefinition effectiveTask(
+      String runId,
+      TaskDefinition task,
+      dev.workbench.store.RunIterationRecordService iterations) {
+    if (iterations == null || task == null) return task;
+    return iterations
+        .note(runId)
+        .map(
+            note -> {
+              if (note.modelMode() == null || note.modelMode().isBlank()) return task;
+              dev.workbench.domain.ModelMode overrideMode =
+                  dev.workbench.domain.ModelMode.fromCode(note.modelMode());
+              String overrideConnection =
+                  overrideMode == dev.workbench.domain.ModelMode.USER
+                      ? note.modelConnectionId()
+                      : null;
+              if (overrideMode == task.modelMode()
+                  && java.util.Objects.equals(overrideConnection, task.modelConnectionId()))
+                return task;
+              return new TaskDefinition(
+                  task.id(),
+                  task.goal(),
+                  task.scenario(),
+                  overrideMode,
+                  task.workspaceId(),
+                  task.fileScope(),
+                  task.writeEnabled(),
+                  task.bugId(),
+                  task.memoryEnabled(),
+                  task.constraints(),
+                  task.acceptanceCriteria(),
+                  task.entryKind(),
+                  task.fileScopes(),
+                  task.roleBudgets(),
+                  task.toolBudgets(),
+                  overrideConnection,
+                  task.locale());
+            })
+        .orElse(task);
+  }
+
+  /**
    * 本轮迭代的上下文段落。
    *
    * <p>只有当前运行确实由调改迭代创建时才追加；首轮运行返回 {@code null}，提示词结构与历史完全一致。

@@ -45,8 +45,9 @@ public class RunIterationService {
   /** 只有已经结束的运行才能迭代：运行中的工作区仍在被写，新一轮会读到半成品状态。 */
   private static final Set<String> TERMINAL =
       Set.of("COMPLETED", "FAILED", "BLOCKED", "CANCELLED", "INTERRUPTED", "LIMITED");
-  /** 同一任务下不允许并行的第二轮：连点会在这里被拒绝。 */
-  private static final Set<String> ACTIVE = Set.of("PENDING", "RUNNING", "PAUSED");
+  /** 同一任务下不允许并行的第二轮：连点或在途取消排空期间都会在这里被拒绝。 */
+  private static final Set<String> ACTIVE =
+      Set.of("PENDING", "RUNNING", "PAUSED", "CANCELLING");
 
   private static final int MAX_FEEDBACK = 2000;
   private static final int MAX_PREVIOUS_SUMMARY = 1200;

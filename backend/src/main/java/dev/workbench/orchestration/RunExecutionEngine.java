@@ -84,7 +84,7 @@ final class RunExecutionEngine {
       plan = workflows.plan(id);
       if (plan == null) return;
       try {
-        task = tasks.taskDefinition(run.taskId().toString());
+        task = workflows.effectiveTask(id, tasks.taskDefinition(run.taskId().toString()));
       } catch (RuntimeException invalid) {
         return;
       }
@@ -143,7 +143,7 @@ final class RunExecutionEngine {
       run = runs.runSnapshot(id);
       if (run.status() != RunStatus.PENDING) return null;
       try {
-        task = tasks.taskDefinition(run.taskId().toString());
+        task = workflows.effectiveTask(id, tasks.taskDefinition(run.taskId().toString()));
         workflow = workflows.plan(id);
       } catch (RuntimeException invalid) {
         runs.finishStoppedRun(
