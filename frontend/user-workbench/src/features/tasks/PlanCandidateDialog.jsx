@@ -12,6 +12,8 @@ import {
   MenuItem,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography
 } from '@mui/material';
 import RefreshOutlined from '@mui/icons-material/RefreshOutlined';
@@ -20,6 +22,7 @@ import { useQuery } from '@tanstack/react-query';
 import WorkbenchDialog from '../../components/WorkbenchDialog';
 import StatusChip from '../../components/StatusChip';
 import RunFlowGraph from '../workflows/RunFlowGraph';
+import PlanComposerCanvas from './PlanComposerCanvas';
 import { usePlanCandidate } from '../../hooks/usePlanCandidate';
 import { agentsApi } from '../../api/agents';
 import { parseModelValue } from '../../api/modelConnections';
@@ -150,6 +153,7 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
   const { t } = useI18n();
   const plan = usePlanCandidate(open);
   const [selected, setSelected] = useState(null);
+  const [planView, setPlanView] = useState('graph');
   const [mode, setMode] = useState(input.agentMode || 'BUILTIN');
   const [manualId, setManualId] = useState(input.manualAgentId || null);
   const [candidateIds, setCandidateIds] = useState(input.candidateAgentIds || []);
@@ -408,25 +412,50 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
 
         {current?.candidate && (
           <>
-            {!selected && (
-              <Box
-                sx={{
-                  height: 320,
-                  border: '1px solid',
-                  borderColor: 'divider',
-                  borderRadius: 3,
-                  overflow: 'hidden',
-                  bgcolor: googleTokens.canvas
-                }}
+            <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                value={planView}
+                onChange={(_, value) => value && setPlanView(value)}
               >
-                <RunFlowGraph
-                  nodes={graph.nodes}
-                  edges={graph.edges}
-                  selectedId={selected}
-                  onSelectNode={setSelected}
-                  onSelectEdge={edge => setSelected(edge.toNodeId)}
-                />
-              </Box>
+                <ToggleButton value="graph" data-testid="plan-view-graph">
+                  {t('composer.viewGraph')}
+                </ToggleButton>
+                <ToggleButton value="composer" data-testid="plan-view-composer">
+                  {t('composer.viewComposer')}
+                </ToggleButton>
+              </ToggleButtonGroup>
+              <Typography variant="caption" color="text.secondary">
+                {planView === 'composer' ? t('composer.viewHint') : ''}
+              </Typography>
+            </Stack>
+
+            {planView === 'composer' ? (
+              <PlanComposerCanvas candidate={current.candidate} />
+            ) : (
+              <>
+                {!selected && (
+                  <Box
+                    sx={{
+                      height: 320,
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      borderRadius: 3,
+                      overflow: 'hidden',
+                      bgcolor: googleTokens.canvas
+                    }}
+                  >
+                    <RunFlowGraph
+                      nodes={graph.nodes}
+                      edges={graph.edges}
+                      selectedId={selected}
+                      onSelectNode={setSelected}
+                      onSelectEdge={edge => setSelected(edge.toNodeId)}
+                    />
+                  </Box>
+                )}
+              </>
             )}
             <Box>
               <Typography component="h3" sx={{ fontSize: 15, fontWeight: 500, mb: 0.75 }}>
