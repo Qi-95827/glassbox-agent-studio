@@ -5,6 +5,7 @@ import {
   Button,
   Chip,
   LinearProgress,
+  MenuItem,
   Slider,
   Stack,
   TextField,
@@ -12,6 +13,7 @@ import {
 } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { runsApi } from '../../api/runs';
+import { tasksApi } from '../../api/tasks';
 import { useI18n } from '../../i18n/I18nProvider';
 import { googleTokens } from '../../theme/googleTheme';
 
@@ -23,6 +25,16 @@ const MODULE_LABEL = {
   'handoff-envelope': 'xray.module.handoff',
   'model-byok': 'xray.module.model',
   'delivery-monitoring': 'xray.module.observability'
+};
+
+/** 模块 id → 运行详情里对应的玻璃盒 Tab；点击模块锚点时按模块精准落点。 */
+const MODULE_TAB = {
+  'run-lifecycle': 'result',
+  'agent-assembly': 'assembly',
+  'tool-gateway': 'gateway',
+  'handoff-envelope': 'handoff',
+  'model-byok': 'llm',
+  'delivery-monitoring': 'result'
 };
 
 function ModuleCard({ module, t, onOpen }) {
@@ -102,6 +114,17 @@ export default function ArchitectureXrayPanel({ initialRunId = '', onOpenRun }) 
     enabled: Boolean(loaded)
   });
 
+  // 最近运行：直接复用既有任务列表里的 runId，让 X 光模式开箱即用；手输仍是主路径。
+  const recent = useQuery({ queryKey: ['xray-recent-runs'], queryFn: () => tasksApi.list() });
+  const recentRuns = useMemo(
+    () =>
+      (recent.data ?? [])
+        .filter(task => task.runId)
+        .slice(0, 12)
+        .map(task => ({ runId: task.runId, label: `${task.goal ?? task.runId}`.slice(0, 48) })),
+    [recent.data]
+  );
+
   const data = xray.data;
   const steps = useMemo(() => data?.steps ?? [], [data]);
   const current = step == null ? steps.length : step;
@@ -116,8 +139,7 @@ export default function ArchitectureXrayPanel({ initialRunId = '', onOpenRun }) 
 
   const open = (nodeId, moduleId) => {
     if (!nodeId) return;
-    const tab = latestStep?.glassboxTab ?? 'result';
-    onOpenRun?.(loaded, nodeId, tab, moduleId);
+    onOpenRun?.(loaded, nodeId, MODULE_TAB[moduleId] ?? 'result', moduleId);
   };
 
   return (
@@ -143,6 +165,28 @@ export default function ArchitectureXrayPanel({ initialRunId = '', onOpenRun }) 
         >
           {t('xray.load')}
         </Button>
+        {recentRuns.length > 0 && (
+          <TextField
+            select
+            size="small"
+            label={t('xray.recentRuns')}
+            value=""
+            onChange={event => {
+              const picked = event.target.value;
+              setRunId(picked);
+              setLoaded(picked);
+              setStep(null);
+            }}
+            sx={{ minWidth: 240 }}
+            data-testid="xray-recent-runs"
+          >
+            {recentRuns.map(item => (
+              <MenuItem key={item.runId} value={item.runId}>
+                {item.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
         {data && (
           <Chip
             size="small"

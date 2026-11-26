@@ -1774,5 +1774,6 @@
   "xray.module.toolGateway": "Tool Gateway 与安检门",
   "xray.module.handoff": "Handoff 交接信封",
   "xray.module.model": "BYOK 与模型调用",
-  "xray.module.observability": "检查点与可观测"
+  "xray.module.observability": "检查点与可观测",
+  "xray.recentRuns": "选择最近运行"
 }

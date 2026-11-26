@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ArchitectureXrayPanel from './ArchitectureXrayPanel';
 import { runsApi } from '../../api/runs';
+import { tasksApi } from '../../api/tasks';
 import { setModuleLocale } from '../../i18n';
 
 const xray = {
@@ -94,6 +95,10 @@ describe('ArchitectureXrayPanel', () => {
   beforeEach(() => {
     setModuleLocale('zh-CN');
     vi.spyOn(runsApi, 'architectureXray').mockResolvedValue(xray);
+    vi.spyOn(tasksApi, 'list').mockResolvedValue([
+      { runId: 'run-recent-1', goal: '把排序网页做出来' },
+      { runId: 'run-recent-2', goal: '补一个回归测试' }
+    ]);
   });
 
   afterEach(() => {
@@ -126,6 +131,23 @@ describe('ArchitectureXrayPanel', () => {
     const anchor = await screen.findByTestId('xray-anchor-tool-gateway');
     fireEvent.click(anchor);
     expect(onOpenRun).toHaveBeenCalledWith('run-1', 'n2', 'gateway', 'tool-gateway');
+  });
+
+  it('锚点按模块精准映射玻璃盒 Tab，而不是跟着当前回放步骤漂移', async () => {
+    const onOpenRun = vi.fn();
+    renderPanel({ initialRunId: 'run-1', onOpenRun });
+    // 锚点落点由模块决定，与回放进度无关：模型模块永远落到 llm。
+    const anchor = await screen.findByTestId('xray-anchor-model-byok');
+    fireEvent.click(anchor);
+    expect(onOpenRun).toHaveBeenCalledWith('run-1', 'n1', 'llm', 'model-byok');
+  });
+
+  it('可以从最近运行下拉里直接选一条运行加载', async () => {
+    renderPanel();
+    const select = await screen.findByTestId('xray-recent-runs');
+    fireEvent.mouseDown(select.querySelector('[role="combobox"], input') ?? select);
+    fireEvent.click(await screen.findByText('把排序网页做出来'));
+    await waitFor(() => expect(runsApi.architectureXray).toHaveBeenCalledWith('run-recent-1'));
   });
 
   it('步进回放会裁剪已发生的步骤并打开当前步骤', async () => {

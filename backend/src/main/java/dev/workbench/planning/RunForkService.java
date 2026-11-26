@@ -15,6 +15,7 @@ import dev.workbench.modelconnection.ModelConnectionService;
 import dev.workbench.persistence.entity.RunForkEntity;
 import dev.workbench.persistence.repository.RunForkRepository;
 import dev.workbench.store.RunEvidenceRecordService;
+import dev.workbench.workspace.AuthorizedFileSet;
 import dev.workbench.workspace.WorkspaceAuthorizationService;
 import java.time.Duration;
 import java.time.Instant;
@@ -108,12 +109,12 @@ public class RunForkService {
 
     var request2 = request == null ? new Request(null, null, null, null, null) : request;
     String addendum = addendum(request2.promptAddendum());
-    // 先复验工作区授权，再复制图：授权已经不覆盖冻结范围时不必继续算一份跑不起来的计划。
+    // 先复验工作区授权与模型权限，再复制图：权限不满足时不必继续算一份跑不起来的计划。
     var prepared = prepare(task);
-    String nodeKey = nodeKey(sourceRunId, request2.sourceNodeKey());
-    var plan = plan(sourceRunId, nodeKey, addendum);
     ModelMode mode = mode(task, request2);
     String connectionId = connection(mode, request2.modelConnectionId());
+    String nodeKey = nodeKey(sourceRunId, request2.sourceNodeKey());
+    var plan = plan(sourceRunId, nodeKey, addendum);
 
     String taskId = UUID.randomUUID().toString();
     String runId = UUID.randomUUID().toString();
@@ -247,10 +248,16 @@ public class RunForkService {
 
   /** 工作区授权按当前规则复验；与源任务冻结范围不一致时拒绝分叉。 */
   private WorkspaceAuthorizationService.Prepared prepare(TaskDefinition task) {
+    var scopes = task.fileScopes();
+    // 服务端展开过的整仓范围（超过手工选择上限）按目录授权复验：逐条核对仍在授权目录内、未被排除、当前可读，
+    // 不能把已冻结的展开结果重新当成「用户手工选了 200 个文件」而误杀。
+    if (scopes.size() > AuthorizedFileSet.MAX_EXPLICIT)
+      return workspaceAuthorization.reverifyDirectories(
+          task.workspaceId(), List.of("."), List.of(), scopes);
     var prepared =
         workspaceAuthorization.prepare(
-            task.workspaceId(), task.fileScopes(), List.of(), List.of());
-    if (!new HashSet<>(prepared.effectiveFiles()).equals(new HashSet<>(task.fileScopes())))
+            task.workspaceId(), scopes, List.of(), List.of());
+    if (!new HashSet<>(prepared.effectiveFiles()).equals(new HashSet<>(scopes)))
       throw new IllegalStateException("工作区授权已变化，请重新授权后再分叉。");
     return prepared;
   }
@@ -260,18 +267,24 @@ public class RunForkService {
     return ModelMode.fromCode(request.modelMode().strip());
   }
 
-  /** 覆盖模型时按与候选确认相同的规则校验：自带 Key 必须已启用且属于当前用户。 */
+  /**
+   * 模型覆盖的权限校验。
+   *
+   * <p>两种模式的特权完全不同：宿主机全局 DeepSeek 密钥是平台特权，只有 {@code DEEPSEEK} 才需要；自带 Key
+   * 走的是用户自己的额度与已启用连接，普通用户即可，不能误加平台特权校验。
+   */
   private String connection(ModelMode mode, String requested) {
+    if (mode == ModelMode.DEEPSEEK) {
+      connections.requireLegacyKeyAccess();
+      return null;
+    }
     if (mode != ModelMode.USER) return null;
-    String connectionId =
-        requested == null || requested.isBlank()
-            ? connections
-                .defaultConnectionId()
-                .orElseThrow(
-                    () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"))
-            : connections.requireEnabledOwned(requested);
-    connections.requireLegacyKeyAccess();
-    return connectionId;
+    return requested == null || requested.isBlank()
+        ? connections
+            .defaultConnectionId()
+            .orElseThrow(
+                () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"))
+        : connections.requireEnabledOwned(requested);
   }
 
   private String nodeKey(String sourceRunId, String requested) {

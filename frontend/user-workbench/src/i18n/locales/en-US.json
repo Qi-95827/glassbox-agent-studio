@@ -1774,5 +1774,6 @@
   "xray.module.toolGateway": "Tool gateway & gates",
   "xray.module.handoff": "Handoff envelope",
   "xray.module.model": "BYOK & model calls",
-  "xray.module.observability": "Checkpoints & observability"
+  "xray.module.observability": "Checkpoints & observability",
+  "xray.recentRuns": "Pick a recent run"
 }
