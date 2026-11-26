@@ -22,6 +22,7 @@ import RunDiagnosticsDrawer from './RunDiagnosticsDrawer';
 import ExecutionTimelinePanel from '../checkpoints/ExecutionTimelinePanel';
 import CheckpointTimeTravelPanel from '../checkpoints/CheckpointTimeTravelPanel';
 import RunCompareDiffView from '../checkpoints/RunCompareDiffView';
+import RunTraceActions from './RunTraceActions';
 import EmptyState from '../../components/EmptyState';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { useToast } from '../../components/ToastProvider';
@@ -369,6 +370,8 @@ export default function RunDetailPage() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <RunTraceActions runId={runId} onOpenEvalLab={() => navigate('/evaluations')} />
+
       <RunHeader
         view={view}
         tab={tab}

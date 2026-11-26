@@ -26,6 +26,7 @@ import { entryKindLabel, modelLabel, statusLabel } from '../../constants/labels'
 import { dateTime, oneLine, shortId } from '../../utils/format';
 import { googleTokens } from '../../theme/googleTheme';
 import { useI18n } from '../../i18n/I18nProvider';
+import ExternalTraceSection from './ExternalTraceSection';
 
 const historyStatuses = [
   'IN_PROGRESS',
@@ -82,6 +83,7 @@ export default function RunHistoryPage() {
   return (
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ maxWidth: 1100, mx: 'auto', px: { xs: 2, sm: 3 }, py: { xs: 3, md: 4 } }}>
+        <ExternalTraceSection />
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
 

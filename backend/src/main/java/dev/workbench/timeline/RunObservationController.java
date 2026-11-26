@@ -21,13 +21,28 @@ import org.springframework.web.bind.annotation.RestController;
 public class RunObservationController {
   private final RunObservationService observations;
   private final ArchitectureXrayService xray;
+  private final TraceExportService exports;
   private final OwnershipService ownership;
 
   public RunObservationController(
-      RunObservationService observations, ArchitectureXrayService xray, OwnershipService ownership) {
+      RunObservationService observations,
+      ArchitectureXrayService xray,
+      TraceExportService exports,
+      OwnershipService ownership) {
     this.observations = observations;
     this.xray = xray;
+    this.exports = exports;
     this.ownership = ownership;
+  }
+
+  /** 导出标准 Trace：format=otel 为标准 OpenTelemetry JSON，其余按 Glass-Box JSON。 */
+  @GetMapping("/trace-export")
+  Object traceExport(
+      @PathVariable String id,
+      @org.springframework.web.bind.annotation.RequestParam(defaultValue = "glassbox")
+          String format) {
+    ownership.requireRun(id);
+    return exports.export(id, format);
   }
 
   @GetMapping("/architecture-xray")
