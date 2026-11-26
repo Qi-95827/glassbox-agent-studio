@@ -244,10 +244,10 @@ describe('useRunExecution 的流与轮询协同', () => {
     act(() => {
       for (let index = 0; index < 8; index += 1) source.listeners.RUN_EVENT({ data: '{}' });
     });
-    // 一次 flush 固定失效 3 个查询键；8 个事件若逐个失效会是 24 次。
+    // 一次 flush 固定失效 4 个查询键（含 node-detail）；8 个事件若逐个失效会是 32 次。
     await waitFor(() => expect(invalidate).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 420));
-    expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(invalidate).toHaveBeenCalledTimes(4);
   });
 
   it('推理增量与正文增量走各自独立的通道', async () => {
@@ -257,11 +257,94 @@ describe('useRunExecution 的流与轮询协同', () => {
     });
     const source = FakeEventSource.instances[0];
     act(() => source.onopen());
-    act(() => source.listeners.MODEL_REASONING_DELTA({ data: '{"text":"先看文件"}' }));
-    act(() => source.listeners.MODEL_DELTA({ data: '{"text":"结论如下"}' }));
+    act(() =>
+      source.listeners.MODEL_REASONING_DELTA({ data: '{"nodeId":"n1","text":"先看文件"}' })
+    );
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"n1","text":"结论如下"}' }));
 
     await waitFor(() => expect(result.current.reasoningText).toBe('先看文件'));
     expect(result.current.streamText).toBe('结论如下');
+  });
+
+  it('RUN_EVENT 触发失效时一并刷新 node-detail，抽屉在流式期间也能更新', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useRunStream('run-nd', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    await waitFor(() => expect(result.current.connected).toBe(true));
+
+    act(() => source.listeners.RUN_EVENT({ data: '{"type":"MODEL_FINISHED","nodeId":"node-1"}' }));
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['node-detail', 'run-nd'] })
+    );
+  });
+
+  it('增量按 nodeId 分桶，并行节点的正文不会互相污染', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunStream('run-two', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"a","text":"甲的正文"}' }));
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"b","text":"乙的正文"}' }));
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"a","text":"续写"}' }));
+
+    await waitFor(() => expect(result.current.streamsByNode.a?.content).toBe('甲的正文续写'));
+    expect(result.current.streamsByNode.b?.content).toBe('乙的正文');
+  });
+
+  it('该节点开启新一轮模型调用时清空上一轮缓冲', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunStream('run-turn', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"a","text":"第一轮"}' }));
+    await waitFor(() => expect(result.current.streamsByNode.a?.content).toBe('第一轮'));
+
+    act(() => source.listeners.RUN_EVENT({ data: '{"type":"MODEL_STARTED","nodeId":"a"}' }));
+    await waitFor(() => expect(result.current.streamsByNode.a).toBeUndefined());
+  });
+
+  it('安检门进度按节点记录，并汇总出当前关卡', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunStream('run-gate', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    act(() =>
+      source.listeners.TOOL_GATE_PROGRESS({
+        data: JSON.stringify({
+          nodeId: 'a',
+          text: 'write_file',
+          detail: { gate: 'PATH_WHITELIST', label: '路径白名单', status: 'DENY', detail: '越界' }
+        })
+      })
+    );
+
+    await waitFor(() => expect(result.current.lastGateEvent?.tool).toBe('write_file'));
+    expect(result.current.streamsByNode.a?.gate?.gate).toBe('PATH_WHITELIST');
+    expect(result.current.streamsByNode.a?.gate?.status).toBe('DENY');
+  });
+
+  it('运行进入终态后清空全部实时缓冲', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunStream('run-end', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"a","text":"收尾"}' }));
+    await waitFor(() => expect(result.current.streamsByNode.a?.content).toBe('收尾'));
+
+    act(() => source.listeners.RUN_EVENT({ data: '{"type":"RUN_COMPLETED"}' }));
+    await waitFor(() => expect(result.current.streamsByNode).toEqual({}));
   });
 });
 describe('useRunStream', () => {
@@ -296,7 +379,7 @@ describe('useRunStream', () => {
     expect(source.url).toBe('/api/runs/run-1/stream');
     act(() => source.onopen());
     await waitFor(() => expect(result.current.connected).toBe(true));
-    act(() => source.listeners.MODEL_DELTA({ data: '{"text":"实时片段"}' }));
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"run-1","text":"实时片段"}' }));
     await waitFor(() => expect(result.current.streamText).toBe('实时片段'));
   });
 });

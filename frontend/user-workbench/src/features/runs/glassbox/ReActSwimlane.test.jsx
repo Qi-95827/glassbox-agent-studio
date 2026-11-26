@@ -129,4 +129,45 @@ describe('ReActSwimlane', () => {
     render(<ReActSwimlane attempts={[]} />);
     expect(screen.getByText('暂无 ReAct 轮次')).toBeInTheDocument();
   });
+
+  it('运行中时在泳道底部渲染实时正文、思考链与当前关卡', () => {
+    setModuleLocale('zh-CN');
+    render(
+      <ReActSwimlane
+        attempts={[]}
+        liveStream={{
+          content: '正在生成的正文',
+          reasoning: '正在推理',
+          gate: { gate: 'PATH_WHITELIST', label: '路径白名单', status: 'PASS', tool: 'read_file' }
+        }}
+      />
+    );
+
+    expect(screen.getByTestId('swimlane-live')).toBeInTheDocument();
+    expect(screen.getByTestId('swimlane-live-content')).toHaveTextContent('正在生成的正文');
+    expect(screen.getByText(/正在过检：路径白名单 · PASS/)).toBeInTheDocument();
+    // 实时思考链同样默认折叠。
+    expect(screen.queryByTestId('swimlane-live-reasoning')).toBeNull();
+    fireEvent.click(screen.getByTestId('swimlane-live-reasoning-toggle'));
+    expect(screen.getByTestId('swimlane-live-reasoning')).toHaveTextContent('正在推理');
+  });
+
+  it('只有通道没有增量时给出等待提示而不是伪造内容', () => {
+    setModuleLocale('zh-CN');
+    render(
+      <ReActSwimlane
+        attempts={[]}
+        liveStream={{ content: '', reasoning: '', gate: { gate: 'BUDGET_AND_LOOP' } }}
+      />
+    );
+    expect(screen.getByText('已建立实时通道，等待模型首个增量…')).toBeInTheDocument();
+    expect(screen.queryByTestId('swimlane-live-content')).toBeNull();
+  });
+
+  it('既无落库轮次也无实时增量时不渲染实时块', () => {
+    setModuleLocale('zh-CN');
+    render(<ReActSwimlane attempts={[]} liveStream={null} />);
+    expect(screen.queryByTestId('swimlane-live')).toBeNull();
+    expect(screen.getByText('暂无 ReAct 轮次')).toBeInTheDocument();
+  });
 });

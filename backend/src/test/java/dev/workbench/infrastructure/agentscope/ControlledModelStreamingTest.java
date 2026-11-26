@@ -181,6 +181,40 @@ class ControlledModelStreamingTest {
     model(delegate, runtime).stream(List.of(), List.of(), null).blockLast();
 
     assertEquals("第一句第二句第三句", runtime.payload.responseContent());
+    // 推给前端的必须是净增量，否则打字机会把前两句重复拼三遍。
+    assertEquals(List.of("第一句", "第二句", "第三句"), runtime.deltas);
+  }
+
+  @Test
+  void cumulativeReasoningFramesAlsoEmitNetIncrements() {
+    var runtime = new RecordingRuntime();
+    var delegate =
+        streamingModel(
+            List.of(
+                chunk(null, ThinkingBlock.builder().thinking("先看").build()),
+                chunk(null, ThinkingBlock.builder().thinking("先看目录").build()),
+                chunk(null, ThinkingBlock.builder().thinking("先看目录再读文件").build())));
+
+    model(delegate, runtime).stream(List.of(), List.of(), null).blockLast();
+
+    assertEquals(List.of("先看", "目录", "再读文件"), runtime.reasoningDeltas);
+    assertEquals("先看目录再读文件", runtime.payload.reasoningContent());
+  }
+
+  @Test
+  void repeatedIdenticalFrameContributesNoDelta() {
+    var runtime = new RecordingRuntime();
+    // 心跳式重复帧（内容与上一帧完全相同）不产生净增量，避免前端空转。
+    var delegate =
+        streamingModel(
+            List.of(
+                chunk(null, TextBlock.builder().text("稳定").build()),
+                chunk(null, TextBlock.builder().text("稳定").build())));
+
+    model(delegate, runtime).stream(List.of(), List.of(), null).blockLast();
+
+    assertEquals(List.of("稳定"), runtime.deltas);
+    assertEquals("稳定", runtime.payload.responseContent());
   }
 
   @Test

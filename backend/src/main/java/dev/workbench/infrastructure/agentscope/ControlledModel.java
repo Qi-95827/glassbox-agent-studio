@@ -162,8 +162,8 @@ public record ControlledModel(
                                 latest.set(response);
                                 if (response.getUsage() != null)
                                   latestUsage.set(response.getUsage());
-                                accumulator.accept(response);
-                                emitDeltas(response);
+                                var deltas = accumulator.accept(response);
+                                emitDeltas(deltas);
                               })
                           .doOnComplete(
                               () -> {
@@ -372,18 +372,27 @@ public record ControlledModel(
   private static final ObjectMapper TRACE_JSON = new ObjectMapper();
 
   /**
-   * 把一份流式响应的正文与思考链分别推给前端。
+   * 把一份流式响应的**净增量**分别推给前端。
    *
    * <p>正文与思考链分成两条通道：思考链不是最终答案，混进正文的「打字机」会让人误以为
    * 那就是答案。两者都只走瞬态 SSE，不落库；落库事实由完成时的透视快照承担。
+   *
+   * <p>只推净增量而不是原始帧内容：部分兼容网关每帧都返回累积全文，直接转发会让前端
+   * 把同一段话反复拼接。净增量由累积器统一计算，供应商语义差异被收敛在一处。
    */
-  private void emitDeltas(ChatResponse response) {
-    if (response == null || response.getContent() == null) return;
-    for (ContentBlock block : response.getContent()) {
-      if (block instanceof TextBlock text && text.getText() != null && !text.getText().isEmpty())
-        runtime.modelDelta(text.getText());
-      else if (block instanceof ThinkingBlock thinking && thinking.getThinking() != null)
-        if (!thinking.getThinking().isEmpty()) runtime.modelReasoningDelta(thinking.getThinking());
+  private void emitDeltas(StreamDeltas deltas) {
+    if (deltas == null) return;
+    if (deltas.text() != null && !deltas.text().isEmpty()) runtime.modelDelta(deltas.text());
+    if (deltas.reasoning() != null && !deltas.reasoning().isEmpty())
+      runtime.modelReasoningDelta(deltas.reasoning());
+  }
+
+  /** 单帧带来的净增量：正文与思考链各自独立，可能任一为空。 */
+  private record StreamDeltas(String text, String reasoning) {
+    private static final StreamDeltas EMPTY = new StreamDeltas("", "");
+
+    boolean isEmpty() {
+      return text.isEmpty() && reasoning.isEmpty();
     }
   }
 
@@ -403,30 +412,49 @@ public record ControlledModel(
     private int chunks;
     private String finishReason;
 
-    void accept(ChatResponse response) {
-      if (response == null) return;
+    /**
+     * 吸收一帧，并返回这一帧带来的**净增量**。
+     *
+     * <p>净增量与「累积后全文」解耦：增量型供应商直接得到片段本身，累积型供应商得到
+     * 「新全文去掉旧全文」的尾巴。前端的打字机因此不需要知道供应商用的是哪种语义。
+     */
+    StreamDeltas accept(ChatResponse response) {
+      if (response == null) return StreamDeltas.EMPTY;
       chunks++;
       if (response.getFinishReason() != null) finishReason = response.getFinishReason();
-      if (response.getContent() == null) return;
+      if (response.getContent() == null) return StreamDeltas.EMPTY;
+      var textDelta = new StringBuilder();
+      var reasoningDelta = new StringBuilder();
       for (ContentBlock block : response.getContent()) {
-        if (block instanceof TextBlock text) append(content, text.getText());
-        else if (block instanceof ThinkingBlock thinking) append(reasoning, thinking.getThinking());
+        if (block instanceof TextBlock text) textDelta.append(append(content, text.getText()));
+        else if (block instanceof ThinkingBlock thinking)
+          reasoningDelta.append(append(reasoning, thinking.getThinking()));
         else if (block instanceof ToolUseBlock use && use.getId() != null)
           // 同一 tool_call 的参数可能分多帧到达，后到的更完整，按 id 取最后一份。
           toolUses.put(use.getId(), use);
       }
+      return new StreamDeltas(textDelta.toString(), reasoningDelta.toString());
     }
 
-    private static void append(StringBuilder target, String fragment) {
-      if (fragment == null || fragment.isEmpty()) return;
+    /**
+     * 追加片段并返回净增量。
+     *
+     * <p>判据是「新片段以已累积内容开头且不更短」——那是累积语义，此时净增量是尾部差集，
+     * 否则按增量语义直接追加。
+     */
+    private static String append(StringBuilder target, String fragment) {
+      if (fragment == null || fragment.isEmpty()) return "";
       String current = target.toString();
-      if (fragment.length() >= current.length() && !current.isEmpty() && fragment.startsWith(current)) {
-        // 累积语义：这一帧已经包含此前全部内容，直接替换，避免正文翻倍。
+      if (!current.isEmpty()
+          && fragment.length() >= current.length()
+          && fragment.startsWith(current)) {
+        String delta = fragment.substring(current.length());
         target.setLength(0);
         target.append(fragment);
-        return;
+        return delta;
       }
       target.append(fragment);
+      return fragment;
     }
 
     String content() {

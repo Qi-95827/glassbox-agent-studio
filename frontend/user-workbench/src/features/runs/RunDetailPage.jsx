@@ -59,8 +59,17 @@ export default function RunDetailPage() {
   const requestedNodeId = searchParams.get('nodeId');
   const requestedGlassbox = searchParams.get('glassbox');
 
-  const { detail, view, live, streamConnected, streamNodeId, loading, error, refetch } =
-    useRunExecution(runId);
+  const {
+    detail,
+    view,
+    live,
+    streamConnected,
+    streamNodeId,
+    streamsByNode,
+    loading,
+    error,
+    refetch
+  } = useRunExecution(runId);
   const eventsQuery = useRunEvents(runId, tab === 'replay', live && !streamConnected);
   const selectedInView = useMemo(
     () =>
@@ -323,6 +332,8 @@ export default function RunDetailPage() {
         runModelMode={detail?.task?.MODEL_MODE}
         selectedEdge={selectedEdge}
         glassboxRequest={glassboxRequest}
+        // 只把当前选中节点的实时缓冲传下去：并行节点的增量互不干扰。
+        liveStream={selectedId ? (streamsByNode?.[selectedId] ?? null) : null}
         hasBreakpoint={Boolean(node && breakpoints.has(node.id))}
         onToggleBreakpoint={() => node && toggleBreakpoint(node.id)}
         cancelAction={(view.availableActions ?? []).find(action => action.actionCode === 'CANCEL')}

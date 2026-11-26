@@ -156,7 +156,8 @@ export default function NodeGlassboxDialog({
   modelText,
   elapsed,
   hasBreakpoint,
-  onToggleBreakpoint
+  onToggleBreakpoint,
+  liveStream = null
 }) {
   const { t, locale } = useI18n();
   const wide = useMediaQuery('(min-width:900px)');
@@ -417,7 +418,7 @@ export default function NodeGlassboxDialog({
         )}
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', p: { xs: 2, md: 3 } }}>
-          {current === 'react' && <ReActSwimlane attempts={attempts} />}
+          {current === 'react' && <ReActSwimlane attempts={attempts} liveStream={liveStream} />}
           {current === 'result' && (
             <ResultAndTimelineView detail={detail} checks={checks} nodeEvents={nodeEvents} />
           )}

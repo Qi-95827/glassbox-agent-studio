@@ -1601,5 +1601,9 @@
   "swimlane.reasoning": "Reasoning chain ({count} chars)",
   "swimlane.streamed": "Streamed",
   "swimlane.emptyTitle": "No ReAct turns yet",
-  "swimlane.emptyDescription": "This node has no recorded model or tool calls yet; turns appear here once the run starts."
+  "swimlane.emptyDescription": "This node has no recorded model or tool calls yet; turns appear here once the run starts.",
+  "swimlane.liveTitle": "Live output",
+  "swimlane.liveReasoning": "Live reasoning ({count} chars)",
+  "swimlane.liveGate": "Checking: {gate} · {status}",
+  "swimlane.liveWaiting": "Live channel connected; waiting for the first token…"
 }

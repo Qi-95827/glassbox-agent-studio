@@ -135,6 +135,7 @@ export default function NodeInspector({
   runModelMode,
   selectedEdge,
   glassboxRequest,
+  liveStream = null,
   hasBreakpoint = false,
   onToggleBreakpoint,
   cancelAction,
@@ -671,6 +672,7 @@ export default function NodeInspector({
         elapsed={elapsed}
         hasBreakpoint={hasBreakpoint}
         onToggleBreakpoint={onToggleBreakpoint}
+        liveStream={liveStream}
       />
 
       {/* 取消运行确认框 */}

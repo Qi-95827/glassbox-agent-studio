@@ -1601,5 +1601,9 @@
   "swimlane.reasoning": "思考链（{count} 字）",
   "swimlane.streamed": "流式增量",
   "swimlane.emptyTitle": "暂无 ReAct 轮次",
-  "swimlane.emptyDescription": "该节点尚未记录模型调用或工具调用；运行开始后这里会按 Turn 依次展开。"
+  "swimlane.emptyDescription": "该节点尚未记录模型调用或工具调用；运行开始后这里会按 Turn 依次展开。",
+  "swimlane.liveTitle": "实时输出",
+  "swimlane.liveReasoning": "实时思考链（{count} 字）",
+  "swimlane.liveGate": "正在过检：{gate} · {status}",
+  "swimlane.liveWaiting": "已建立实时通道，等待模型首个增量…"
 }

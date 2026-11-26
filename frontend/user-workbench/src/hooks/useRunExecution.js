@@ -37,6 +37,21 @@ export function pollingInterval(status, streamConnected, visible) {
   return isLiveStatus(status) ? RUN_POLL_INTERVAL_MS : false;
 }
 
+/** 单个节点的实时缓冲上限：只服务「正在看」的观感，不需要保留全文。 */
+const LIVE_BUFFER_LIMIT = 4000;
+
+/** 运行终态事件：到达后实时缓冲不再有意义，落库快照已经可以完全替代它。 */
+const RUN_TERMINAL_EVENTS = new Set([
+  'RUN_COMPLETED',
+  'CANCELLED',
+  'FAILED',
+  'LIMITED',
+  'INTERRUPTED',
+  'BLOCKED'
+]);
+
+const EMPTY_LIVE = { content: '', reasoning: '', gate: null };
+
 /**
  * 运行级 SSE：优先实时事件；连续三次连接失败后静默关闭，由 1.8s 轮询兜底。
  *
@@ -45,14 +60,50 @@ export function pollingInterval(status, streamConnected, visible) {
  *
  * <p>`live` 为 false 时不建立连接：已进入终态的运行不会再有新事件，为它开 SSE 只会
  * 常驻一个被服务端立即关闭的空连接。
+ *
+ * <p>增量帧按 `nodeId` 分桶：并行节点会交错推送，共用一个字符串缓冲会把两个节点的正文
+ * 拼在一起。缓冲在「该节点开启新一轮模型调用」时清空，在运行进入终态时整体清空。
  */
 export function useRunStream(runId, live) {
   const queryClient = useQueryClient();
   const [connected, setConnected] = useState(false);
-  const [streamText, setStreamText] = useState('');
-  const [reasoningText, setReasoningText] = useState('');
+  const [streamsByNode, setStreamsByNode] = useState({});
   const [streamNodeId, setStreamNodeId] = useState(null);
-  const [lastGateEvent, setLastGateEvent] = useState(null);
+
+  const applyDelta = (nodeId, channel, text) => {
+    if (!nodeId || !text) return;
+    setStreamNodeId(nodeId);
+    setStreamsByNode(previous => {
+      const current = previous[nodeId] ?? EMPTY_LIVE;
+      const merged = (current[channel] ?? '') + text;
+      return {
+        ...previous,
+        [nodeId]: {
+          ...current,
+          [channel]: merged.slice(-LIVE_BUFFER_LIMIT)
+        }
+      };
+    });
+  };
+
+  const applyGate = (nodeId, gate, tool) => {
+    if (!nodeId) return;
+    setStreamNodeId(nodeId);
+    setStreamsByNode(previous => ({
+      ...previous,
+      [nodeId]: { ...(previous[nodeId] ?? EMPTY_LIVE), gate: { ...gate, tool } }
+    }));
+  };
+
+  /** 新一轮模型调用开始：丢掉该节点的上一轮正文，避免 T1 的尾巴混进 T2。 */
+  const clearNode = nodeId => {
+    setStreamsByNode(previous => {
+      if (!previous[nodeId]) return previous;
+      const next = { ...previous };
+      delete next[nodeId];
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!runId || !live || typeof EventSource === 'undefined') {
@@ -69,15 +120,24 @@ export function useRunStream(runId, live) {
       queryClient.invalidateQueries({ queryKey: ['run-events', runId] });
       queryClient.invalidateQueries({ queryKey: ['execution-view', runId] });
       queryClient.invalidateQueries({ queryKey: ['run', runId] });
+      // SSE 连通期间 useNodeDetail 已停止轮询；不在这里失效的话，
+      // 正开着的节点抽屉/玻璃盒会一直停在打开那一刻的快照。
+      queryClient.invalidateQueries({ queryKey: ['node-detail', runId] });
     };
     const invalidate = () => {
       // 合并高频事件：只有最后一个事件真正触发一次失效。
       if (invalidateTimer != null) return;
       invalidateTimer = setTimeout(flushInvalidate, INVALIDATE_DEBOUNCE_MS);
     };
-    const appendDelta = (previous, text) => (previous + text).slice(-4000);
-    const noteNode = payload => {
-      if (payload?.nodeId) setStreamNodeId(payload.nodeId);
+    const handleRunEvent = message => {
+      invalidate();
+      try {
+        const event = JSON.parse(message.data);
+        if (event?.type === 'MODEL_STARTED' && event?.nodeId) clearNode(event.nodeId);
+        else if (RUN_TERMINAL_EVENTS.has(event?.type)) setStreamsByNode({});
+      } catch {
+        // 事件正文异常不应影响缓存失效；实时缓冲由后续帧自行修正。
+      }
     };
     const connect = () => {
       if (closed) return;
@@ -92,12 +152,11 @@ export function useRunStream(runId, live) {
         failures = 0;
         setConnected(true);
       };
-      source.addEventListener('RUN_EVENT', invalidate);
+      source.addEventListener('RUN_EVENT', handleRunEvent);
       source.addEventListener('MODEL_DELTA', message => {
         try {
           const payload = JSON.parse(message.data);
-          noteNode(payload);
-          if (payload?.text) setStreamText(previous => appendDelta(previous, payload.text));
+          applyDelta(payload?.nodeId, 'content', payload?.text);
         } catch {
           // 非本项目格式的瞬态片段忽略，不影响持久化事件。
         }
@@ -105,8 +164,7 @@ export function useRunStream(runId, live) {
       source.addEventListener('MODEL_REASONING_DELTA', message => {
         try {
           const payload = JSON.parse(message.data);
-          noteNode(payload);
-          if (payload?.text) setReasoningText(previous => appendDelta(previous, payload.text));
+          applyDelta(payload?.nodeId, 'reasoning', payload?.text);
         } catch {
           // 推理通道与正文通道互相独立，解析失败不污染正文。
         }
@@ -114,9 +172,8 @@ export function useRunStream(runId, live) {
       source.addEventListener('TOOL_GATE_PROGRESS', message => {
         try {
           const payload = JSON.parse(message.data);
-          noteNode(payload);
           // 安检门进度同时驱动节点微状态；具体判定详情由节点抽屉的流水线读取落库结果。
-          if (payload?.text) setLastGateEvent({ tool: payload.text, detail: payload.detail });
+          applyGate(payload?.nodeId, payload?.detail ?? {}, payload?.text);
           invalidate();
         } catch {
           // 瞬态帧解析失败只影响实时提示，不影响持久化事实。
@@ -139,7 +196,22 @@ export function useRunStream(runId, live) {
     };
   }, [runId, live, queryClient]);
 
-  return { connected, streamText, reasoningText, streamNodeId, lastGateEvent };
+  // 切换运行时必须清空：上一个运行的实时正文不能出现在新运行的节点抽屉里。
+  useEffect(() => {
+    setStreamsByNode({});
+    setStreamNodeId(null);
+  }, [runId]);
+
+  const active = streamNodeId ? streamsByNode[streamNodeId] : null;
+  return {
+    connected,
+    // 兼容只关心「最近一次」调用方的旧接口；新代码应使用 streamsByNode。
+    streamText: active?.content ?? '',
+    reasoningText: active?.reasoning ?? '',
+    lastGateEvent: active?.gate ?? null,
+    streamsByNode,
+    streamNodeId
+  };
 }
 
 /**
@@ -189,6 +261,7 @@ export function useRunExecution(runId) {
     streamConnected: stream.connected,
     streamText: stream.streamText,
     streamReasoning: stream.reasoningText,
+    streamsByNode: stream.streamsByNode,
     streamNodeId: stream.streamNodeId,
     lastGateEvent: stream.lastGateEvent,
     loading: runQuery.isLoading || viewQuery.isLoading,

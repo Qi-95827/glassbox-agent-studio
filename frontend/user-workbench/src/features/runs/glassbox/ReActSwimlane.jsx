@@ -244,16 +244,152 @@ function TurnCard({ turn }) {
 }
 
 /**
+ * 实时输出块：运行中的节点在泳道底部持续追加正文、思考链与当前过检关卡。
+ *
+ * <p>数据来自 SSE 瞬态帧（按 `nodeId` 分桶），只在内存中；运行结束后由落库快照接管，
+ * 因此这里没有任何「补造历史」的逻辑——没有增量帧就明确显示等待状态。
+ */
+function LiveStreamBlock({ liveStream }) {
+  const { t } = useI18n();
+  const [reasoningOpen, setReasoningOpen] = useState(false);
+  const content = liveStream?.content ?? '';
+  const reasoning = liveStream?.reasoning ?? '';
+  const gate = liveStream?.gate ?? null;
+
+  return (
+    <Box
+      data-testid="swimlane-live"
+      sx={{
+        mt: 1,
+        p: 1.25,
+        borderRadius: 2.5,
+        border: '1px dashed #A8C7FA',
+        bgcolor: '#F6F9FF'
+      }}
+    >
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', mb: 0.6 }}>
+        <Box
+          component="span"
+          sx={{
+            width: 7,
+            height: 7,
+            borderRadius: '50%',
+            bgcolor: '#1A73E8',
+            animation: 'liveBlink 1.1s ease-in-out infinite',
+            '@keyframes liveBlink': {
+              '0%, 100%': { opacity: 0.3 },
+              '50%': { opacity: 1 }
+            }
+          }}
+        />
+        <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: '#1967D2' }}>
+          {t('swimlane.liveTitle')}
+        </Typography>
+        {gate?.gate && (
+          <Chip
+            size="small"
+            label={t('swimlane.liveGate', {
+              gate: gate.label || gate.gate,
+              status: gate.status ?? ''
+            })}
+            sx={{ height: 19, fontSize: 10.5, bgcolor: '#E8F0FE', color: '#1967D2' }}
+          />
+        )}
+      </Stack>
+
+      {reasoning ? (
+        <Box sx={{ mb: 0.6 }}>
+          <Box
+            component="button"
+            type="button"
+            onClick={() => setReasoningOpen(value => !value)}
+            data-testid="swimlane-live-reasoning-toggle"
+            sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.4,
+              border: 'none',
+              background: 'none',
+              p: 0,
+              cursor: 'pointer',
+              color: '#5F6368',
+              font: 'inherit'
+            }}
+          >
+            {reasoningOpen ? (
+              <ExpandLessRounded sx={{ fontSize: 16 }} />
+            ) : (
+              <ExpandMoreRounded sx={{ fontSize: 16 }} />
+            )}
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+              {t('swimlane.liveReasoning', { count: reasoning.length })}
+            </Typography>
+          </Box>
+          <Collapse in={reasoningOpen} unmountOnExit>
+            <Box
+              data-testid="swimlane-live-reasoning"
+              sx={{
+                mt: 0.5,
+                p: 1,
+                borderRadius: 2,
+                bgcolor: '#F7F4FD',
+                border: '1px dashed #D9CCF5',
+                whiteSpace: 'pre-wrap',
+                fontSize: 12,
+                lineHeight: 1.65,
+                color: '#4A3B6B',
+                maxHeight: 160,
+                overflowY: 'auto'
+              }}
+            >
+              {reasoning}
+            </Box>
+          </Collapse>
+        </Box>
+      ) : null}
+
+      {content ? (
+        <Box
+          data-testid="swimlane-live-content"
+          sx={{
+            whiteSpace: 'pre-wrap',
+            fontFamily: googleTokens.mono,
+            fontSize: 12,
+            lineHeight: 1.65,
+            color: googleTokens.text,
+            maxHeight: 200,
+            overflowY: 'auto',
+            '&::after': {
+              content: '"▍"',
+              color: '#1A73E8',
+              animation: 'caretBlink 1s steps(1) infinite'
+            },
+            '@keyframes caretBlink': { '50%': { opacity: 0 } }
+          }}
+        >
+          {content}
+        </Box>
+      ) : (
+        <Typography variant="caption" color="text.secondary">
+          {t('swimlane.liveWaiting')}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/**
  * ReAct 实时泳道：按轮次串起「思考链 → 模型输出 → 工具调用 → 安检门 → 工具结果」。
  *
- * <p>全部内容来自服务端落库的模型调用快照与工具调用轨迹；运行中的增量片段在节点抽屉的
- * 实时区域展示，两者都不做任何本地推断。
+ * <p>全部内容来自服务端落库的模型调用快照与工具调用轨迹；运行中的增量片段在泳道底部
+ * 的实时块中显示，两者都不做任何本地推断。
  */
-export default function ReActSwimlane({ attempts }) {
+export default function ReActSwimlane({ attempts, liveStream = null }) {
   const { t } = useI18n();
   const turns = useMemo(() => buildReActTurns(attempts), [attempts]);
+  const hasLive = Boolean(liveStream?.content || liveStream?.reasoning || liveStream?.gate);
 
-  if (turns.length === 0) {
+  if (turns.length === 0 && !hasLive) {
     return (
       <EmptyState
         compact
@@ -264,10 +400,13 @@ export default function ReActSwimlane({ attempts }) {
   }
 
   return (
-    <Stack data-testid="react-swimlane" spacing={0}>
-      {turns.map(turn => (
-        <TurnCard key={`${turn.number}:${turn.model?.id ?? 'tool-only'}`} turn={turn} />
-      ))}
-    </Stack>
+    <Box data-testid="react-swimlane">
+      <Stack spacing={0}>
+        {turns.map(turn => (
+          <TurnCard key={`${turn.number}:${turn.model?.id ?? 'tool-only'}`} turn={turn} />
+        ))}
+      </Stack>
+      {hasLive && <LiveStreamBlock liveStream={liveStream} />}
+    </Box>
   );
 }
