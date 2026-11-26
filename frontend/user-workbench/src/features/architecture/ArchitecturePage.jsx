@@ -8,15 +8,18 @@ import {
   List,
   ListItemButton,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography
 } from '@mui/material';
 import ArrowBackRounded from '@mui/icons-material/ArrowBackRounded';
 import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded';
 import KeyboardArrowDownRounded from '@mui/icons-material/KeyboardArrowDownRounded';
 import KeyboardArrowRightRounded from '@mui/icons-material/KeyboardArrowRightRounded';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePageChrome } from '../../layout/pageChrome';
 import ArchitectureCanvas from './ArchitectureCanvas';
+import ArchitectureXrayPanel from './ArchitectureXrayPanel';
 import {
   ALL_ARCHITECTURE_TOPICS,
   ARCHITECTURE_GROUPS,
@@ -38,6 +41,15 @@ export default function ArchitecturePage() {
   const activeTopic = getArchitectureTopic(params.get('topic'));
   const parentTopic = getParentTopic(activeTopic);
   const activeBranchId = parentTopic ? parentTopic.id : activeTopic.id;
+  const navigate = useNavigate();
+  // 实时 X 光模式挂在 URL 上：可分享、可刷新，默认仍是静态教学图。
+  const mode = params.get('mode') === 'xray' ? 'xray' : 'static';
+  const setMode = next => {
+    const copy = new URLSearchParams(params);
+    if (next === 'xray') copy.set('mode', 'xray');
+    else copy.delete('mode');
+    setParams(copy, { replace: true });
+  };
 
   // 默认只展开当前正在浏览的主图分支，其余收起，保持极简呼吸感
   const [expandedId, setExpandedId] = useState(activeBranchId);
@@ -68,6 +80,46 @@ export default function ArchitecturePage() {
     setParams(next, { replace: true });
   };
 
+  // 实时 X 光：用真实运行的落库轨迹点亮模块，静态教学图仍是一等公民（默认分支）。
+  if (mode === 'xray') {
+    const modeSwitch = (
+      <ToggleButtonGroup
+        exclusive
+        size="small"
+        value={mode}
+        onChange={(_, value) => value && setMode(value)}
+      >
+        <ToggleButton value="static" data-testid="architecture-mode-static">
+          {t('architecture.mode.static')}
+        </ToggleButton>
+        <ToggleButton value="xray" data-testid="architecture-mode-xray">
+          {t('architecture.mode.xray')}
+        </ToggleButton>
+      </ToggleButtonGroup>
+    );
+    return (
+      <Box
+        data-testid="architecture-xray-mode"
+        sx={{ height: '100%', overflow: 'auto', p: 2, bgcolor: googleTokens.canvas }}
+      >
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5 }}>
+          {modeSwitch}
+          <Typography variant="caption" color="text.secondary">
+            {t('architecture.xrayHint')}
+          </Typography>
+        </Stack>
+        <ArchitectureXrayPanel
+          initialRunId={params.get('run') ?? ''}
+          onOpenRun={(runId, nodeId, tab) =>
+            navigate(
+              `/runs/${runId}?node=${encodeURIComponent(nodeId)}&glassbox=${encodeURIComponent(tab)}`
+            )
+          }
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box sx={{ height: '100%', display: 'flex', minHeight: 0, bgcolor: googleTokens.canvas }}>
       {/* 左侧可折叠二级目录树（桌面端） */}
@@ -86,6 +138,20 @@ export default function ArchitecturePage() {
         <Typography sx={{ fontSize: 15, fontWeight: 600, px: 1, mb: 0.35 }}>
           {t('architecture.pageTitle')}
         </Typography>
+        <ToggleButtonGroup
+          exclusive
+          size="small"
+          value={mode}
+          onChange={(_, value) => value && setMode(value)}
+          sx={{ px: 1, mb: 1 }}
+        >
+          <ToggleButton value="static" data-testid="architecture-mode-static">
+            {t('architecture.mode.static')}
+          </ToggleButton>
+          <ToggleButton value="xray" data-testid="architecture-mode-xray">
+            {t('architecture.mode.xray')}
+          </ToggleButton>
+        </ToggleButtonGroup>
         <Typography variant="caption" color="text.secondary" sx={{ px: 1, mb: 2, lineHeight: 1.5 }}>
           {t('architecture.pageSubtitle')}
         </Typography>

@@ -20,11 +20,20 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/runs/{id}")
 public class RunObservationController {
   private final RunObservationService observations;
+  private final ArchitectureXrayService xray;
   private final OwnershipService ownership;
 
-  public RunObservationController(RunObservationService observations, OwnershipService ownership) {
+  public RunObservationController(
+      RunObservationService observations, ArchitectureXrayService xray, OwnershipService ownership) {
     this.observations = observations;
+    this.xray = xray;
     this.ownership = ownership;
+  }
+
+  @GetMapping("/architecture-xray")
+  Object architectureXray(@PathVariable String id) {
+    ownership.requireRun(id);
+    return xray.xray(id);
   }
 
   @GetMapping("/timeline")

@@ -43,5 +43,6 @@ export const runsApi = {
   checkpoints: (runId, options) => get(`/runs/${runId}/checkpoints`, options),
   diff: (runId, otherRunId, options) => get(`/runs/${runId}/diff/${otherRunId}`, options),
   forks: (runId, options) => get(`/runs/${runId}/forks`, options),
-  fork: (runId, payload) => post(`/runs/${runId}/forks`, payload)
+  fork: (runId, payload) => post(`/runs/${runId}/forks`, payload),
+  architectureXray: (runId, options) => get(`/runs/${runId}/architecture-xray`, options)
 };
