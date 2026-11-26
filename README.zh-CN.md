@@ -39,10 +39,12 @@
 | **2. 多 Agent DAG 执行流程图** | React Flow 实时流程图、节点状态与耗时、节点断点开关、轻量右侧概览 + 宽屏透视弹窗 | 学习 DAG 依赖调度、断点单步控制与后端事件到前端执行图的投影模式 |
 | **3. 结构化交接信封与校验原理** | 上游核心结论、涉及文件/产物、关键决策、遗留风险、**可展开的「怎么算 PASS」校验标准** | 掌握多 Agent 协作防幻觉交接机制：依赖边校验、实例归属绑定与工具证据随行 |
 | **4. 模型 I/O 全链路透视** | 按角色分色的 `SYSTEM / USER / ASSISTANT / TOOL` Messages、注入的工具 Schema、原始回复与 `tool_calls` | 看懂真实生产环境的 Prompt 拼装、外置化管理、脱敏截断与工具调用决策循环 |
-| **5. 装配配方与 ToolGateway 安检门** | 工具权限漏斗（已放行 vs. 红色锁条展示被裁剪工具与原因）+ 6 道网关安检门实测依据 | 学习最小权限沙箱、路径白名单防越界、防死循环指纹、乐观锁与预算熔断 |
-| **6. 类 Grafana 细粒度监控看板** | 成功率仪表盘、KPI 指标卡、时序趋势图、状态/模型/工具圆环图、慢节点与拦截排行 | 学习 LLM 应用可观测性指标建模（Avg/P95 耗时、Token 归因、安全拦截率） |
-| **7. 一键故障排查向导** | 健康等级评定、一句话根因定位、1→5 步标准排查清单与一键直达目标节点/透视 Tab | 学习如何基于多表持久化证据自动生成可执行的故障诊断路径 |
-| **8. BYOK 自带模型与 API Key 管理** | 多家 OpenAI 兼容服务商预设、AES-256-GCM 加密存储、掩码回显、一键测连通性 | 掌握密钥安全治理（加密落库、零明文回显、SSRF 校验、多账号隔离） |
+| **5. 装配配方与 ToolGateway 安检流水线** | 工具权限漏斗（已放行 vs. 红色锁条展示被裁剪工具与原因）+ 6 道网关安检门**横向流水线关卡灯**与 Gate 5.5 人工审批 | 学习最小权限沙箱、路径白名单防越界、防死循环指纹、乐观锁与预算熔断 |
+| **6. 真流式 ReAct 泳道与上下文压缩显微镜** | 主循环真流式打字机 + 思考链分道落库、按 Turn 切分的 ReAct 实时泳道、六层上下文水位堆叠面积图 + L1/L2/L3 压缩对照与 Artifact 原文回读 | 看懂推理链与工具调用循环、四级上下文压缩机制与大输出卸载回读 |
+| **7. RAG/三层记忆透视与可视化编排画布** | Hybrid RAG（BM25/向量 → RRF 漏斗与裁剪原因）、三层记忆与切片边界、可实时标红写集冲突/成环并写回确认执行的 `@xyflow/react` 编排画布 | 理解混合检索排序机理、长短期记忆分层，以及有界反思与写集互斥编排约束 |
+| **8. 时间轴、Checkpoint 分叉与实时架构 X 光** | 7 类 Span 执行时间轴火焰图、Checkpoint 冻结状态检视与 What-If 分叉对照、绑定真实运行动态点亮与步进回放的 C4 架构 X 光图 | 学习 Flink 风格检查点恢复、分支对比调试与框架全局运行脉络 |
+| **9. 监控看板、5 步诊断、开放 Trace 与评测飞轮** | 类 Grafana 纯 SVG 监控看板、5 步一键排查、OTel/Glass-Box 脱敏导出、外部 Agent Trace 只读接入、以及运行一键沉淀至 Eval Lab v2 | 掌握 LLM 可观测性、OTel 标准 Trace 互通与「调试 → 评测回归」闭环 |
+| **10. BYOK 模型管理与整仓一键授权** | 多服务商 OpenAI 兼容预设（AES-256-GCM 加密与掩码）、整仓（`.`）三档常驻授权条、管理员一键自动授权导入本地 Git 仓库 | 掌握密钥安全治理（零明文回显、SSRF 防护）与受控本地代码工作区接入 |
 
 ---
 
@@ -237,14 +239,15 @@ backend/src/main/java/
   dev.workbench.memory          V9 分层长期记忆与 V13 工作区 Hybrid RAG 知识库（BM25 + pgvector + RRF）
   dev.workbench.bug             模拟 Bug 分诊与强隔离 Docker 容器复现回归闭环
   dev.workbench.evaluation      Eval Lab v2 六维能力评测、Benchmark Hub 公开集、自定义数据集与 A/B 消融对照
-  dev.workbench.observability   SSE 游标事件流、类 Grafana 监控看板、Prometheus 指标与 5 步故障诊断
-  dev.workbench.auth/ownership  本地会话认证、Cookie CSRF、ADMIN_ONLY 守卫与服务端资源归属隔离
+  dev.workbench.observability   SSE 流式/游标事件流、类 Grafana 监控看板、Prometheus 指标与 5 步故障诊断
+  dev.workbench.timeline        时间轴火焰图、Checkpoint 与双跑对照、动态架构 X 光、OTel/外部 Trace 接入与评测飞轮
+  dev.workbench.auth/ownership  本地会话与异步认证上下文、Cookie CSRF、ADMIN_ONLY 守卫与服务端资源归属隔离
 backend/src/main/resources/
   prompts/                      外置化中文 Agent / Skill / 规划 Prompt 与工具契约（默认）
   prompts/en/                   外置化英文镜像 Prompt 与工具契约（英文任务专用）
   i18n/                         Spring MessageSource 国际化资源（zh_CN / en_US）
-  db/migration/                 Flyway H2 版本化迁移脚本（V1 ~ V14）
-  db/migration-pg/              Flyway PostgreSQL 16 + pgvector 迁移脚本（V1 ~ V4）
+  db/migration/                 Flyway H2 版本化迁移脚本（V1 ~ V17，共 97 张表）
+  db/migration-pg/              Flyway PostgreSQL 16 + pgvector 迁移脚本（V1 ~ V7）
 ```
 
 ---
@@ -253,10 +256,11 @@ backend/src/main/resources/
 
 - **[docs/README.md](docs/README.md)**：完整文档目录与归档索引
 - **[项目总览：产品需求与技术架构](docs/项目总览_产品需求与技术架构.md)**：唯一权威系统设计与最新实机基线
+- **[AI 框架可视化 V0–V6 最终验收记录](docs/交接/AI框架可视化_V0-V6_最终验收记录.md)**：V0~V6 全链路玻璃盒可视化总表、API/迁移清单与端到端手测剧本
+- **[外部 Agent Trace 接入指南](docs/交接/外部Agent_Trace接入指南_2026-11-26.md)**：把独立 Python/Java Agent 推送至工作台透视与 OTel 导出示例
 - **[项目漏洞审计与后续演进改进文档](docs/项目漏洞审计与后续演进改进文档.md)**：安全审计台账、Top 10 闭环状态与演进路线图
 - **[Top 10 安全止血与 P0 修复验收记录](docs/交接/Top10安全止血与P0修复_验收记录.md)**：逐任务实机验收证据与门禁报告
 - **[PGVector 切换与部署指南](docs/开发记录/PGVector切换与部署指南.md)**：PostgreSQL 16 + pgvector 启用与验证清单
-- **[玻璃盒多 Agent 全链路可视化概要设计](docs/概要设计/玻璃盒多Agent全链路可视化_概要设计.md)**：面向开源教学的全链路透视架构设计
 - **[代码开发规范](docs/开发规范/代码开发规范.md)**：工程分层、JPA 持久化与安全规约
 
 ---

@@ -13,7 +13,7 @@
 ## 2. 第一步：创建一条外部接入运行
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/external-traces/runs \
+curl -X POST http://127.0.0.1:8088/api/external-traces/runs \
   -H 'Content-Type: application/json' \
   -d '{"name":"my-agent-run","source":"python"}'
 ```
@@ -27,7 +27,7 @@ curl -X POST http://127.0.0.1:8080/api/external-traces/runs \
 ## 3. 第二步：追加 Span
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/external-traces/runs/<RUN_ID>/spans \
+curl -X POST http://127.0.0.1:8088/api/external-traces/runs/<RUN_ID>/spans \
   -H 'Content-Type: application/json' \
   -d '[
     {"kind":"NODE","name":"plan","nodeKey":"plan","status":"COMPLETED",
@@ -60,7 +60,7 @@ curl -X POST http://127.0.0.1:8080/api/external-traces/runs/<RUN_ID>/spans \
 ```python
 import json, urllib.request
 
-BASE = "http://127.0.0.1:8080"
+BASE = "http://127.0.0.1:8088"
 
 def post(path, payload):
     request = urllib.request.Request(
@@ -90,7 +90,7 @@ post(
 print(run["id"])
 ```
 
-> 需要登录态时，先按工作台的登录方式取得会话 Cookie，再复用同一个连接；示例不写入任何密钥。
+> 需要登录态时，先按工作台的登录方式取得会话 Cookie，写请求（`POST`）需同时携带 `X-XSRF-TOKEN` 响应头与 `XSRF-TOKEN` Cookie（详见同源 CSRF 约定）；示例不写入任何密钥。
 
 ## 5. 第三步：只读查看
 
@@ -104,10 +104,10 @@ print(run["id"])
 
 ```bash
 # 标准 OpenTelemetry Span JSON
-curl -s "http://127.0.0.1:8080/api/runs/<RUN_ID>/trace-export?format=otel"
+curl -s "http://127.0.0.1:8088/api/runs/<RUN_ID>/trace-export?format=otel"
 
 # 工作台自己的 Glass-Box JSON
-curl -s "http://127.0.0.1:8080/api/runs/<RUN_ID>/trace-export?format=glassbox"
+curl -s "http://127.0.0.1:8088/api/runs/<RUN_ID>/trace-export?format=glassbox"
 ```
 
 OTel 导出里 `traceId` 由 `runId` 稳定派生、`spanId` 由 Span 标识稳定派生，同一运行重复导出结果一致；

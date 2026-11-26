@@ -39,9 +39,12 @@ Most AI coding agent frameworks run as a **black box**: you type a prompt, text 
 | **2. Interactive DAG Execution Graph** | Live React Flow DAG, node status & duration, node breakpoints, lightweight inspector + full-screen Glass-Box modal | Learn DAG dependency scheduling, step-by-step breakpoints, and state projection |
 | **3. Structured Handoff Envelope** | Upstream conclusion, artifacts, decisions, open risks, **transparent `PASS/SKIP/DENY` validation rules** | Learn how to make multi-agent handoffs verifiable and audit-safe |
 | **4. Full LLM I/O Inspector** | Role-colored `SYSTEM / USER / ASSISTANT / TOOL` messages, injected tool JSON schemas, raw responses & `tool_calls` | Master real-world prompt assembly, context management, and tool-calling loops |
-| **5. Agent Assembly & ToolGateway** | Tool permission funnel (granted vs. stripped tools with lock reasons) + 6-gate `ToolGateway` inspection | Learn least-privilege sandboxing, path whitelisting, loop guards, and optimistic locks |
-| **6. Grafana-Style Monitoring & Diagnostics** | KPI gauges, time-series charts, status/model/tool donut charts, slow-node rankings, **5-step auto-diagnostics** | Learn LLM observability, latency/token attribution, and structured incident triage |
-| **7. BYOK Model & Key Manager** | Multi-provider OpenAI-compatible presets, AES-256-GCM encrypted key storage, masked display, connectivity probe | Learn secure credential management, SSRF protection, and multi-provider model routing |
+| **5. Agent Assembly & ToolGateway Pipeline** | Tool permission funnel (granted vs. stripped tools) + horizontal 6-gate `ToolGateway` pipeline & Gate 5.5 HITL approvals | Learn least-privilege sandboxing, path whitelisting, loop guards, and optimistic locks |
+| **6. Live ReAct Swimlane & Context Microscope** | Live streaming tokens + separate reasoning trace persistence, turn-by-turn ReAct swimlane, 6-layer context water-level chart & L1–L3 compaction diff with artifact reader | Inspect thought-action-observation loops, multi-tier context compaction, and artifact offload/readback |
+| **7. RAG/Memory X-Ray & Visual Graph Composer** | Hybrid RAG funnel (BM25 + pgvector → RRF + dropped reasons), 3-layer memory & chunk viewer, and interactive `@xyflow/react` plan composer with live conflict highlighting & save-to-run | Master hybrid retrieval ranking, layered memory isolation, write-set disjointness & bounded reflection |
+| **8. Execution Timeline, Checkpoint Fork & Live X-Ray** | 7-span Gantt timeline, Checkpoint state inspector + What-If run forking & side-by-side run diff, plus live C4 Architecture X-Ray replay tied to real runs | Learn Flink-style checkpoint debugging, counterfactual branching, and live framework telemetry |
+| **9. Monitoring, Diagnostics, Open Trace & Eval Flywheel** | Grafana-style SVG dashboard, 5-step auto-diagnostics, OTel/Glass-Box export, read-only external agent trace ingest, and one-click run distillation into Eval Lab v2 | Learn LLM observability, OpenTelemetry interop, and continuous trace-to-eval regression loops |
+| **10. BYOK Model Manager & Whole-Workspace Scope** | Multi-provider OpenAI-compatible presets (AES-256-GCM encrypted), 3-mode whole-workspace (`.`) scope bar, and one-click admin repo auto-grant | Learn secure credential hygiene, SSRF protection, and ergonomic sandboxed workspace onboarding |
 
 ---
 
@@ -234,14 +237,15 @@ backend/src/main/java/
   dev.workbench.memory          Layered long-term memory (V9) & workspace RAG knowledge base (V13 + pgvector)
   dev.workbench.bug             Simulated Bug triage & isolated Docker Python container regression
   dev.workbench.evaluation      Eval Lab v2 (6-dim capabilities, Benchmark Hub, custom datasets & A/B compare)
-  dev.workbench.observability   SSE cursor stream, Grafana-style SVG dashboard, Prometheus metrics & 5-step diagnostics
-  dev.workbench.auth/ownership  Session auth, Cookie CSRF, ADMIN_ONLY guards & per-user resource ownership
+  dev.workbench.observability   SSE streaming/cursor events, Grafana-style SVG dashboard, Prometheus metrics & 5-step diagnostics
+  dev.workbench.timeline        Execution timeline, Checkpoint/What-If diff, Live Architecture X-Ray, OTel/External Trace & Eval Flywheel
+  dev.workbench.auth/ownership  Session & async auth context, Cookie CSRF, ADMIN_ONLY guards & per-user resource ownership
 backend/src/main/resources/
   prompts/                      Externalized Chinese prompts & tool contracts (default)
   prompts/en/                   Mirrored English prompts & tool contracts (for EN tasks)
   i18n/                         Spring MessageSource bundles (messages_zh_CN / messages_en_US)
-  db/migration/                 Flyway H2 migrations (V1 ~ V14)
-  db/migration-pg/              Flyway PostgreSQL 16 + pgvector migrations (V1 ~ V4)
+  db/migration/                 Flyway H2 migrations (V1 ~ V17, 97 tables)
+  db/migration-pg/              Flyway PostgreSQL 16 + pgvector migrations (V1 ~ V7)
 ```
 
 ---
@@ -250,10 +254,11 @@ backend/src/main/resources/
 
 - [Documentation Index (Chinese)](docs/README.md)
 - [Product Requirements & Technical Architecture](docs/项目总览_产品需求与技术架构.md)
+- [AI Framework Visualization V0–V6 Final Verification Log](docs/交接/AI框架可视化_V0-V6_最终验收记录.md)
+- [External Agent Trace Ingestion & OTel Export Guide](docs/交接/外部Agent_Trace接入指南_2026-11-26.md)
 - [Security Audit, Top 10 Fixes & Roadmap](docs/项目漏洞审计与后续演进改进文档.md)
 - [Top 10 Security & P0 Fixes Verification Log](docs/交接/Top10安全止血与P0修复_验收记录.md)
 - [PostgreSQL 16 + pgvector Deployment Guide](docs/开发记录/PGVector切换与部署指南.md)
-- [Glass-Box Multi-Agent Full-Link Visualization Design](docs/概要设计/玻璃盒多Agent全链路可视化_概要设计.md)
 - [Engineering & Security Coding Standards](docs/开发规范/代码开发规范.md)
 
 ---

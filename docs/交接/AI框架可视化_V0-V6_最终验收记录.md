@@ -1,22 +1,23 @@
 # AI 框架可视化 · V0–V6 最终验收记录（2026-11-26 封板）
 
-> 本记录只写实际交付与实跑数据。基线 `master @ d70a9a4`，本轮演进共 **13 个本地提交**（含 6 个 feat、2 个 fix、2 个 docs，以及上一轮 3 个），全程**未 push**。
-> 累计改动：150 文件 / +13790 / −680。
+> 本记录只写实际交付与实跑数据。基线 `master @ d70a9a4`，本轮演进共完成 **V0–V6 全量交付与终审修补**（截止 `cb39a4c`，详见下表），全程本地提交、**未 push**。
+> 原 V0–V1、V0–V3、V3 闭环–V5 三份中间阶段验收文档及演进交接提示已合并归口至本文档并清理，本文档为 **V0–V6 唯一权威验收记录**。
 
 ## 1. V0–V6 里程碑总表
 
 | 阶段 | 提交 | 主题 | 交付要点 |
 | :--- | :--- | :--- | :--- |
-| V0 | `cfa7109` | 可视化前端地基轻量化 + 运行态协同 | 前端分块与运行态协同、玻璃盒入口收敛 |
-| V1 | `b300b8c` | 活的玻璃盒：真流式 + ReAct 实时泳道 + 六道安检流水线 | SSE 瞬态帧、`streamText/streamReasoning/lastGateEvent`、按节点分桶、`GatePipeline` |
-| 补丁 | `dcd4372` | V0/V1 三处真实缺口 | `node-detail` 缓存失效、未消费流式字段接入 UI、累积型供应商净增量（`StreamAccumulator` 返回 delta） |
-| V2 | `eee5246` | 上下文压缩显微镜 + Hybrid RAG / 三层记忆透视 | `ContextBreakdown.CompactionDetail`、L1/L2/L3 存证、`RagRetrievalXRay`、三层记忆面板、`KNOWLEDGE_SEARCH` / `CONTEXT_ARTIFACT_READ` 工具（显式授予） |
-| V3 | `daab060` | 多 Agent 可视化编排校验画布 | `POST /plans/validate-draft`、写集冲突/成环/越界/未知依赖/重复键冲突分析 |
-| V3 闭环 | `2b3b7c3` | 画布落库闭环 | `PUT /plan-candidates/{id}/draft`：服务端复核通过才写回，摘要更新后由既有确认创建运行 |
-| V4 | `af8d0a8` | 执行时间轴 + Checkpoint 时间旅行 + 双跑对照 | 时间轴 Span 投影、检查点冻结状态、`POST /runs/{id}/forks` 分叉重跑、结构化 diff + 行级并排 diff |
-| V5 | `23da2e8` | 动态实时架构 X 光 | `GET /runs/{id}/architecture-xray`、模块激活/耗时/压缩节省/拦截数、步进回放、一键回到证据 |
-| 复核定稿 | `3948a94` | V4/V5 三处修补 | 分叉模型特权写反（安全）、整仓范围复验路径、X 光锚点按模块精准映射 + 最近运行下拉 |
-| V6 | `9a0af00` | 开放式 Glass-Box Trace + 评测飞轮 | `trace-export`（OTel/Glass-Box）、外部 Trace 接入（归属/上限/脱敏/只读）、`eval-cases` 一键沉淀 |
+| V0 | `cfa7109` | 可视化前端地基轻量化 + 运行态协同 | 10 路由页 `React.lazy` 懒加载、三级 `ErrorBoundary`、SSE/轮询协同与 280ms 防抖、`FlowNode` `React.memo`、自研 `VirtualList` 虚拟滚动、结构化 `errorCode`（`AUTH_REQUIRED`/`CSRF_INVALID`/`ACCESS_DENIED`）、删除死文件 `EvaluationsPage.jsx` |
+| V1 | `b300b8c` | 活的玻璃盒：真流式 + ReAct 实时泳道 + 六道安检流水线 | `ControlledModel` `StreamAccumulator`（主循环流式 + 思考链分道落库 H2 `V15`/PG `V5`）、SSE 瞬态帧 `MODEL_DELTA`/`MODEL_REASONING_DELTA`/`TOOL_GATE_PROGRESS`、`ReActSwimlane`、`GatePipeline` |
+| 补丁 | `dcd4372` | V0/V1 三处真实缺口 | `flushInvalidate` 补齐 `node-detail` 缓存失效、`streamsByNode` 按节点分桶并接入 UI 实时打字机展示、累积型供应商净增量（`StreamAccumulator` 返回 `StreamDeltas`） |
+| V2 | `eee5246` | 上下文压缩显微镜 + Hybrid RAG / 三层记忆透视 | `ContextBreakdown.CompactionDetail`、纯 SVG 六层堆叠面积图 + 阈值线 + `artifactRef` 原文弹窗、`RagRetrievalXRayPanel`（BM25/向量 → RRF 漏斗）、`MemoryAndChunksPanel`、`knowledge_search` / `context_artifact_read` 受控工具（显式授予） |
+| V3 | `daab060` | 多 Agent 可视化编排校验画布 | `POST /api/plans/validate-draft`、写集冲突/成环/越界/未知依赖/重复键冲突分析、`PlanComposerCanvas`（`@xyflow/react` + Dagre） |
+| V3 闭环 | `2b3b7c3` | 画布落库闭环 | `PUT /api/plan-candidates/{id}/draft`：条件更新 + 乐观锁摘要校验 + `PlanCandidateValidator` 复核通过才写回，确认即按修改图运行 |
+| V4 | `af8d0a8` | 执行时间轴 + Checkpoint 时间旅行 + 双跑对照 | 7 类 Span 时间轴火焰图、Checkpoint 冻结状态检视、`POST /api/runs/{id}/forks` 分叉重跑（H2 `V16`/PG `V6` `run_forks`）、双跑结构化对照 + 行级并排 Diff |
+| V5 | `23da2e8` | 动态实时架构 X 光 | `GET /api/runs/{id}/architecture-xray`、架构页「静态教学 ↔ 实时 X 光」模式切换、模块激活/耗时/压缩节省/拦截数、步进回放与一键跳回证据 |
+| 复核定稿 | `3948a94` | V4/V5 三处修补 | 修正分叉 `DEEPSEEK` vs `USER` 特权校验写反、整仓（`>20` 文件）分叉改走目录复验、X 光锚点按模块精准映射 Tab + 最近运行下拉 |
+| V6 | `9a0af00` | 开放式 Glass-Box Trace + 评测飞轮 | `trace-export`（OTel/Glass-Box 脱敏导出）、外部 Trace 接入（H2 `V17`/PG `V7`，归属/上限/脱敏/只读透视）、`eval-cases` 一键沉淀 |
+| 终审修补 | `cb39a4c` | V6 评测飞轮两处实锤修补 | `EvalFlywheelService` 默认类别修正为有效枚举 `CODING_REFLECTION`（修复首次点击报 400）；`GET /eval-case-preview` 改为严格只读零写库 |
 
 ## 2. 累计 API / SSE / 迁移总表
 
@@ -27,7 +28,7 @@
 | POST | `/api/plans/validate-draft` | 可选工作区归属 |
 | PUT | `/api/plan-candidates/{id}/draft` | 执行归属 |
 | GET | `/api/context-artifacts/{ref}` | 运行归属 |
-| GET | `/api/knowledge/{documentId}/chunks`、`/api/knowledge/xray` | 工作区归属 |
+| GET | `/api/workspaces/{workspaceId}/knowledge/{documentId}/chunks`、`/api/workspaces/{workspaceId}/knowledge/xray` | 工作区归属 |
 | GET | `/api/runs/{id}/timeline` | `ownership.requireRun` |
 | GET | `/api/runs/{id}/checkpoints` | `ownership.requireRun` |
 | GET | `/api/runs/{id}/diff/{otherId}` | 两侧 `requireRun` |
@@ -94,9 +95,23 @@ i18n：`zh-CN` **1800** / `en-US` **1800**，键差 0。
 | 9 | 每阶段独立本地提交 | ✅ | 6 feat + 2 fix + 2 docs，阶段边界清晰 |
 | 10 | 严禁 `git push` | ✅ | `## master...origin/master [ahead 17]`，仅本地提交 |
 
-## 5. V6 端到端手测剧本
+## 5. V0–V6 端到端手测剧本
 
-### 5.1 OTel / Glass-Box 导出
+> 本地启动命令（仓库根目录 `D:\software program\AI\agent-dev-workbench`）：`mvn spring-boot:run`，访问 `http://127.0.0.1:8088`。
+
+### 5.1 V0–V2（地基协同、实时流式泳道、显微镜与 RAG/记忆透视）
+
+1. **V0 懒加载与 SSE**：打开首页，DevTools Network 确认无 `ArchitecturePage` chunk，切到「架构图谱」才加载；打开已结束运行无 `/stream` 连接与 1.8s 轮询；「回放」长列表 DOM 行数维持数十级；切 English 后触发 CSRF 过期可自动重试。
+2. **V1 实时泳道与安检流水线**：用真实 BYOK 发起代码任务 → 画布运行节点显示 `流式输出中…` → 玻璃盒「ReAct 实时泳道」底部实时展示思考链（可折叠）、正文流与当前过检关卡；跑完刷新仍从数据库完整还原；工具块顶部六道安检灯在拦截时默认展开被拒关卡。
+3. **V2 上下文显微镜与 RAG/记忆**：玻璃盒「模型 I/O」→ 展开「上下文显微镜」查看六层堆叠面积图 + L1(60%)/L2(78%)/L3(92%) 阈值线 + 压缩对照，点 `artifactRef` 弹窗读原文；工作区「知识库」检索看 BM25/向量 → RRF 漏斗与裁剪原因；工作区「记忆与切片」管理三层记忆与查看文档切片边界。
+
+### 5.2 V3–V5（编排画布落库、时间旅行与实时架构 X 光）
+
+1. **V3 画布编排闭环**：计划确认弹窗切「可视化编排」→ 填两节点写入同一文件或连成环 → 冲突节点变红且「应用画布到计划」禁用；修正为合法图并修改标题/验收 → 应用 → 确认创建运行，详情页直接生效。
+2. **V4 时间轴与分叉对照**：打开已结束运行 →「执行时间轴」看 7 类 Span 泳道，点色块跳对应节点玻璃盒；「Checkpoint」补充一句话发起分叉（运行中运行会被 400 拒绝）→ 分叉完成后回主线「分支对照」看双轨指标与逐节点并排 diff。
+3. **V5 动态架构 X 光**：进入「架构图谱」切「实时 X 光」→ 从「最近运行」下拉选择（或粘贴 Run ID）→ 仅真实触发的模块显示 `ACTIVE` 与耗时/压缩率/拦截数；拖动步进滑块观察路径；点任意激活模块锚点精准跳到运行详情对应玻璃盒 Tab。
+
+### 5.3 V6：OTel / Glass-Box 导出
 
 1. 打开任一已完成运行 → 顶部「开放出口」条 → 点「导出 OTel Trace」。
 2. 浏览器应返回 `application/json`：`resourceSpans[0].resource.attributes` 含 `service.name=agent-workbench` 与 `workbench.run.id`。
@@ -104,7 +119,7 @@ i18n：`zh-CN` **1800** / `en-US` **1800**，键差 0。
 4. 同一运行再导出一次：`traceId` 与 `spanId` 完全一致（由 runId / spanId 稳定派生）。
 5. 点「导出 Glass-Box JSON」→ `format=glassbox`，含 `summary` 与 `limitations`。
 
-### 5.2 外部 Agent Trace 接入
+### 5.4 V6：外部 Agent Trace 接入
 
 1. 运行历史页 →「外部框架接入的 Trace」→ 点「接入外部 Agent 指南」→ 抽屉里能看到两个真实端点与限制项。
 2. 按指南 `POST /api/external-traces/runs` 建一条运行 → 列表出现该卡片（`0 个 Span`）。
@@ -113,17 +128,13 @@ i18n：`zh-CN` **1800** / `en-US` **1800**，键差 0。
 5. 用另一个账号访问同一 id → `404`；把 `kind` 改成 `SECRETS` → `400`；时间戳写 `yesterday` → `400 ISO-8601`。
 6. 属性里塞 `Bearer sk-...` → 读回时已被脱敏，不会原样出现。
 
-### 5.3 评测飞轮
+### 5.5 V6：评测飞轮
 
-1. 任一已完成运行 → 点「沉淀为评测用例」→ 弹窗展示脱敏预览（提示词 + `RUN_STATUS_MATCH` + `OUTPUT_CONTAINS` 期望值 + 限制说明）。
-2. 点「确认沉淀」→ 成功提示出现，「去评测实验室」按钮可跳转。
+1. 任一已完成运行 → 点「沉淀为评测用例」→ 弹窗展示脱敏预览（严格只读不写库；含提示词 + `RUN_STATUS_MATCH` + `OUTPUT_CONTAINS` 期望值 + 限制说明）。
+2. 点「确认沉淀」→ 按需创建 `CODING_REFLECTION` 类别的 `run-distilled` 数据集并写入样本 → 成功提示出现，「去评测实验室」按钮可跳转。
 3. 评测实验室 → 自定义数据集 `run-distilled` 下出现样本 `run-<runId 前 12 位>`。
 4. 打开该样本做一次回归：评分规则与既有自定义数据集完全一致（未新增断言类型）。
 5. 同一条运行再沉淀一次 → 覆盖同一样本键，不产生重复用例。
-
-### 5.4 回归确认（退出标准）
-
-按 §6.1–6.3 复跑 V3 闭环 / V4 时间轴与分叉 / V5 X 光三条剧本，全部行为不变。
 
 ## 6. 已知边界（封板时仍存在，均已在代码注释与文档中标注）
 
@@ -136,7 +147,6 @@ i18n：`zh-CN` **1800** / `en-US` **1800**，键差 0。
 
 ## 7. 相关文档
 
-- [AI 框架可视化 V3 闭环 + V4 + V5 阶段验收记录](AI框架可视化_V3闭环-V5_阶段验收记录_2026-11-26.md)
-- [AI 框架可视化 V0–V3 阶段验收记录](AI框架可视化_V0-V3_阶段验收记录.md)
-- [AI 框架可视化 V0–V1 阶段验收记录](AI框架可视化_V0-V1_阶段验收记录.md)
 - [外部 Agent Trace 接入指南](外部Agent_Trace接入指南_2026-11-26.md)
+- [项目总览：产品需求与技术架构](../项目总览_产品需求与技术架构.md)
+- [Top 10 安全止血与 P0 修复验收记录](Top10安全止血与P0修复_验收记录.md)

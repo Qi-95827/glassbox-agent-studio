@@ -46,19 +46,23 @@ npm run test:watch   # 监听测试
 src/
   api/               # HTTP 客户端与按领域拆分的 API 模块
   app/               # QueryClient
-  components/        # 状态胶囊、空状态、弹窗、Toast 等通用组件
+  components/        # 状态胶囊、空状态、弹窗、Toast、ErrorBoundary、VirtualList 等通用组件
   constants/         # 状态、角色、工具、事件等业务字典
   features/
     auth/            # 登录与初始化
-    tasks/           # 首页、任务编写器、候选计划
-    runs/            # 运行详情、流程/回放/交付/列表、节点抽屉
-    workflows/       # 流程图、预算、扩展证据、价格
+    tasks/           # 首页、任务编写器、三档授权条、候选计划与可视化编排画布（PlanComposerCanvas）
+    runs/            # 运行详情、流程/回放/交付/列表、节点抽屉、玻璃盒（ReAct 泳道/六道安检流水线/上下文显微镜）、外部 Trace 与 OTel 导出
+    checkpoints/     # 执行时间轴火焰图、Checkpoint 时间旅行与分叉、双跑对照与并排 Diff
+    memory/          # Hybrid RAG 召回透视（BM25/向量 → RRF 漏斗）、三层记忆管理与文档切片边界
+    architecture/    # C4 静态架构图谱与动态实时架构 X 光模式
+    workflows/       # 流程图（React Flow + Memo）、预算、扩展证据、价格
     agents/          # 私有 Agent / Skill / 工具 / 账号
-    workspaces/      # 工作区、Git 交付、文件、项目背景
-    evaluation/      # 评测批次、数据集、监控
-    bug/ bugs/       # 模拟 Bug 入口与证据
-    settings/ docs/  # 设置与使用文档
-  hooks/             # 领域查询与轮询 Hooks
+    workspaces/      # 工作区、管理员一键授权导入、Git 交付、文件、知识库与项目记忆
+    evaluation/      # Eval Lab v2 六维评测、Benchmark Hub、自定义数据集与 A/B 消融对照
+    monitoring/      # 类 Grafana 纯 SVG 细粒度运行监控看板
+    bug/             # 模拟 Bug 入口与容器验证证据
+    settings/ docs/  # BYOK 模型与 API Key、RAG Embedding 设置与使用文档
+  hooks/             # 领域查询、SSE 实时流（含 280ms 防抖与按节点分桶）与标签页可见性 Hooks
   layout/            # 双栏应用壳、侧栏、顶栏、页面面包屑
   styles/            # ≤ 40 行全局基础样式
   theme/             # Google M3 设计令牌
@@ -67,8 +71,9 @@ src/
 
 ## API 与状态约定
 
-- 请求统一走 `src/api/client.js`：同源 Cookie、模块闭包 CSRF、403 校验失败自动刷新并重试一次、401 通知登录态失效。
-- 运行详情、执行视图与节点详情在运行中（`PENDING/RUNNING/PAUSED/CANCELLING`）每 1800 ms 轮询，进入终态自动停止。
+- 请求统一走 `src/api/client.js`：同源 Cookie、模块闭包 CSRF、按语言无关 `errorCode`（`CSRF_INVALID`）自动刷新重试一次、401 通知登录态失效。
+- 10 个路由页采用 `React.lazy` 懒加载并由三级 `ErrorBoundary` 兜底；长事件回放列表使用自研 `VirtualList` 虚拟滚动。
+- 运行详情优先通过 `/api/runs/{id}/stream` SSE 实时接收事件与流式增量帧（280ms 防抖刷新）；终态运行不建 SSE，SSE 连通或标签页隐藏时自动暂停 1800ms 兜底轮询。
 - 写操作使用 `useMutation` 并在成功后精准失效相关查询；不使用 `globalThis`，不再手写分散的 `setInterval`。
 - 所有后端路径、Method、CSRF 头与业务动作保持兼容；页面只展示服务端持久化记录，不补造执行事实。
 
