@@ -2,7 +2,7 @@
 
 # Glass-Box Agent Studio
 
-**An Open-Source Visual Multi-Agent Software Engineering Workbench & Learning Platform**
+**An Open-Source Glass-Box AI Framework Visualization, Interactive Debugging & Multi-Agent Engineering Workbench**
 
 **English** | [简体中文](./README.zh-CN.md)
 
@@ -10,9 +10,10 @@
 [![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
 [![AgentScope](https://img.shields.io/badge/AgentScope-Java%202.0-blue.svg)](https://github.com/agentscope-ai/agentscope-java)
+[![Tests](https://img.shields.io/badge/Tests-778%20Backend%20%7C%20169%20Frontend-success.svg)](#3-run-full-verification-suite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-*Turn black-box AI agents into a transparent **Glass-Box**: watch how multi-agent DAGs are planned, assembled, sandboxed, handed off, verified, monitored, and delivered to Git.*
+*Chrome DevTools + Flink Web UI + Visual DAG Studio for AI Agent Frameworks — watch live ReAct streaming & reasoning traces, inspect 4-tier context compaction & Hybrid RAG funnels, compose multi-agent DAGs with conflict detection, fork runs from checkpoints, light up live C4 Architecture X-Rays, and interoperate via OpenTelemetry.*
 
 </div>
 
@@ -137,6 +138,31 @@ Configure your own API keys directly in **Settings → Models & API Keys (BYOK)*
 
 **What you can learn here:**
 - **Production-Grade Secret Hygiene**: `SecretCipher.java` encrypts API keys with **AES-256-GCM** (random 12-byte IV), never returns plaintext keys to the frontend (masked as `sk-****xxxx`), validates Base URLs against SSRF, and enforces per-user ownership isolation.
+
+---
+
+### 9. V1–V6 Glass-Box AI Framework Visualization Suite (Latest Release)
+
+Built directly on top of the verified backend runtime (zero mock telemetry — every metric, span, and diff comes from persisted records or live SSE frames):
+
+```mermaid
+flowchart LR
+    V1["V1 · Live ReAct Swimlane\nStreaming Tokens & CoT\nHorizontal 6-Gate Pipeline"]
+    V2["V2 · Context & RAG X-Ray\n6-Layer Water-Level Chart\nBM25 + pgvector -> RRF"]
+    V3["V3 · Visual Plan Composer\nDrag/Edit DAG & Reflection\nLive Conflict & Save-to-Run"]
+    V4["V4 · Timeline & Time-Travel\n7-Span Gantt Flamegraph\nCheckpoint Fork & Diff"]
+    V5["V5 · Live Architecture X-Ray\nBind Real Run to C4 Map\nStep Replay & Deep-Link"]
+    V6["V6 · Open Trace & Flywheel\nOTel / Glass-Box Export\nExternal Ingest & Eval Case"]
+    V1 --> V2 --> V3 --> V4 --> V5 --> V6
+```
+
+- **Live Streaming ReAct Swimlane & 6-Gate Pipeline (V1)**: Streams incremental tokens and separated reasoning traces (`reasoning_content`, Flyway H2 `V15` / PG `V5`) over SSE per node, paired with a turn-by-turn ReAct swimlane and horizontal 6-gate `ToolGateway` status lights.
+- **Context Compaction Microscope & Hybrid RAG / Memory X-Ray (V2)**: Pure-SVG 6-layer stacked area chart (`SYSTEM / SKILLS / MEMORY / HANDOFF / TOOL_OUTPUTS / HISTORY`) with L1 (60%), L2 (78%), and L3 (92%) threshold lines, before/after compaction details with one-click authenticated `artifactRef` readback, plus a Hybrid RAG retrieval funnel (`BM25` + `pgvector` → `RRF` + dropped reasons), 3-layer memory manager, and document chunk inspector.
+- **Interactive Multi-Agent Visual Graph Composer (V3)**: Switch plan confirmation into an interactive `@xyflow/react` composer to edit nodes, dependencies, file read/write scopes, and bounded reflection edges (`maxRevisions`) with live write-conflict/cycle highlighting (`POST /api/plans/validate-draft`) and validated save-to-candidate execution (`PUT /api/plan-candidates/{id}/draft`).
+- **Execution Timeline, Checkpoint Inspector & What-If Run Forking (V4)**: 7-span Gantt timeline (`NODE / ATTEMPT / MODEL / TOOL / APPROVAL / COMPACTION / CHECKPOINT`), frozen checkpoint viewer, counterfactual run forking (`POST /api/runs/{id}/forks`, `run_forks` table) without mutating source evidence, and side-by-side run comparison.
+- **Live Architecture X-Ray (V5)**: Toggle the C4 Architecture Map into **Live X-Ray** mode, pick any recent run from the dropdown, watch traversed engines light up with real latency/compaction/gate-block badges, scrub step-by-step replay, and deep-link straight back into the exact Glass-Box tab.
+- **Open Glass-Box Trace Protocol & Eval Flywheel (V6)**: Export deterministic redacted **OpenTelemetry** or Glass-Box JSON (`GET /api/runs/{id}/trace-export`), ingest spans from external standalone Python/Java agents (`POST /api/external-traces/runs`, read-only inspection), and distill any real run into an Eval Lab v2 custom regression case in one click (`POST /api/runs/{id}/eval-cases`).
+- **Ergonomic Workspace Onboarding**: 3-mode persistent authorization bar (`Whole Workspace .` with built-in noise exclusions / `Subdirectories` / `Files`), collapsed low-frequency budgets, and one-click admin local Git repo auto-grant.
 
 ---
 

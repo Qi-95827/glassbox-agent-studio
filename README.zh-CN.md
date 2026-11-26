@@ -2,7 +2,7 @@
 
 # Glass-Box Agent Studio（玻璃盒多 Agent 可视化工作台）
 
-**一个面向开发者与 AI Agent 学习者的开源「玻璃盒」多 Agent 协作工作台与实战教学平台**
+**一个面向开发者与 AI Agent 学习者的开源「AI 框架玻璃盒可视化、交互式调试与多 Agent 协作工作台」**
 
 [English](./README.md) | **简体中文**
 
@@ -10,9 +10,10 @@
 [![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
 [![AgentScope](https://img.shields.io/badge/AgentScope-Java%202.0-blue.svg)](https://github.com/agentscope-ai/agentscope-java)
+[![Tests](https://img.shields.io/badge/Tests-778%20Backend%20%7C%20169%20Frontend-success.svg)](#3-运行全量测试与架构守卫)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-*把黑盒 AI Agent 彻底拆成透明的**「玻璃盒」**：亲眼看见多 Agent 如何规划 DAG、如何按权限装配、如何受控调用工具、如何校验交接、如何监控排障并安全交付到 Git。*
+*AI Agent 框架领域的 **Chrome DevTools + Flink Web UI + 可视化 DAG 编排画布**：实时透视真流式 ReAct 思考链与六道安检门、显微镜级解剖四级上下文压缩与 Hybrid RAG 召回、在画布上编排防冲突多 Agent 图、从 Checkpoint 分叉对比、在 C4 架构图上动态点亮真实运行脉络，并支持 OpenTelemetry 导出与外部 Agent 接入。*
 
 </div>
 
@@ -139,6 +140,31 @@
 
 **本模块可以学到：**
 - **服务端密钥安全治理**：阅读 `SecretCipher.java`（AES-256-GCM + 随机 12 字节 IV）、`ApiKeyMasker.java`（前端仅回显 `sk-****xxxx` 掩码）、`ModelConnectionService.java`（Base URL 防内网 SSRF 校验 + 严格多账号归属隔离）。
+
+---
+
+### 9. V1–V6 玻璃盒 AI 框架深度可视化全套能力（最新上线）
+
+所有可视化数据全部来源于后端真实持久化记录或实时 SSE 帧，**零假数据、零占位**：
+
+```mermaid
+flowchart LR
+    V1["V1 · 活的玻璃盒\n真流式与思考链分道\nReAct 泳道 + 六道安检灯"]
+    V2["V2 · 上下文与 RAG 显微镜\n六层堆叠水位面积图\nBM25 + pgvector -> RRF"]
+    V3["V3 · 可视化编排画布\n编辑节点与反思回边\n实时冲突标红 + 写回执行"]
+    V4["V4 · 时间轴与时间旅行\n7 类 Span 甘特火焰图\nCheckpoint 分叉与双跑对照"]
+    V5["V5 · 动态实时架构 X 光\n绑定真实 Run 点亮模块\n步进回放 + 一键跳证据"]
+    V6["V6 · 开放 Trace 与飞轮\nOTel / Glass-Box 导出\n外部框架接入 + 评测沉淀"]
+    V1 --> V2 --> V3 --> V4 --> V5 --> V6
+```
+
+- **真流式 ReAct 泳道与六道安检流水线（V1）**：Agent 主循环开启增量流式输出，正文与推理模型思考链分道推送并独立落库（`reasoning_content`，Flyway H2 `V15` / PG `V5`）；按节点分桶渲染实时打字机流、按轮次展示 `ReActSwimlane` 泳道，并用横向关卡灯直观标出 `ToolGateway` 六道安检拦截点。
+- **上下文压缩显微镜与 Hybrid RAG / 三层记忆透视（V2）**：纯 SVG 绘制六层上下文水位堆叠面积图（`SYSTEM / SKILLS / MEMORY / HANDOFF / TOOL_OUTPUTS / HISTORY`）并叠加 L1(60%) / L2(78%) / L3(92%) 阈值线，支持压缩前后逐条对照及点击 `artifactRef` 弹窗直读脱敏原文；提供 Hybrid RAG 召回漏斗（BM25 / 向量得分 → RRF 排名与裁剪原因）、三层记忆放行/冻结管理与文档切片边界预览。
+- **所见即所得多 Agent 编排画布（V3）**：在候选计划弹窗一键切换 `@xyflow/react` 编排画布，编辑节点角色、依赖、读写范围与虚线反思回边（可调 `maxRevisions`），350ms 防抖调用后端 `PlanCandidateValidator` 实时标红写集重叠与依赖环，校验通过后「应用画布到计划」写回候选摘要并确认执行。
+- **执行时间轴、Checkpoint 检视与 What-If 分叉对照（V4）**：7 类 Span（节点/尝试/模型/工具/审批/压缩/检查点）横向甘特时间轴；检视每个 Checkpoint 冻结状态并从已结束运行安全分叉重跑（`POST /api/runs/{id}/forks`，`run_forks` 表，源运行证据零改动），支持双跑指标与逐节点并排 Diff 对照。
+- **动态实时架构 X 光图（V5）**：架构图谱支持「静态教学 ↔ 实时 X 光」模式切换，从最近运行下拉一键绑定真实运行，按实际执行脉络动态点亮模块并叠加真实耗时/压缩节省率/拦截数，支持底部步进回放及按模块精准跳回对应玻璃盒 Tab。
+- **开放式 Glass-Box Trace 协议与评测飞轮（V6）**：支持导出确定性脱敏 **OpenTelemetry** 或 Glass-Box JSON（`GET /api/runs/{id}/trace-export`）；提供受归属与脱敏保护的外部 Agent Trace 接入端点（`POST /api/external-traces/runs`，独立 Python/Java Agent 可推入只读透视）；任意真实运行可一键脱敏预览并沉淀为 Eval Lab v2 自定义回归用例（`POST /api/runs/{id}/eval-cases`）。
+- **低门槛工作区授权体验**：主卡片内置三档常驻授权条（默认「整个工作区 `.`」并自动排除 `.git`/`node_modules`/`target` 等噪音目录）、低频预算默认折叠、管理员导入本地 Git 仓库支持一键自动授权登记。
 
 ---
 
