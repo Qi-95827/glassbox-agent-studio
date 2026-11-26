@@ -25,7 +25,8 @@ import org.springframework.stereotype.Service;
 public class EvalFlywheelService {
   static final String DEFAULT_DATASET_CODE = "run-distilled";
   static final String DEFAULT_DATASET_NAME = "从运行沉淀的用例";
-  static final String DEFAULT_DATASET_CATEGORY = "CODE";
+  static final String DEFAULT_DATASET_CATEGORY =
+      dev.workbench.framework.evaluation.EvalCategory.CODING_REFLECTION.name();
   private static final int MAX_PROMPT = 4000;
   private static final int MAX_OUTPUT_NEEDLE = 120;
 
@@ -59,8 +60,35 @@ public class EvalFlywheelService {
 
   public record Exported(String datasetId, String datasetCode, String sampleKey, String total) {}
 
-  /** 预览：不写库，供前端弹窗展示将要落库的内容。 */
+  /** 预览：严格只读不写库，供前端弹窗展示将要落库的内容。 */
   public CaseDraft preview(String runId) {
+    var existing = findExistingDataset();
+    return buildDraft(
+        runId,
+        existing.map(EvalCustomDatasetService.DatasetView::id).orElse(null),
+        existing.map(EvalCustomDatasetService.DatasetView::code).orElse(DEFAULT_DATASET_CODE));
+  }
+
+  /** 落库：按需创建或复用默认沉淀数据集，并写入（或覆盖）同一样本键的用例。 */
+  public Exported export(String runId) {
+    var dataset = requireDataset();
+    var draft = buildDraft(runId, dataset.id(), dataset.code());
+    datasets.upsertSample(
+        draft.datasetId(),
+        draft.sampleKey(),
+        new EvalCustomDatasetService.SampleInput(
+            draft.sampleKey(),
+            draft.titleZh(),
+            draft.titleEn(),
+            draft.prompt(),
+            draft.setup(),
+            draft.assertions(),
+            List.of()));
+    int total = datasets.samples(draft.datasetId()).size();
+    return new Exported(draft.datasetId(), draft.datasetCode(), draft.sampleKey(), total + " 题");
+  }
+
+  private CaseDraft buildDraft(String runId, String datasetId, String datasetCode) {
     RunSnapshot snapshot = records.runSnapshot(runId);
     TaskDefinition task = tasks.taskDefinition(snapshot.taskId().toString());
     String status = snapshot.status().name();
@@ -83,10 +111,9 @@ public class EvalFlywheelService {
     var limitations = new ArrayList<String>();
     limitations.add("用例只沉淀提示词与两条既有断言的期望值；模型原始回复、工具返回值与工作区文件不会进入评测数据集。");
     if (output == null) limitations.add("这次运行没有保存最终输出，因此只沉淀运行状态断言。");
-    var dataset = requireDataset();
     return new CaseDraft(
-        dataset.id(),
-        dataset.code(),
+        datasetId,
+        datasetCode,
         sampleKey(runId),
         "运行沉淀： " + shortId(runId),
         "Distilled from run " + shortId(runId),
@@ -96,29 +123,15 @@ public class EvalFlywheelService {
         List.copyOf(limitations));
   }
 
-  /** 落库：写入（或覆盖）同一样本键的用例，返回数据集与样本标识。 */
-  public Exported export(String runId) {
-    var draft = preview(runId);
-    datasets.upsertSample(
-        draft.datasetId(),
-        draft.sampleKey(),
-        new EvalCustomDatasetService.SampleInput(
-            draft.sampleKey(),
-            draft.titleZh(),
-            draft.titleEn(),
-            draft.prompt(),
-            draft.setup(),
-            draft.assertions(),
-            List.of()));
-    int total = datasets.samples(draft.datasetId()).size();
-    return new Exported(draft.datasetId(), draft.datasetCode(), draft.sampleKey(), total + " 题");
+  private java.util.Optional<EvalCustomDatasetService.DatasetView> findExistingDataset() {
+    return datasets.list().stream()
+        .filter(view -> DEFAULT_DATASET_CODE.equals(view.code()))
+        .findFirst();
   }
 
   /** 复用既有自定义数据集口径：同 code 复用，缺失才创建。 */
   private EvalCustomDatasetService.DatasetView requireDataset() {
-    return datasets.list().stream()
-        .filter(view -> DEFAULT_DATASET_CODE.equals(view.code()))
-        .findFirst()
+    return findExistingDataset()
         .orElseGet(
             () ->
                 datasets.create(

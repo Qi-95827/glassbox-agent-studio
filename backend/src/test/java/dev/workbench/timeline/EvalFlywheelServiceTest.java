@@ -69,13 +69,21 @@ class EvalFlywheelServiceTest {
     when(datasets.create(any()))
         .thenReturn(
             new EvalCustomDatasetService.DatasetView(
-                "ds-1", "run-distilled", "从运行沉淀的用例", "CODE", "", 0, "now", "now"));
+                "ds-1",
+                "run-distilled",
+                "从运行沉淀的用例",
+                "CODING_REFLECTION",
+                "",
+                0,
+                "now",
+                "now"));
     when(datasets.samples(anyString())).thenReturn(List.of());
   }
 
   @Test
   void previewBuildsAssertionsFromRealEvidenceWithoutWriting() {
     var draft = service.preview(runId);
+    assertNull(draft.datasetId());
     assertEquals("run-distilled", draft.datasetCode());
     assertEquals("run-abcdef12-345", draft.sampleKey());
     assertEquals("把排序网页做出来", draft.prompt());
@@ -85,12 +93,22 @@ class EvalFlywheelServiceTest {
     assertEquals(runId, draft.setup().get("sourceRunId"));
     assertEquals("RUN_DISTILLED", draft.setup().get("source"));
     assertTrue(draft.limitations().stream().anyMatch(item -> item.contains("不会进入评测数据集")));
+    org.mockito.Mockito.verify(datasets, org.mockito.Mockito.never()).create(any());
+    org.mockito.Mockito.verify(datasets, org.mockito.Mockito.never())
+        .upsertSample(anyString(), anyString(), any());
   }
 
   @Test
   void exportWritesThroughTheExistingSampleContract() {
     var exported = service.export(runId);
     assertEquals("ds-1", exported.datasetId());
+    var datasetCaptor =
+        org.mockito.ArgumentCaptor.forClass(EvalCustomDatasetService.DatasetInput.class);
+    verify(datasets).create(datasetCaptor.capture());
+    assertEquals(
+        dev.workbench.framework.evaluation.EvalCategory.CODING_REFLECTION,
+        dev.workbench.framework.evaluation.EvalCategory.parse(
+            datasetCaptor.getValue().category()));
     verify(datasets)
         .upsertSample(
             eq("ds-1"),
