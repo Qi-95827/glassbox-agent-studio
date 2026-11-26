@@ -40,9 +40,20 @@ const toneColor = {
  */
 const FlowNode = memo(
   function FlowNode({ data }) {
-    const { node, selected, compact, onSelect, generatedAt, hasBreakpoint, t } = data;
+    const {
+      node,
+      selected,
+      compact,
+      onSelect,
+      generatedAt,
+      hasBreakpoint,
+      t,
+      activity,
+      streaming
+    } = data;
     const running = node.status === 'RUNNING';
     const duration = nodeDuration(node, generatedAt);
+    const liveLabel = activity?.activityLabel || activity?.activityKind || null;
     return (
       <>
         <Handle type="target" position={Position.Left} style={handleStyle} />
@@ -146,6 +157,44 @@ const FlowNode = memo(
                 </Typography>
               )}
             </Stack>
+            {(liveLabel || streaming) && (
+              // 运行期微状态：内容全部来自服务端 focus 与实时增量帧，不做本地推测。
+              <Stack
+                direction="row"
+                spacing={0.5}
+                data-testid="flow-node-live"
+                sx={{ alignItems: 'center', minWidth: 0, mt: 0.1 }}
+              >
+                {streaming && (
+                  <Box
+                    component="span"
+                    sx={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      bgcolor: '#1A73E8',
+                      flexShrink: 0,
+                      animation: 'pulse 1.1s ease-in-out infinite',
+                      '@keyframes pulse': {
+                        '0%, 100%': { opacity: 0.35 },
+                        '50%': { opacity: 1 }
+                      }
+                    }}
+                  />
+                )}
+                <Typography
+                  noWrap
+                  sx={{
+                    fontSize: 10.5,
+                    color: streaming ? '#1967D2' : googleTokens.textSecondary,
+                    fontWeight: streaming ? 600 : 400,
+                    minWidth: 0
+                  }}
+                >
+                  {streaming ? t('run.liveStreaming') : liveLabel}
+                </Typography>
+              </Stack>
+            )}
           </Stack>
         </Box>
         <Handle type="source" position={Position.Right} style={handleStyle} />
@@ -159,7 +208,9 @@ const FlowNode = memo(
     previous.data.compact === next.data.compact &&
     previous.data.generatedAt === next.data.generatedAt &&
     previous.data.onSelect === next.data.onSelect &&
-    previous.data.t === next.data.t
+    previous.data.t === next.data.t &&
+    previous.data.activity === next.data.activity &&
+    previous.data.streaming === next.data.streaming
 );
 
 const nodeTypes = { trace: FlowNode };
@@ -201,6 +252,8 @@ function FlowCanvas({
   breakpoints,
   generatedAt,
   viewportKey,
+  activityByNode,
+  streamingNodeId,
   onSelectNode,
   onSelectEdge
 }) {
@@ -243,10 +296,23 @@ function FlowCanvas({
           compact,
           onSelect: handleSelect,
           generatedAt,
-          t
+          t,
+          activity: activityByNode?.get(node.id) ?? null,
+          streaming: streamingNodeId === node.id
         }
       })),
-    [nodes, positions, selectedId, breakpoints, compact, handleSelect, generatedAt, t]
+    [
+      nodes,
+      positions,
+      selectedId,
+      breakpoints,
+      compact,
+      handleSelect,
+      generatedAt,
+      t,
+      activityByNode,
+      streamingNodeId
+    ]
   );
 
   const graphEdges = useMemo(() => {

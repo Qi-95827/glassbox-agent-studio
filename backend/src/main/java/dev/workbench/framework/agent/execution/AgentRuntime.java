@@ -22,11 +22,19 @@ public interface AgentRuntime {
   /** 四级上下文压缩已执行；记录分桶、等级与节省比例，不写消息正文。 */
   default void contextCompacted(ContextBreakdown breakdown) {}
 
-  /** 模型流式片段；仅用于瞬态 SSE 推送，不写入高膨胀事件表。 */
   /** 本轮模型调用失败或被取消：必须释放已预留的费用额度（重复调用需幂等）。 */
   default void modelFailed() {}
 
+  /** 模型流式片段；仅用于瞬态 SSE 推送，不写入高膨胀事件表。 */
   default void modelDelta(String text) {}
+
+  /**
+   * 推理模型思考链的流式片段。
+   *
+   * <p>与 {@link #modelDelta(String)} 分开上报：思考链不是最终答案，混在正文里会污染
+   * 打字机效果，也让「先想后答」的结构无法还原。同样的理由，它同样只走瞬态通道。
+   */
+  default void modelReasoningDelta(String text) {}
 
   /**
    * Gate 5.5：高危工具调用在 Gate 5 通过后请求用户决策。
@@ -67,6 +75,14 @@ public interface AgentRuntime {
 
   /** 记录单次工具调用的入参、ToolGateway 安检明细与完整结果。 */
   default void toolTrace(UUID callId, GlassboxModels.ToolCallTrace trace) {}
+
+  /**
+   * 单道安检门刚刚产生判定：用于运行中的横向流水线实时点亮。
+   *
+   * <p>同一次调用的完整判定仍由 {@link #toolTrace(UUID, GlassboxModels.ToolCallTrace)} 持久化；
+   * 这里只是把同一条事实提前推给正在观看的用户，不引入第二份真相。
+   */
+  default void toolGateProgress(String toolName, GlassboxModels.GatewayCheck check) {}
 
   /**
    * 后台辅助模型调用（如 L2 上下文摘要）产生的用量。

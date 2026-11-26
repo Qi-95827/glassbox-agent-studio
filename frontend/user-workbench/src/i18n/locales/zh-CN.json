@@ -1594,5 +1594,12 @@
   "run.attemptCount": "{count} 次尝试",
   "run.flowDependency": "流程依赖",
   "topbar.notificationsPending": "有 {count} 个任务等待你处理",
-  "topbar.openRuns": "查看运行列表"
+  "topbar.openRuns": "查看运行列表",
+  "run.liveStreaming": "流式输出中…",
+  "swimlane.title": "ReAct 实时泳道",
+  "swimlane.noModel": "模型输出",
+  "swimlane.reasoning": "思考链（{count} 字）",
+  "swimlane.streamed": "流式增量",
+  "swimlane.emptyTitle": "暂无 ReAct 轮次",
+  "swimlane.emptyDescription": "该节点尚未记录模型调用或工具调用；运行开始后这里会按 Turn 依次展开。"
 }

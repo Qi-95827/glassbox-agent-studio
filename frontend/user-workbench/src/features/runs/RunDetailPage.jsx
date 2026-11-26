@@ -59,7 +59,8 @@ export default function RunDetailPage() {
   const requestedNodeId = searchParams.get('nodeId');
   const requestedGlassbox = searchParams.get('glassbox');
 
-  const { detail, view, live, streamConnected, loading, error, refetch } = useRunExecution(runId);
+  const { detail, view, live, streamConnected, streamNodeId, loading, error, refetch } =
+    useRunExecution(runId);
   const eventsQuery = useRunEvents(runId, tab === 'replay', live && !streamConnected);
   const selectedInView = useMemo(
     () =>
@@ -75,6 +76,14 @@ export default function RunDetailPage() {
     selectedInView ? selectedId : null,
     live && !streamConnected
   );
+  // 服务端 focus 是「此刻哪个节点在做什么」的唯一依据，画布微状态直接消费它。
+  const activityByNode = useMemo(() => {
+    const map = new Map();
+    (view?.focus?.active ?? []).forEach(item => {
+      if (item?.nodeId) map.set(item.nodeId, item);
+    });
+    return map;
+  }, [view?.focus]);
   const node = useMemo(
     () => (view?.nodes ?? []).find(item => item.id === selectedId) ?? null,
     [view?.nodes, selectedId]
@@ -108,7 +117,7 @@ export default function RunDetailPage() {
     const target = (view.nodes ?? []).find(item => item.id === requestedNodeId);
     if (!target) return;
     consumedQueryRequest.current = requestKey;
-    const allowed = ['result', 'handoff', 'gateway', 'llm', 'assembly'];
+    const allowed = ['react', 'result', 'handoff', 'gateway', 'llm', 'assembly'];
     setSelectedId(target.id);
     setSelectedEdge(null);
     setInspectorOpen(true);
@@ -371,6 +380,8 @@ export default function RunDetailPage() {
                   breakpoints={breakpoints}
                   generatedAt={view.generatedAt}
                   viewportKey={inspectorOpen}
+                  activityByNode={activityByNode}
+                  streamingNodeId={streamNodeId}
                   onSelectNode={id => {
                     setSelectedId(id);
                     setSelectedEdge(null);

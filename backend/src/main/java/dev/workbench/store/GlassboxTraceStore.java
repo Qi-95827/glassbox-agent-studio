@@ -64,11 +64,13 @@ public class GlassboxTraceStore {
     var reqToolsJson = writeListWithinLimit(payload.requestTools(), listTruncated);
     var respContent = SensitiveDataMasker.maskAndTruncate(payload.responseContent());
     var respToolsJson = writeListWithinLimit(payload.responseToolCalls(), listTruncated);
+    // 思考链同样是模型输出，必须和正文一样脱敏后再落库。
+    var reasoning = SensitiveDataMasker.maskAndTruncate(payload.reasoningContent());
     boolean truncated =
         payload.truncated()
             || listTruncated[0]
             || respContent.truncated()
-            || respContent.truncated();
+            || reasoning.truncated();
     modelPayloads.save(
         new ModelCallPayloadEntity(
             modelCallId,
@@ -80,7 +82,9 @@ public class GlassboxTraceStore {
             truncated,
             payload.context() == null ? null : writeJson(payload.context()),
             payload.context() == null ? null : payload.context().appliedTier().name(),
-            Instant.now().toString()));
+            Instant.now().toString(),
+            reasoning.text(),
+            payload.streamed()));
   }
 
   @Transactional(readOnly = true)
@@ -96,7 +100,9 @@ public class GlassboxTraceStore {
               readList(
                   row.getResponseToolCallsJson(), new TypeReference<List<ToolCallDecision>>() {}),
               row.isTruncated(),
-              readContext(row.getContextBreakdownJson())));
+              readContext(row.getContextBreakdownJson()),
+              row.getReasoningContent(),
+              row.isStreamed()));
     }
     return result;
   }

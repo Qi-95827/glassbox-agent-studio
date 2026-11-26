@@ -369,10 +369,50 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void modelDelta(String text) {
+    publishTransient("MODEL_DELTA", text, java.util.Map.of());
+  }
+
+  @Override
+  public void modelReasoningDelta(String text) {
+    publishTransient("MODEL_REASONING_DELTA", text, java.util.Map.of());
+  }
+
+  @Override
+  public void toolGateProgress(
+      String toolName, dev.workbench.framework.trace.GlassboxModels.GatewayCheck check) {
+    if (check == null) return;
+    var detail = new java.util.LinkedHashMap<String, Object>();
+    detail.put("gate", check.gate());
+    detail.put("label", check.label());
+    detail.put("status", check.status());
+    detail.put("detail", check.detail());
+    publishTransient("TOOL_GATE_PROGRESS", toolName, detail);
+  }
+
+  /**
+   * 推送一条瞬态 SSE 帧。
+   *
+   * <p>没有订阅者或未装配事件发布器时静默跳过：瞬态帧属于观感增强，绝不能因为推不出去
+   * 就影响模型调用或安全检查本身。空的正文片段同样跳过，减少无意义帧。
+   */
+  private void publishTransient(
+      String kind, String text, java.util.Map<String, Object> detail) {
     if (publisher == null || text == null || text.isEmpty()) return;
+    UUID run;
+    try {
+      run = UUID.fromString(runId);
+    } catch (IllegalArgumentException notARunId) {
+      // 瞬态帧按运行标识路由；非 UUID 标识只可能来自测试桩或历史夹具。
+      // 直接跳过推送——绝不因为「推不出去」打断真实的工具执行与预算结算。
+      return;
+    }
+    var safeDetail = new java.util.LinkedHashMap<String, Object>();
+    if (detail != null) detail.forEach((key, value) -> {
+      if (value != null) safeDetail.put(key, value);
+    });
     publisher.publishEvent(
         new dev.workbench.framework.event.RunStreamTransient(
-            UUID.fromString(runId), "MODEL_DELTA", text, java.time.Instant.now()));
+            run, kind, text, hitlNodeId, safeDetail, java.time.Instant.now()));
   }
 
   @Override

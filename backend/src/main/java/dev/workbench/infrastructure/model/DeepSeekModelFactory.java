@@ -23,6 +23,16 @@ final class DeepSeekModelFactory {
   }
 
   static Model deepSeekModel() {
+    return deepSeekModel(false);
+  }
+
+  /**
+   * 创建 DeepSeek 模型。
+   *
+   * @param streaming 是否开启 SSE 增量；只有动态工作流的 Agent 主循环需要，规划与摘要类调用
+   *     只在结束时取完整结果，保持整包返回更省事也更兼容。
+   */
+  static Model deepSeekModel(boolean streaming) {
     try {
       String key =
           Files.readString(Path.of("config", "deepseek-api-key.txt"), StandardCharsets.UTF_8)
@@ -37,7 +47,7 @@ final class DeepSeekModelFactory {
           // 不设置窗口会让 SDK 返回 0，四级压缩被整体跳过；显式给出保守上限。
           .contextWindowSize(ModelContextWindows.forModel("deepseek-flash"))
           .formatter(new DeepSeekFormatter())
-          .stream(false)
+          .stream(streaming)
           .generateOptions(GenerateOptions.builder().parallelToolCalls(false).build())
           .build();
     } catch (java.io.IOException e) {

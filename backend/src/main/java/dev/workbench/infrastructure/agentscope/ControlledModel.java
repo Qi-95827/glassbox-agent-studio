@@ -17,6 +17,7 @@ import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ThinkingBlock;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.model.ChatResponse;
@@ -149,42 +150,51 @@ public record ControlledModel(
             AtomicReference<ChatUsage> latestUsage = new AtomicReference<>();
             ContextBreakdown breakdown = context;
             List<Msg> request = effective;
-            return Flux.defer(() -> delegate.stream(request, tools, constrained))
-                .doOnNext(
-                    response -> {
-                      latest.set(response);
-                      if (response.getUsage() != null) latestUsage.set(response.getUsage());
-                      if (response.getContent() != null)
-                        for (var block : response.getContent())
-                          if (block instanceof TextBlock text && text.getText() != null)
-                            runtime.modelDelta(text.getText());
-                    })
-                .doOnComplete(
+            // 累积器必须与订阅同寿命：SDK 的内部重试会重新订阅同一个 Flux，
+            // 若把累积器建在外层，重试会把上一轮的部分正文再拼一遍。
+            return Flux.defer(
                     () -> {
-                      try {
-                        if (latest.get() == null) throw new IllegalStateException("模型未返回响应。");
-                        var usage = latestUsage.get();
-                        runtime.modelResult(
-                            usage == null ? null : usage.getInputTokens(),
-                            usage == null ? null : usage.getOutputTokens());
-                        runtime.modelTrace(buildPayload(request, tools, latest.get(), breakdown));
-                        runtime.event(EventType.MODEL_FINISHED, "AgentScope 模型已返回。");
-                      } catch (RuntimeException e) {
-                        failure.set(e);
-                        throw e;
-                      }
-                    })
-                .onErrorMap(
-                    error -> {
-                      // 失败或取消时必须显式释放预留：否则一次失败的调用会永久占用运行费用额度。
-                      releaseReservation();
-                      if (latest.get() != null || !rateLimitRejection.test(error)) return error;
-                      var rejected = new ModelRateLimitException();
-                      // 使用安全消息传播拒绝原因，不将供应商响应正文写入轨迹。
-                      failure.compareAndSet(null, rejected);
-                      return failure.get();
-                    })
-                .doOnCancel(this::releaseReservation);
+                      var accumulator = new StreamAccumulator();
+                      return delegate
+                          .stream(request, tools, constrained)
+                          .doOnNext(
+                              response -> {
+                                latest.set(response);
+                                if (response.getUsage() != null)
+                                  latestUsage.set(response.getUsage());
+                                accumulator.accept(response);
+                                emitDeltas(response);
+                              })
+                          .doOnComplete(
+                              () -> {
+                                try {
+                                  if (latest.get() == null)
+                                    throw new IllegalStateException("模型未返回响应。");
+                                  var usage = latestUsage.get();
+                                  runtime.modelResult(
+                                      usage == null ? null : usage.getInputTokens(),
+                                      usage == null ? null : usage.getOutputTokens());
+                                  runtime.modelTrace(
+                                      buildPayload(request, tools, accumulator, breakdown));
+                                  runtime.event(EventType.MODEL_FINISHED, "AgentScope 模型已返回。");
+                                } catch (RuntimeException e) {
+                                  failure.set(e);
+                                  throw e;
+                                }
+                              })
+                          .onErrorMap(
+                              error -> {
+                                // 失败或取消时必须显式释放预留：否则一次失败的调用会永久占用运行费用额度。
+                                releaseReservation();
+                                if (latest.get() != null || !rateLimitRejection.test(error))
+                                  return error;
+                                var rejected = new ModelRateLimitException();
+                                // 使用安全消息传播拒绝原因，不将供应商响应正文写入轨迹。
+                                failure.compareAndSet(null, rejected);
+                                return failure.get();
+                              })
+                          .doOnCancel(this::releaseReservation);
+                    });
           } catch (RuntimeException e) {
             // beforeModel 已经预留费用；此处的停止信号/输入校验异常同样必须释放预留。
             releaseReservation();
@@ -361,9 +371,87 @@ public record ControlledModel(
 
   private static final ObjectMapper TRACE_JSON = new ObjectMapper();
 
+  /**
+   * 把一份流式响应的正文与思考链分别推给前端。
+   *
+   * <p>正文与思考链分成两条通道：思考链不是最终答案，混进正文的「打字机」会让人误以为
+   * 那就是答案。两者都只走瞬态 SSE，不落库；落库事实由完成时的透视快照承担。
+   */
+  private void emitDeltas(ChatResponse response) {
+    if (response == null || response.getContent() == null) return;
+    for (ContentBlock block : response.getContent()) {
+      if (block instanceof TextBlock text && text.getText() != null && !text.getText().isEmpty())
+        runtime.modelDelta(text.getText());
+      else if (block instanceof ThinkingBlock thinking && thinking.getThinking() != null)
+        if (!thinking.getThinking().isEmpty()) runtime.modelReasoningDelta(thinking.getThinking());
+    }
+  }
+
+  /**
+   * 一次模型调用的增量累积器。
+   *
+   * <p>流式模式下每个 {@code ChatResponse} 只带一个增量片段，不能再像非流式那样「取最后一个
+   * 响应」当结果；否则玻璃盒只会记录到最后几个字。这里把全部片段累积成完整响应。
+   *
+   * <p>同时兼容两类供应商：只发增量的（OpenAI 标准）和每帧发累积全文的。判据是
+   * 「新片段以已累积内容开头且不更短」——那是累积语义，直接替换而不是追加。
+   */
+  private static final class StreamAccumulator {
+    private final StringBuilder content = new StringBuilder();
+    private final StringBuilder reasoning = new StringBuilder();
+    private final java.util.Map<String, ToolUseBlock> toolUses = new java.util.LinkedHashMap<>();
+    private int chunks;
+    private String finishReason;
+
+    void accept(ChatResponse response) {
+      if (response == null) return;
+      chunks++;
+      if (response.getFinishReason() != null) finishReason = response.getFinishReason();
+      if (response.getContent() == null) return;
+      for (ContentBlock block : response.getContent()) {
+        if (block instanceof TextBlock text) append(content, text.getText());
+        else if (block instanceof ThinkingBlock thinking) append(reasoning, thinking.getThinking());
+        else if (block instanceof ToolUseBlock use && use.getId() != null)
+          // 同一 tool_call 的参数可能分多帧到达，后到的更完整，按 id 取最后一份。
+          toolUses.put(use.getId(), use);
+      }
+    }
+
+    private static void append(StringBuilder target, String fragment) {
+      if (fragment == null || fragment.isEmpty()) return;
+      String current = target.toString();
+      if (fragment.length() >= current.length() && !current.isEmpty() && fragment.startsWith(current)) {
+        // 累积语义：这一帧已经包含此前全部内容，直接替换，避免正文翻倍。
+        target.setLength(0);
+        target.append(fragment);
+        return;
+      }
+      target.append(fragment);
+    }
+
+    String content() {
+      return content.toString();
+    }
+
+    String reasoning() {
+      return reasoning.toString();
+    }
+
+    List<ToolUseBlock> toolUses() {
+      return new ArrayList<>(toolUses.values());
+    }
+
+    boolean streamed() {
+      return chunks > 1;
+    }
+  }
+
   /** 提取发给模型的消息切片、工具 Schema 以及原始响应/工具决策，脱敏后供玻璃盒透视使用。 */
   private static GlassboxModels.ModelCallPayload buildPayload(
-      List<Msg> messages, List<ToolSchema> tools, ChatResponse response, ContextBreakdown context) {
+      List<Msg> messages,
+      List<ToolSchema> tools,
+      StreamAccumulator accumulator,
+      ContextBreakdown context) {
     boolean truncated = false;
     var reqMessages = new ArrayList<GlassboxModels.PromptMessage>();
     if (messages != null) {
@@ -388,26 +476,31 @@ public record ControlledModel(
                 tool.getName(), tool.getDescription(), safeParams.text()));
       }
     }
-    var textBuilder = new StringBuilder();
+    String responseText = accumulator == null ? "" : accumulator.content();
+    String reasoningText = accumulator == null ? "" : accumulator.reasoning();
     var toolCalls = new ArrayList<GlassboxModels.ToolCallDecision>();
-    if (response != null && response.getContent() != null) {
-      for (ContentBlock block : response.getContent()) {
-        if (block instanceof TextBlock tb && tb.getText() != null) {
-          if (!textBuilder.isEmpty()) textBuilder.append('\n');
-          textBuilder.append(tb.getText());
-        } else if (block instanceof ToolUseBlock tub) {
-          String args = safeJson(tub.getInput());
-          var safeArgs = SensitiveDataMasker.maskAndTruncate(args, 8_192);
-          if (safeArgs.truncated()) truncated = true;
-          toolCalls.add(
-              new GlassboxModels.ToolCallDecision(tub.getId(), tub.getName(), safeArgs.text()));
-        }
+    if (accumulator != null) {
+      for (ToolUseBlock tub : accumulator.toolUses()) {
+        String args = safeJson(tub.getInput());
+        var safeArgs = SensitiveDataMasker.maskAndTruncate(args, 8_192);
+        if (safeArgs.truncated()) truncated = true;
+        toolCalls.add(
+            new GlassboxModels.ToolCallDecision(tub.getId(), tub.getName(), safeArgs.text()));
       }
     }
-    var safeResp = SensitiveDataMasker.maskAndTruncate(textBuilder.toString(), 32_768);
+    var safeResp = SensitiveDataMasker.maskAndTruncate(responseText, 32_768);
     if (safeResp.truncated()) truncated = true;
+    var safeReasoning = SensitiveDataMasker.maskAndTruncate(reasoningText, 32_768);
+    if (safeReasoning.truncated()) truncated = true;
     return new GlassboxModels.ModelCallPayload(
-        reqMessages, reqTools, safeResp.text(), toolCalls, truncated, context);
+        reqMessages,
+        reqTools,
+        safeResp.text(),
+        toolCalls,
+        truncated,
+        context,
+        safeReasoning.text(),
+        accumulator != null && accumulator.streamed());
   }
 
   private static String safeJson(Object value) {

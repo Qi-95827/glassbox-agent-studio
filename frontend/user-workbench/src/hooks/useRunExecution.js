@@ -51,6 +51,8 @@ export function useRunStream(runId, live) {
   const [connected, setConnected] = useState(false);
   const [streamText, setStreamText] = useState('');
   const [reasoningText, setReasoningText] = useState('');
+  const [streamNodeId, setStreamNodeId] = useState(null);
+  const [lastGateEvent, setLastGateEvent] = useState(null);
 
   useEffect(() => {
     if (!runId || !live || typeof EventSource === 'undefined') {
@@ -74,6 +76,9 @@ export function useRunStream(runId, live) {
       invalidateTimer = setTimeout(flushInvalidate, INVALIDATE_DEBOUNCE_MS);
     };
     const appendDelta = (previous, text) => (previous + text).slice(-4000);
+    const noteNode = payload => {
+      if (payload?.nodeId) setStreamNodeId(payload.nodeId);
+    };
     const connect = () => {
       if (closed) return;
       try {
@@ -91,6 +96,7 @@ export function useRunStream(runId, live) {
       source.addEventListener('MODEL_DELTA', message => {
         try {
           const payload = JSON.parse(message.data);
+          noteNode(payload);
           if (payload?.text) setStreamText(previous => appendDelta(previous, payload.text));
         } catch {
           // 非本项目格式的瞬态片段忽略，不影响持久化事件。
@@ -99,9 +105,21 @@ export function useRunStream(runId, live) {
       source.addEventListener('MODEL_REASONING_DELTA', message => {
         try {
           const payload = JSON.parse(message.data);
+          noteNode(payload);
           if (payload?.text) setReasoningText(previous => appendDelta(previous, payload.text));
         } catch {
           // 推理通道与正文通道互相独立，解析失败不污染正文。
+        }
+      });
+      source.addEventListener('TOOL_GATE_PROGRESS', message => {
+        try {
+          const payload = JSON.parse(message.data);
+          noteNode(payload);
+          // 安检门进度同时驱动节点微状态；具体判定详情由节点抽屉的流水线读取落库结果。
+          if (payload?.text) setLastGateEvent({ tool: payload.text, detail: payload.detail });
+          invalidate();
+        } catch {
+          // 瞬态帧解析失败只影响实时提示，不影响持久化事实。
         }
       });
       source.onerror = () => {
@@ -121,7 +139,7 @@ export function useRunStream(runId, live) {
     };
   }, [runId, live, queryClient]);
 
-  return { connected, streamText, reasoningText };
+  return { connected, streamText, reasoningText, streamNodeId, lastGateEvent };
 }
 
 /**
@@ -171,6 +189,8 @@ export function useRunExecution(runId) {
     streamConnected: stream.connected,
     streamText: stream.streamText,
     streamReasoning: stream.reasoningText,
+    streamNodeId: stream.streamNodeId,
+    lastGateEvent: stream.lastGateEvent,
     loading: runQuery.isLoading || viewQuery.isLoading,
     error: runQuery.error || viewQuery.error,
     refetch: () => {

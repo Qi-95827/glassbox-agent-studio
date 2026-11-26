@@ -51,7 +51,7 @@ class BuiltInModelProviders {
       }
 
       public ModelClient create(AgentExecutionRequest request) {
-        return new AgentScopeModelClient(DeepSeekModelFactory.deepSeekModel());
+        return new AgentScopeModelClient(DeepSeekModelFactory.deepSeekModel(true));
       }
 
       @Override
@@ -73,7 +73,7 @@ class BuiltInModelProviders {
           throw new IllegalStateException("所选任务没有绑定用户模型连接，请重新选择模型。");
         return new AgentScopeModelClient(
             UserModelConnectionFactory.model(
-                connections.resolveForExecution(request.modelConnectionId())));
+                connections.resolveForExecution(request.modelConnectionId()), true));
       }
 
       @Override

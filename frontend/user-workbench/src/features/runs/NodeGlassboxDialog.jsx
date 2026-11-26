@@ -22,6 +22,7 @@ import VerifiedUserOutlined from '@mui/icons-material/VerifiedUserOutlined';
 import PsychologyOutlined from '@mui/icons-material/PsychologyOutlined';
 import WidgetsOutlined from '@mui/icons-material/WidgetsOutlined';
 import FiberManualRecordRounded from '@mui/icons-material/FiberManualRecordRounded';
+import ReplayRounded from '@mui/icons-material/ReplayRounded';
 import StatusChip from '../../components/StatusChip';
 import MarkdownView from '../../components/MarkdownView';
 import EmptyState from '../../components/EmptyState';
@@ -29,6 +30,7 @@ import { Readout, TraceSection } from '../../components/WorkbenchDialog';
 import AssemblyBlueprintPanel from './glassbox/AssemblyBlueprintPanel';
 import LlmTracePanel from './glassbox/LlmTracePanel';
 import ToolGatewayPanel from './glassbox/ToolGatewayPanel';
+import ReActSwimlane from './glassbox/ReActSwimlane';
 import HandoffEnvelopePanel from './glassbox/HandoffEnvelopePanel';
 import ArchitectureLensButton from '../architecture/ArchitectureLensButton';
 import { nodeTitle, planRoleLabel } from '../../constants/labels';
@@ -161,6 +163,12 @@ export default function NodeGlassboxDialog({
   const handoffCount = inbound.length + outbound.length;
 
   const sections = [
+    {
+      id: 'react',
+      label: t('swimlane.title'),
+      icon: <ReplayRounded sx={{ fontSize: 18 }} />,
+      badge: models.length + tools.length
+    },
     {
       id: 'result',
       label: t('glassboxDialog.sectionResult'),
@@ -409,6 +417,7 @@ export default function NodeGlassboxDialog({
         )}
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', p: { xs: 2, md: 3 } }}>
+          {current === 'react' && <ReActSwimlane attempts={attempts} />}
           {current === 'result' && (
             <ResultAndTimelineView detail={detail} checks={checks} nodeEvents={nodeEvents} />
           )}

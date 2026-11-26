@@ -34,6 +34,15 @@ public class ModelCallPayloadEntity {
   @Column(name = "response_tool_calls_json")
   private String responseToolCallsJson;
 
+  /** 推理模型的思考链（脱敏后）。与正文分开保存，避免思考链被当成答案展示。 */
+  @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+  @Column(name = "reasoning_content")
+  private String reasoningContent;
+
+  /** 本次调用是否以增量流式方式完成；历史行默认 false。 */
+  @Column(name = "streamed", nullable = false)
+  private boolean streamed;
+
   @Column(name = "truncated", nullable = false)
   private boolean truncated;
 
@@ -82,6 +91,34 @@ public class ModelCallPayloadEntity {
       String contextBreakdownJson,
       String compactionTier,
       String createdAt) {
+    this(
+        modelCallId,
+        runId,
+        requestMessagesJson,
+        requestToolsJson,
+        responseContent,
+        responseToolCallsJson,
+        truncated,
+        contextBreakdownJson,
+        compactionTier,
+        createdAt,
+        null,
+        false);
+  }
+
+  public ModelCallPayloadEntity(
+      String modelCallId,
+      String runId,
+      String requestMessagesJson,
+      String requestToolsJson,
+      String responseContent,
+      String responseToolCallsJson,
+      boolean truncated,
+      String contextBreakdownJson,
+      String compactionTier,
+      String createdAt,
+      String reasoningContent,
+      boolean streamed) {
     this.modelCallId = modelCallId;
     this.runId = runId;
     this.requestMessagesJson = requestMessagesJson;
@@ -92,6 +129,8 @@ public class ModelCallPayloadEntity {
     this.contextBreakdownJson = contextBreakdownJson;
     this.compactionTier = compactionTier;
     this.createdAt = createdAt;
+    this.reasoningContent = reasoningContent;
+    this.streamed = streamed;
   }
 
   public String getModelCallId() {
@@ -120,6 +159,14 @@ public class ModelCallPayloadEntity {
 
   public boolean isTruncated() {
     return truncated;
+  }
+
+  public String getReasoningContent() {
+    return reasoningContent;
+  }
+
+  public boolean isStreamed() {
+    return streamed;
   }
 
   public String getContextBreakdownJson() {

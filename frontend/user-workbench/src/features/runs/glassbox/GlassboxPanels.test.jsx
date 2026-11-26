@@ -37,9 +37,17 @@ describe('Glassbox inspector panels', () => {
         ]}
       />
     );
-    expect(screen.getByText(/路径白名单与读写隔离 · DENY/)).toBeInTheDocument();
-    expect(screen.getByText(/目标文件不在任务白名单中/)).toBeInTheDocument();
-    expect(screen.getByText(/预算与防循环检查 · PASS/)).toBeInTheDocument();
+    // 横向流水线按服务端记录顺序渲染关卡，状态与判定原文都必须可见。
+    const pipeline = screen.getByTestId('gate-pipeline');
+    expect(pipeline).toBeInTheDocument();
+    const stages = screen.getAllByTestId(/^gate-stage-/);
+    expect(stages.map(node => node.getAttribute('data-status'))).toEqual(['DENY', 'PASS']);
+    expect(screen.getByTestId('gate-stage-PATH_WHITELIST')).toBeInTheDocument();
+    // 缺省展开被拦截的那道门，直接给出拦截原因。
+    expect(screen.getByTestId('gate-detail')).toHaveTextContent('目标文件不在任务白名单中');
+    // 关卡名按 gate 编码本地化渲染（后端 label 是中文历史文案，英文界面不能直接复用）。
+    expect(screen.getAllByText(/路径白名单/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/预算与循环保护/).length).toBeGreaterThan(0);
   });
 
   it('展示模型调用的 Messages 与 tool_calls 决策', () => {

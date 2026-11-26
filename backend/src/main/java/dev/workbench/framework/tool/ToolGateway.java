@@ -225,15 +225,15 @@ public final class ToolGateway {
       var checks = new ArrayList<GatewayCheck>();
       try {
         var callId = runtime.beforeTool(kind, toolVersion, fingerprint);
-        checks.add(
+        addCheck(toolName, checks, 
             new GatewayCheck("OWNERSHIP_AND_SCOPE", "身份与归属鉴权", "PASS", "运行实例已通过服务端归属与工作区范围校验"));
-        checks.add(
+        addCheck(toolName, checks, 
             new GatewayCheck(
                 "TOOL_REGISTRY_GRANT",
                 "工具注册与节点权限",
                 "PASS",
                 toolName + " v" + toolVersion + " 命中本节点授权工具集（" + effect.name() + "）"));
-        checks.add(
+        addCheck(toolName, checks, 
             new GatewayCheck("BUDGET_AND_LOOP", "预算与防循环检查", "PASS", "总工具限额、单工具限额与重复指纹均在阈值内"));
         Instant started = Instant.now();
         long nanos = System.nanoTime();
@@ -241,23 +241,23 @@ public final class ToolGateway {
         T data;
         try {
           validate.run();
-          checks.add(
+          addCheck(toolName, checks, 
               new GatewayCheck(
                   "PATH_WHITELIST",
                   "路径白名单与读写隔离",
                   "PASS",
                   effect == ToolEffect.WRITE ? "目标路径命中写授权白名单" : "目标路径命中只读授权范围"));
-          checks.add(new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "PASS", "入参格式与约束校验通过"));
+          addCheck(toolName, checks, new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "PASS", "入参格式与约束校验通过"));
         } catch (IllegalArgumentException e) {
-          checks.add(
+          addCheck(toolName, checks, 
               new GatewayCheck(
                   "PATH_WHITELIST",
                   "路径白名单与读写隔离",
                   "DENY",
                   e.getMessage() == null ? "输入参数或路径不在授权范围内" : e.getMessage()));
-          checks.add(
+          addCheck(toolName, checks, 
               new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "DENY", "被工具网关前置校验拦截，未执行动作"));
-          checks.add(new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "SKIP", "前置校验未通过"));
+          addCheck(toolName, checks, new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "SKIP", "前置校验未通过"));
           return rejected(
               callId,
               kind,
@@ -272,12 +272,12 @@ public final class ToolGateway {
         }
         ToolRiskAssessment risk =
             riskPolicy.assess(new ToolRiskContext(toolName, effect, argsJson, targetPaths));
-        checks.add(new GatewayCheck("RISK_ASSESSMENT", "风险分级", risk.level().name(), risk.reason()));
+        addCheck(toolName, checks, new GatewayCheck("RISK_ASSESSMENT", "风险分级", risk.level().name(), risk.reason()));
         ToolApprovalDecision approval =
             risk.requiresApproval()
                 ? runtime.approvalDecision(toolName, toolVersion, argsJson, risk)
                 : ToolApprovalDecision.approve();
-        checks.add(
+        addCheck(toolName, checks, 
             new GatewayCheck(
                 "DYNAMIC_APPROVAL",
                 "Gate 5.5 动态审批",
@@ -300,7 +300,7 @@ public final class ToolGateway {
               checks);
         }
         runtime.check();
-        checks.add(new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "PASS", "运行未取消且未挂起"));
+        addCheck(toolName, checks, new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "PASS", "运行未取消且未挂起"));
         try {
           actionStarted = true;
           if (approval.edited()) {
@@ -319,11 +319,11 @@ public final class ToolGateway {
             try {
               // 改参放行必须重新经过 Gate 5 的文件/作用域授权交集复验，防止绕过。
               editedValidate.accept(approval.editedArgsJson());
-              checks.add(
+              addCheck(toolName, checks, 
                   new GatewayCheck(
                       "EDITED_ARGS_REVALIDATION", "改参后二次 Gate 5 复验", "PASS", "修改后的参数仍属于节点授权范围"));
             } catch (IllegalArgumentException invalid) {
-              checks.add(
+              addCheck(toolName, checks, 
                   new GatewayCheck(
                       "EDITED_ARGS_REVALIDATION",
                       "改参后二次 Gate 5 复验",
@@ -348,7 +348,7 @@ public final class ToolGateway {
         } catch (WorkspaceVersionConflict e) {
           // 此异常的契约要求在文件替换之前报告版本冲突。
           actionStarted = false;
-          checks.add(new GatewayCheck("VERSION_GUARD", "文件版本冲突检查", "DENY", "目标文件版本已变化，拒绝覆盖写入"));
+          addCheck(toolName, checks, new GatewayCheck("VERSION_GUARD", "文件版本冲突检查", "DENY", "目标文件版本已变化，拒绝覆盖写入"));
           return rejected(
               callId,
               kind,
@@ -362,7 +362,7 @@ public final class ToolGateway {
               checks);
         } catch (IllegalArgumentException e) {
           if (effect == ToolEffect.WRITE) throw e;
-          checks.add(
+          addCheck(toolName, checks, 
               new GatewayCheck(
                   "EXECUTION_GUARD",
                   "执行期参数边界校验",
@@ -413,6 +413,21 @@ public final class ToolGateway {
         throw recordFailure(effect, actionStarted, new IllegalStateException("工具执行失败。", e));
       }
     }
+  }
+
+  /**
+   * 记录单道安检门判定，并即时推送同一条事实。
+   *
+   * <p>持久化的 {@code ToolCallTrace} 仍是唯一真相；这里只让正在观看的用户不必等到下一次
+   * 轮询才看到关卡点亮。推送失败不影响安全检查本身，因此不参与异常处理。
+   *
+   * @param toolName 工具逻辑名；风险策略与审计都以它为准。
+   * @param checks 本次调用的判定累积表。
+   * @param check 刚产生的判定。
+   */
+  private void addCheck(String toolName, List<GatewayCheck> checks, GatewayCheck check) {
+    checks.add(check);
+    runtime.toolGateProgress(toolName, check);
   }
 
   private RuntimeException recordFailure(

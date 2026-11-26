@@ -105,6 +105,8 @@ public class RunStreamBroker {
               new TransientPayload(
                   transientEvent.kind(),
                   transientEvent.text(),
+                  transientEvent.nodeId(),
+                  transientEvent.detail(),
                   transientEvent.occurredAt().toString()));
       for (var subscription : list) {
         try {
@@ -154,7 +156,17 @@ public class RunStreamBroker {
     if (list.isEmpty()) subscribers.remove(runId, list);
   }
 
-  public record TransientPayload(String kind, String text, String occurredAt) {}
+  /**
+   * 瞬态帧的线上结构。
+   *
+   * @param kind 帧类型，与 SSE event 名一致，便于旧客户端只按事件名分派。
+   * @param text 正文片段或工具名。
+   * @param nodeId 产生该片段的节点；未知时为 null。
+   * @param detail 结构化附加信息，没有时为空对象。
+   * @param occurredAt ISO-8601 服务端时间。
+   */
+  public record TransientPayload(
+      String kind, String text, String nodeId, java.util.Map<String, Object> detail, String occurredAt) {}
 
   private static final class Subscription {
     private final SseEmitter emitter;

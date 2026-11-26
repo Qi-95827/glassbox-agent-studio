@@ -1594,5 +1594,12 @@
   "run.attemptCount": "{count} attempts",
   "run.flowDependency": "Flow dependency",
   "topbar.notificationsPending": "{count} tasks are waiting for you",
-  "topbar.openRuns": "View run list"
+  "topbar.openRuns": "View run list",
+  "run.liveStreaming": "Streaming…",
+  "swimlane.title": "ReAct swimlane",
+  "swimlane.noModel": "Model output",
+  "swimlane.reasoning": "Reasoning chain ({count} chars)",
+  "swimlane.streamed": "Streamed",
+  "swimlane.emptyTitle": "No ReAct turns yet",
+  "swimlane.emptyDescription": "This node has no recorded model or tool calls yet; turns appear here once the run starts."
 }
