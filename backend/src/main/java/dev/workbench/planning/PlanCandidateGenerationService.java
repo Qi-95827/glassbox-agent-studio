@@ -285,30 +285,7 @@ class PlanCandidateGenerationService {
   }
 
   private String bindingJson(List<PlanCandidateValidator.ResolvedNode> nodes) {
-    var value = new LinkedHashMap<String, Object>();
-    for (var node : nodes)
-      value.put(
-          node.node().key(),
-          node.binding() == null
-              ? Map.of(
-                  "source",
-                  "BUILTIN",
-                  "reason",
-                  "未指定私有 Agent，沿用角色对应的内置定义。",
-                  "definitionId",
-                  node.definition().id(),
-                  "definitionVersion",
-                  node.definition().version(),
-                  "name",
-                  node.definition().id(),
-                  "specSha256",
-                  "",
-                  "modelStrategy",
-                  "INHERIT_TASK",
-                  "modelMode",
-                  "")
-              : node.binding());
-    return store.write(value);
+    return store.write(PlanCandidateBindings.of(nodes));
   }
 
   private PlanCandidateEntity previous(ExecutionScope scope, String id) {

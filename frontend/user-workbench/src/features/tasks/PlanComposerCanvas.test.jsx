@@ -30,11 +30,11 @@ const candidate = {
   revisionEdges: [{ fromReviewerNodeKey: 'implement', toTargetNodeKey: 'analyze', maxRevisions: 2 }]
 };
 
-const renderComposer = () => {
+const renderComposer = (props = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <PlanComposerCanvas candidate={candidate} />
+      <PlanComposerCanvas candidate={candidate} {...props} />
     </QueryClientProvider>
   );
 };
@@ -69,12 +69,13 @@ describe('PlanComposerCanvas', () => {
     vi.restoreAllMocks();
   });
 
-  it('渲染原始节点并标注边界：本地演练不修改计划', async () => {
+  it('渲染原始节点；没有应用回调时只做校验、不出现落库按钮', async () => {
     renderComposer();
     expect(await screen.findByTestId('plan-composer')).toBeInTheDocument();
     expect(screen.getByTestId('composer-node-analyze')).toBeInTheDocument();
     expect(screen.getByTestId('composer-node-implement')).toBeInTheDocument();
-    expect(screen.getByText(/不会修改服务端计划/)).toBeInTheDocument();
+    expect(screen.getByText(/改动只有点「应用画布到计划」才会写回候选/)).toBeInTheDocument();
+    expect(screen.queryByTestId('composer-apply')).not.toBeInTheDocument();
   });
 
   it('新增节点后节点数增加并立即触发一次真实校验', async () => {
@@ -165,5 +166,88 @@ describe('PlanComposerCanvas', () => {
       const implement = payload?.nodes?.find(item => item.key === 'implement');
       return implement?.writeFiles.includes('src/extra.js');
     });
+  });
+});
+
+describe('PlanComposerCanvas 应用闭环', () => {
+  beforeEach(() => {
+    setModuleLocale('zh-CN');
+    vi.spyOn(plansApi, 'validateDraft').mockResolvedValue({
+      valid: true,
+      errors: [],
+      conflicts: [],
+      conflictingNodeKeys: []
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('校验通过后点「应用画布到计划」把草稿交给回调，并展示新摘要', async () => {
+    const onApply = vi.fn().mockResolvedValue({
+      applied: true,
+      errors: [],
+      candidate: { candidateSha256: 'abcdef123456'.padEnd(64, '0') }
+    });
+    renderComposer({ onApply });
+
+    const apply = await screen.findByTestId('composer-apply');
+    await waitFor(() => expect(apply).toBeEnabled());
+    fireEvent.click(apply);
+
+    await waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
+    const draft = onApply.mock.calls[0][0];
+    expect(draft.nodes.map(node => node.key)).toEqual(['analyze', 'implement']);
+    // 反思回边与依赖都要原样带回，否则应用一次就会丢掉画布上看到的结构。
+    expect(draft.revisionEdges[0].toTargetNodeKey).toBe('analyze');
+    expect(draft.nodes[1].dependsOn).toEqual(['analyze']);
+    expect(await screen.findByTestId('composer-applied')).toHaveTextContent('abcdef123456');
+  });
+
+  it('服务端拒绝时不显示成功，逐条列出拒绝原因', async () => {
+    const onApply = vi.fn().mockResolvedValue({
+      applied: false,
+      errors: ['候选当前状态为 CONSUMED，不能修改。'],
+      candidate: null
+    });
+    renderComposer({ onApply });
+
+    const apply = await screen.findByTestId('composer-apply');
+    await waitFor(() => expect(apply).toBeEnabled());
+    fireEvent.click(apply);
+
+    expect(await screen.findByTestId('composer-apply-errors')).toHaveTextContent('CONSUMED');
+    expect(screen.queryByTestId('composer-applied')).not.toBeInTheDocument();
+  });
+
+  it('回调抛出时把消息展示出来，不伪装成已应用', async () => {
+    const onApply = vi.fn().mockRejectedValue(new Error('候选已被确认或过期，请刷新后重新修改。'));
+    renderComposer({ onApply });
+
+    const apply = await screen.findByTestId('composer-apply');
+    await waitFor(() => expect(apply).toBeEnabled());
+    fireEvent.click(apply);
+
+    expect(await screen.findByTestId('composer-apply-errors')).toHaveTextContent(
+      '候选已被确认或过期'
+    );
+    expect(screen.queryByTestId('composer-applied')).not.toBeInTheDocument();
+  });
+
+  it('结构校验未通过时应用按钮保持禁用，点击不会落库', async () => {
+    plansApi.validateDraft.mockResolvedValue({
+      valid: false,
+      errors: [],
+      conflicts: [{ code: 'CYCLE', nodeKeys: ['analyze', 'implement'], paths: [], detail: '' }],
+      conflictingNodeKeys: ['analyze', 'implement']
+    });
+    const onApply = vi.fn();
+    renderComposer({ onApply });
+
+    const apply = await screen.findByTestId('composer-apply');
+    await waitFor(() => expect(apply).toBeDisabled());
+    fireEvent.click(apply);
+    expect(onApply).not.toHaveBeenCalled();
   });
 });

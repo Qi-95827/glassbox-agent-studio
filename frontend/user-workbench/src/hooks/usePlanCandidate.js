@@ -26,13 +26,27 @@ export function usePlanCandidate(enabled = true) {
     mutationFn: payload => planningApi.createRun(candidateId, payload)
   });
 
+  const revise = useMutation({
+    mutationFn: payload => planningApi.reviseDraft(candidateId, payload)
+  });
+
   return {
     candidateId,
     current: candidate.data ?? null,
     isLoading: generate.isPending || candidate.isLoading,
-    error: generate.error || candidate.error || cancel.error || createRun.error,
+    error: generate.error || candidate.error || cancel.error || createRun.error || revise.error,
     generate: payload => generate.mutate(payload),
     cancel: () => cancel.mutate(),
-    createRun: payload => createRun.mutateAsync(payload)
+    createRun: payload => createRun.mutateAsync(payload),
+    /**
+     * 应用画布修改：落库成功后立刻回读候选，让「确认并创建运行」拿到新的候选摘要。
+     *
+     * <p>服务端拒绝（结构校验未通过）时不回读——候选没变，回读只会白刷一次。
+     */
+    reviseDraft: async payload => {
+      const result = await revise.mutateAsync(payload);
+      if (result?.applied) await candidate.refetch();
+      return result;
+    }
   };
 }

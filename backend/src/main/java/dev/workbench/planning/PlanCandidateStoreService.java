@@ -133,6 +133,26 @@ class PlanCandidateStoreService {
     return changed == null ? 0 : changed;
   }
 
+  /** 条件改写候选的图与摘要；返回 0 表示候选已被确认、过期或被并发修订。 */
+  int reviseDraft(
+      String id,
+      String ownerScopeKey,
+      String candidateJson,
+      String sha256,
+      String bindingsJson) {
+    Integer changed =
+        tx.execute(
+            status ->
+                store.reviseDraft(
+                    id,
+                    ownerScopeKey,
+                    candidateJson,
+                    sha256,
+                    bindingsJson,
+                    PlanCandidateStatus.READY.name()));
+    return changed == null ? 0 : changed;
+  }
+
   void interruptOrphans() {
     tx.executeWithoutResult(
         status ->

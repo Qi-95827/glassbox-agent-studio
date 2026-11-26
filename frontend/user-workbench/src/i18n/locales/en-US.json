@@ -1668,8 +1668,8 @@
   "memoryInsight.truncated": "Preview truncated",
   "composer.viewGraph": "Flow graph",
   "composer.viewComposer": "Visual composer",
-  "composer.viewHint": "Local rehearsal: the plan is not modified",
-  "composer.boundary": "Add or remove nodes, adjust read/write sets and reflection edges, and validate the structure against the server in real time. This is a rehearse-before-you-run canvas: it never modifies the server plan and never bypasses plan confirmation or the human freeze.",
+  "composer.viewHint": "Edits are written back only after you apply the canvas",
+  "composer.boundary": "Add or remove nodes, adjust read/write sets and reflection edges, and validate the structure against the server in real time. Edits reach the candidate only when you apply the canvas; the server re-runs the same rules and rejects the whole draft if anything is invalid, leaving the candidate untouched. The candidate still needs explicit confirmation before any run is created.",
   "composer.addAnalyze": "Add analyst",
   "composer.addImplement": "Add implementer",
   "composer.addReview": "Add reviewer",
@@ -1700,5 +1700,8 @@
   "composer.reflectionHint": "Selecting a node adds a dashed reflection edge",
   "composer.reflectionPanel": "Reflection edge {from} -> {to}",
   "composer.maxRevisions": "Max revisions",
-  "composer.maxRevisionsShort": "revise <={count}"
+  "composer.maxRevisionsShort": "revise <={count}",
+  "composer.apply": "Apply canvas to plan",
+  "composer.applied": "Written back to the candidate: new digest {sha}…. You can confirm and create the run now; it will execute this exact graph.",
+  "composer.applyRejected": "The server rejected this change; the candidate is unchanged:"
 }

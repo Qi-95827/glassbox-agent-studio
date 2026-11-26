@@ -26,6 +26,7 @@ public class PlanCandidateService {
   private final PlanCandidateStoreService candidates;
   private final PlanCandidateGenerationService generation;
   private final PlanCandidateConfirmationService confirmation;
+  private final PlanCandidateRevisionService revision;
   private final ExecutionScopeResolver scopes;
 
   @Autowired
@@ -76,6 +77,7 @@ public class PlanCandidateService {
             modelConnections,
             budgetValidator,
             tx);
+    this.revision = new PlanCandidateRevisionService(candidates, validator, scopes, tx);
   }
 
   /** 兼容不使用 BYOK 的旧单元测试构造；生产装配必须显式传入连接服务。 */
@@ -183,6 +185,26 @@ public class PlanCandidateService {
   }
 
   public record Confirmed(String runId, String taskId, String workspaceId) {}
+
+  /**
+   * 人工修订结果。
+   *
+   * <p>{@code applied=false} 表示结构校验未通过：候选保持原样，{@code errors} 是可直接展示的原因； 只有 {@code applied=true} 时 {@code candidate} 才是改写后的候选。
+   */
+  public record Revised(boolean applied, List<String> errors, CandidateView candidate) {
+    public Revised {
+      errors = errors == null ? List.of() : List.copyOf(errors);
+    }
+  }
+
+  /**
+   * 用校验通过的新图覆盖就绪候选。
+   *
+   * <p>这是「画布调整 → 确认执行」之间唯一的落库入口：不改输入版本与工作区基线，不新建候选， 校验失败即拒绝落库。确认时仍按保存的新摘要复核一次。
+   */
+  public Revised revise(String id, PlanCandidateDraft draft, String expectedCandidateSha256) {
+    return revision.revise(id, draft, expectedCandidateSha256);
+  }
 
   /**
    * 把 READY 候选物化为唯一的运行。

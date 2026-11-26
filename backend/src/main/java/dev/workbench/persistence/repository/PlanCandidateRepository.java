@@ -175,4 +175,26 @@ public interface PlanCandidateRepository extends JpaRepository<PlanCandidateEnti
       @Param("ready") String ready,
       @Param("runId") String runId,
       @Param("settledAt") String settledAt);
+
+  /**
+   * 用人工修订后的图覆盖候选内容。
+   *
+   * <p>只有仍处于 READY 且尚未绑定运行的候选才会被改写：条件更新让并发确认、过期与重复修订 都退化为影响 0 行，调用方据此拒绝而不是静默覆盖。
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  @Modifying(clearAutomatically = true)
+  @Query(
+      """
+      update PlanCandidateEntity c set c.candidateJson = :candidateJson,
+        c.candidateSha256 = :sha256, c.agentBindingsJson = :bindingsJson
+      where c.id = :id and c.ownerScopeKey = :ownerScopeKey
+        and c.status = :ready and c.runId is null
+      """)
+  int reviseDraft(
+      @Param("id") String id,
+      @Param("ownerScopeKey") String ownerScopeKey,
+      @Param("candidateJson") String candidateJson,
+      @Param("sha256") String sha256,
+      @Param("bindingsJson") String bindingsJson,
+      @Param("ready") String ready);
 }

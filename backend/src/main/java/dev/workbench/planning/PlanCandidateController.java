@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -52,6 +53,16 @@ public class PlanCandidateController {
   @PostMapping("/api/plan-candidates/{id}/cancel")
   PlanCandidateService.CandidateView cancel(@PathVariable String id) {
     return candidates.cancel(id);
+  }
+
+  public record ReviseRequest(String expectedCandidateSha256, PlanCandidateDraft draft) {}
+
+  /** 用校验通过的新图覆盖就绪候选；校验失败不落库，已确认的候选只能继续用原运行。 */
+  @PutMapping("/api/plan-candidates/{id}/draft")
+  PlanCandidateService.Revised revise(
+      @PathVariable String id, @RequestBody ReviseRequest request) {
+    return candidates.revise(
+        id, request.draft(), request.expectedCandidateSha256());
   }
 
   public record ConfirmRequest(

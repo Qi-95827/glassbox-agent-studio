@@ -1668,8 +1668,8 @@
   "memoryInsight.truncated": "预览已截断",
   "composer.viewGraph": "流程图",
   "composer.viewComposer": "可视化编排",
-  "composer.viewHint": "本地演练：不会修改计划",
-  "composer.boundary": "这里可以增删节点、调整读写集合与反思回边，并实时向服务端校验结构合法性。它是「跑之前先演练」的画布——不会修改服务端计划，也不会绕过既有的计划确认与人工冻结流程。",
+  "composer.viewHint": "改动需点「应用画布到计划」才会写回",
+  "composer.boundary": "这里可以增删节点、调整读写集合与反思回边，并实时向服务端校验结构合法性。改动只有点「应用画布到计划」才会写回候选，写回时服务端会用同一套规则再校验一次，不通过就整份拒绝、候选保持原样。写回后仍是待确认候选，依然要人工确认才会创建运行。",
   "composer.addAnalyze": "加分析节点",
   "composer.addImplement": "加实现节点",
   "composer.addReview": "加审查节点",
@@ -1700,5 +1700,8 @@
   "composer.reflectionHint": "选中后会新增一条虚线回边",
   "composer.reflectionPanel": "反思回边 {from} → {to}",
   "composer.maxRevisions": "最大反思轮次",
-  "composer.maxRevisionsShort": "反思 ≤{count}"
+  "composer.maxRevisionsShort": "反思 ≤{count}",
+  "composer.apply": "应用画布到计划",
+  "composer.applied": "已写回候选：新摘要 {sha}…。现在可以直接点「确认并创建运行」，运行的就是这张图。",
+  "composer.applyRejected": "服务端拒绝了这次修改，候选保持原样："
 }

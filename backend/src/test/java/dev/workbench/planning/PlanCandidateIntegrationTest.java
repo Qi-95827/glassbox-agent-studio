@@ -2,6 +2,7 @@ package dev.workbench.planning;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -280,6 +281,109 @@ class PlanCandidateIntegrationTest {
   }
 
   private static final List<String> FILES = List.of("index.html", "sort.js", "style.css");
+
+  @Test
+  void revisedDraftReplacesTheCandidateAndInvalidDraftIsRejectedWithoutTouchingIt() throws Exception {
+    String workspace = workspaces.createIdeaWorkspace(FILES).id();
+    int tasks = records.tasks().size();
+    REPLIES.offer(VALID);
+    var created =
+        candidates.generate(
+            new PlanCandidateService.GenerateRequest(
+                "req-revise-0001",
+                input(workspace, "制作可单步演示的冒泡排序网页"),
+                null,
+                "draft-revise-0001"));
+    var view = await(created.id());
+    assertEquals("READY", view.status());
+
+    // 人工把审查节点的标题改掉：结构仍然合法，必须落库、换成新摘要，且不创建运行。
+    var reviewed =
+        view.candidate().nodes().stream()
+            .map(
+                node ->
+                    "review".equals(node.key())
+                        ? new PlanCandidateDraft.Node(
+                            node.key(),
+                            "人工改过的交付审查",
+                            node.role(),
+                            node.objective(),
+                            node.dependsOn(),
+                            node.readFiles(),
+                            node.writeFiles(),
+                            node.expectedOutputs(),
+                            node.acceptanceCriteria(),
+                            node.agentRef())
+                        : node)
+            .toList();
+    var edited =
+        new PlanCandidateDraft(
+            view.candidate().schemaVersion(),
+            reviewed,
+            view.candidate().assumptions(),
+            view.candidate().openQuestions(),
+            view.candidate().revisionEdges());
+    var applied = revise(created.id(), view.candidateSha256(), edited).andExpect(status().isOk()).andReturn();
+    JsonNode appliedBody = json.readTree(applied.getResponse().getContentAsByteArray());
+    assertTrue(appliedBody.path("applied").asBoolean(), appliedBody.toString());
+    String revisedSha = appliedBody.path("candidate").path("candidateSha256").asText();
+    assertNotEquals(view.candidateSha256(), revisedSha, "改写后摘要必须变化，确认时才不会再撞旧摘要");
+    assertEquals("人工改过的交付审查", titleOf(appliedBody, "review"));
+    assertEquals(revisedSha, candidates.get(created.id()).candidateSha256());
+    assertEquals(tasks, records.tasks().size(), "改写候选不能创建任务或运行");
+    assertEquals("", workspaces.read(workspace, "sort.js").content(), "改写候选不能写文件");
+
+    // 去掉审查节点的验收条件：服务端必须整份拒绝，并且候选保持上一次的摘要。
+    var broken =
+        new PlanCandidateDraft(
+            view.candidate().schemaVersion(),
+            reviewed.stream()
+                .map(
+                    node ->
+                        "review".equals(node.key())
+                            ? new PlanCandidateDraft.Node(
+                                node.key(),
+                                node.title(),
+                                node.role(),
+                                node.objective(),
+                                node.dependsOn(),
+                                node.readFiles(),
+                                node.writeFiles(),
+                                node.expectedOutputs(),
+                                List.of(),
+                                node.agentRef())
+                            : node)
+                .toList(),
+            List.of(),
+            List.of(),
+            view.candidate().revisionEdges());
+    var rejected =
+        revise(created.id(), revisedSha, broken).andExpect(status().isOk()).andReturn();
+    JsonNode rejectedBody = json.readTree(rejected.getResponse().getContentAsByteArray());
+    assertFalse(rejectedBody.path("applied").asBoolean());
+    assertFalse(rejectedBody.path("errors").isEmpty(), "拒绝时必须给出可操作原因");
+    assertEquals(revisedSha, candidates.get(created.id()).candidateSha256(), "被拒绝的改写不能落库");
+
+    // 客户端拿着过期摘要提交时必须拒绝，避免并发覆盖别人的修改。
+    revise(created.id(), "0".repeat(64), edited).andExpect(status().isBadRequest());
+  }
+
+  private org.springframework.test.web.servlet.ResultActions revise(
+      String id, String expectedCandidateSha256, PlanCandidateDraft draft) throws Exception {
+    return mvc.perform(
+        put("/api/plan-candidates/{id}/draft", id)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(
+                json.writeValueAsBytes(
+                    Map.of("expectedCandidateSha256", expectedCandidateSha256, "draft", draft))));
+  }
+
+  private static String titleOf(JsonNode body, String key) {
+    for (JsonNode node : body.path("candidate").path("candidate").path("nodes")) {
+      if (key.equals(node.path("key").asText())) return node.path("title").asText();
+    }
+    return null;
+  }
 
   @Test
   void wholeWorkspaceScopeIsExpandedBeforePlanning() {

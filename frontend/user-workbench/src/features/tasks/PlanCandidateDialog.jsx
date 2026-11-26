@@ -432,7 +432,15 @@ export default function PlanCandidateDialog({ open, input, onClose, onRun, maxCo
             </Stack>
 
             {planView === 'composer' ? (
-              <PlanComposerCanvas candidate={current.candidate} />
+              <PlanComposerCanvas
+                candidate={current.candidate}
+                onApply={draft =>
+                  plan.reviseDraft({
+                    expectedCandidateSha256: current.candidateSha256,
+                    draft
+                  })
+                }
+              />
             ) : (
               <>
                 {!selected && (

@@ -21,6 +21,7 @@ import {
 import dagre from '@dagrejs/dagre';
 import '@xyflow/react/dist/style.css';
 import AddRounded from '@mui/icons-material/AddRounded';
+import CloudUploadRounded from '@mui/icons-material/CloudUploadRounded';
 import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded';
 import { plansApi } from '../../api/plans';
 import { googleTokens } from '../../theme/googleTheme';
@@ -58,7 +59,14 @@ export function draftFromCandidate(candidate) {
     toTargetNodeKey: edge.toTargetNodeKey ?? edge.targetNodeKey ?? '',
     maxRevisions: edge.maxRevisions ?? 2
   }));
-  return { schemaVersion: candidate?.schemaVersion ?? 1, nodes, revisionEdges };
+  return {
+    schemaVersion: candidate?.schemaVersion ?? 1,
+    nodes,
+    revisionEdges,
+    // 假设与待确认事项不在画布上编辑，但必须原样带回，否则应用一次就会丢模型的说明。
+    assumptions: [...(candidate?.assumptions ?? [])],
+    openQuestions: [...(candidate?.openQuestions ?? [])]
+  };
 }
 
 /** 画布布局：与运行详情同一套 Dagre 参数，保持两处图形语言一致。 */
@@ -244,27 +252,34 @@ function Canvas({ draft, analysis, selectedKey, onSelectNode, onSelectReflection
 }
 
 /**
- * 可视化编排校验画布。
+ * 可视化编排画布。
  *
- * <p><b>边界（务必保留）</b>：本画布是「本地演练」——可以增删节点、改角色与读写集合、连依赖、
- * 调反思回边的 {@code maxRevisions}，并实时调用受鉴权的校验接口看结构是否合法；
- * 但它<b>不会</b>修改服务端的计划，也不会替代既有的计划确认与冻结流程。
- * 这样既能让人在跑之前看清写集冲突与成环，又不会绕过 `PlanCandidateValidator` 与人工确认。
+ * <p><b>边界（务必保留）</b>：可以增删节点、改角色与读写集合、连依赖、调反思回边的
+ * {@code maxRevisions}，并实时调用受鉴权的校验接口看结构是否合法；改动只有点了
+ * 「应用画布到计划」才会落库——应用时服务端会再用同一份 {@code PlanCandidateValidator}
+ * 复核一遍，不通过就整份拒绝、候选保持原样。落库后仍是「待确认候选」，
+ * 依然要走既有的摘要复核与人工确认才会创建运行，画布不会绕过冻结与授权。
  *
  * @param candidate 服务端返回的候选计划（只读投影）。
+ * @param onApply 应用回调：收到画布草稿后负责落库，返回 {@code {applied, errors, candidate}}。
  */
-export function PlanComposerCanvasInner({ candidate }) {
+export function PlanComposerCanvasInner({ candidate, onApply }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(() => draftFromCandidate(candidate));
   const [selectedKey, setSelectedKey] = useState(null);
   const [reflectionIndex, setReflectionIndex] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [error, setError] = useState('');
+  const [applying, setApplying] = useState(false);
+  const [appliedSha, setAppliedSha] = useState('');
+  const [applyErrors, setApplyErrors] = useState([]);
 
   useEffect(() => {
     setDraft(draftFromCandidate(candidate));
     setSelectedKey(null);
     setReflectionIndex(null);
+    setAppliedSha('');
+    setApplyErrors([]);
   }, [candidate]);
 
   // 结构化校验：本地改动后防抖 350ms 调用一次，避免每次按键都打服务端。
@@ -279,8 +294,8 @@ export function PlanComposerCanvasInner({ candidate }) {
           schemaVersion: draft.schemaVersion ?? 1,
           nodes: draft.nodes,
           revisionEdges: draft.revisionEdges,
-          assumptions: [],
-          openQuestions: []
+          assumptions: draft.assumptions ?? [],
+          openQuestions: draft.openQuestions ?? []
         });
         setAnalysis(result);
         setError('');
@@ -345,6 +360,32 @@ export function PlanComposerCanvasInner({ candidate }) {
     }));
   };
 
+  // 只有服务端实时校验通过才允许落库：按钮禁用状态本身就说明「这份图还不能应用」。
+  const canApply =
+    Boolean(onApply) && Boolean(analysis?.valid) && !applying && draft.nodes.length > 0;
+
+  const applyDraft = async () => {
+    if (!canApply) return;
+    setApplying(true);
+    setApplyErrors([]);
+    setAppliedSha('');
+    try {
+      const result = await onApply({
+        schemaVersion: draft.schemaVersion ?? 1,
+        nodes: draft.nodes,
+        revisionEdges: draft.revisionEdges,
+        assumptions: draft.assumptions ?? [],
+        openQuestions: draft.openQuestions ?? []
+      });
+      if (result?.applied) setAppliedSha(result.candidate?.candidateSha256 ?? '');
+      else setApplyErrors(result?.errors ?? []);
+    } catch (failure) {
+      setApplyErrors([failure.message]);
+    } finally {
+      setApplying(false);
+    }
+  };
+
   const selected = draft.nodes.find(node => node.key === selectedKey) ?? null;
   const reflection = reflectionIndex == null ? null : draft.revisionEdges[reflectionIndex];
 
@@ -381,11 +422,41 @@ export function PlanComposerCanvasInner({ candidate }) {
             }}
           />
         )}
+        {onApply && (
+          <Button
+            size="small"
+            variant="contained"
+            data-testid="composer-apply"
+            disabled={!canApply}
+            loading={applying}
+            startIcon={<CloudUploadRounded />}
+            onClick={applyDraft}
+          >
+            {t('composer.apply')}
+          </Button>
+        )}
       </Stack>
 
       {error && (
         <Alert severity="warning" sx={{ mb: 1 }}>
           {t('composer.validateFailed', { message: error })}
+        </Alert>
+      )}
+
+      {appliedSha && (
+        <Alert severity="success" sx={{ mb: 1 }} data-testid="composer-applied">
+          {t('composer.applied', { sha: appliedSha.slice(0, 12) })}
+        </Alert>
+      )}
+
+      {applyErrors.length > 0 && (
+        <Alert severity="error" sx={{ mb: 1 }} data-testid="composer-apply-errors">
+          <Typography variant="subtitle2">{t('composer.applyRejected')}</Typography>
+          {applyErrors.map(reason => (
+            <Typography variant="body2" key={reason}>
+              · {reason}
+            </Typography>
+          ))}
         </Alert>
       )}
 
