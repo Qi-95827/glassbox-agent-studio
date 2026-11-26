@@ -38,5 +38,10 @@ export const runsApi = {
   updateDebugControl: (runId, payload) => put(`/runs/${runId}/debug-control`, payload),
   toolApprovals: (runId, options) => get(`/runs/${runId}/tool-approvals`, options),
   decideToolApproval: (runId, approvalId, payload) =>
-    post(`/runs/${runId}/tool-approvals/${approvalId}/decision`, payload)
+    post(`/runs/${runId}/tool-approvals/${approvalId}/decision`, payload),
+  timeline: (runId, options) => get(`/runs/${runId}/timeline`, options),
+  checkpoints: (runId, options) => get(`/runs/${runId}/checkpoints`, options),
+  diff: (runId, otherRunId, options) => get(`/runs/${runId}/diff/${otherRunId}`, options),
+  forks: (runId, options) => get(`/runs/${runId}/forks`, options),
+  fork: (runId, payload) => post(`/runs/${runId}/forks`, payload)
 };

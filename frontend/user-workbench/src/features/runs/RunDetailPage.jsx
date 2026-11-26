@@ -10,7 +10,7 @@ import {
   useMediaQuery
 } from '@mui/material';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import RunHeader from './RunHeader';
 import RunFlowGraph from '../workflows/RunFlowGraph';
 import ToolApprovalDrawer from './ToolApprovalDrawer';
@@ -19,6 +19,9 @@ import RunOutputsPanel from './RunOutputsPanel';
 import RunListView from './RunListView';
 import NodeInspector from './NodeInspector';
 import RunDiagnosticsDrawer from './RunDiagnosticsDrawer';
+import ExecutionTimelinePanel from '../checkpoints/ExecutionTimelinePanel';
+import CheckpointTimeTravelPanel from '../checkpoints/CheckpointTimeTravelPanel';
+import RunCompareDiffView from '../checkpoints/RunCompareDiffView';
 import EmptyState from '../../components/EmptyState';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { useToast } from '../../components/ToastProvider';
@@ -71,6 +74,17 @@ export default function RunDetailPage() {
     refetch
   } = useRunExecution(runId);
   const eventsQuery = useRunEvents(runId, tab === 'replay', live && !streamConnected);
+
+  // 分支候选：只把本运行自己分叉出的子运行作为对照项，避免拿不相关的运行做对比。
+  const forksQuery = useQuery({
+    queryKey: ['run-forks', runId],
+    queryFn: () => runsApi.forks(runId),
+    enabled: Boolean(runId)
+  });
+  const forkCandidates = (forksQuery.data?.forks ?? []).map(item => ({
+    runId: item.runId,
+    label: item.sourceNodeKey ?? undefined
+  }));
   const selectedInView = useMemo(
     () =>
       Boolean(
@@ -552,6 +566,32 @@ export default function RunDetailPage() {
               runId={runId}
               workspaceId={detail?.task?.WORKSPACE_ID}
             />
+          )}
+
+          {tab === 'timeline' && (
+            <Box sx={{ p: 2, overflow: 'auto', height: '100%' }}>
+              <Stack spacing={2}>
+                <ExecutionTimelinePanel
+                  runId={runId}
+                  onOpenNode={id => {
+                    setSelectedId(id);
+                    setInspectorOpen(true);
+                    setTab('flow');
+                  }}
+                />
+                <CheckpointTimeTravelPanel runId={runId} onForked={id => navigate(`/runs/${id}`)} />
+              </Stack>
+            </Box>
+          )}
+
+          {tab === 'compare' && (
+            <Box sx={{ p: 2, overflow: 'auto', height: '100%' }}>
+              <RunCompareDiffView
+                runId={runId}
+                candidates={forkCandidates}
+                onOpenRun={id => navigate(`/runs/${id}`)}
+              />
+            </Box>
           )}
 
           {tab === 'list' && (

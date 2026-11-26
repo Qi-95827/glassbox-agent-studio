@@ -64,6 +64,8 @@ public enum EventType {
   CONTINUED_AFTER_SUPPLEMENT,
   /** 从历史检查点创建了关联的新运行。 */
   RECOVERY_STARTED,
+  /** 从历史运行的某个节点分叉出一条新的分支运行；源运行证据不变。 */
+  FORK_STARTED,
   /** 本次任务装配用户确认的项目背景，不记录正文。 */
   MEMORY_LOADED,
   /** 开始受控测试。 */

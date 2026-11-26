@@ -68,6 +68,8 @@ export default function RunHeader({
       >
         <Tab value="flow" label={t('run.tab.flow')} />
         <Tab value="replay" label={t('run.tab.replay')} />
+        <Tab value="timeline" label={t('run.tab.timeline')} />
+        <Tab value="compare" label={t('run.tab.compare')} />
         <Tab value="output" label={t('run.tab.output')} />
         <Tab value="list" label={t('run.tab.list')} />
       </Tabs>
