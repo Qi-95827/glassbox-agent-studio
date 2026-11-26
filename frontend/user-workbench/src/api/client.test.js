@@ -55,6 +55,62 @@ describe('api client', () => {
     expect(postCount).toBe(2);
   });
 
+  it('英文界面下按稳定 errorCode 刷新 token 重试，不再依赖中文文案', async () => {
+    const tokens = ['csrf-old', 'csrf-new'];
+    let csrfIndex = 0;
+    let postCount = 0;
+    const fetchMock = vi.fn(async (url, options = {}) => {
+      if (url === '/api/auth/csrf') return response(200, { token: tokens[csrfIndex++] });
+      postCount += 1;
+      if (postCount === 1) {
+        return response(403, {
+          errorCode: 'CSRF_INVALID',
+          message: 'Request validation failed. Refresh the page and try again.'
+        });
+      }
+      expect(options.headers['X-XSRF-TOKEN']).toBe('csrf-new');
+      return response(200, { accepted: true });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(post('/runs/r1/pause')).resolves.toEqual({ accepted: true });
+    expect(postCount).toBe(2);
+  });
+
+  it('带回稳定错误码的权限拒绝不触发 CSRF 重试，并保留 errorCode', async () => {
+    let postCount = 0;
+    const fetchMock = vi.fn(async url => {
+      if (url === '/api/auth/csrf') return response(200, { token: 'csrf-1' });
+      postCount += 1;
+      return response(403, {
+        errorCode: 'ACCESS_DENIED',
+        message: 'This account is not allowed to access the resource.'
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(post('/admin/grants')).rejects.toMatchObject({
+      status: 403,
+      errorCode: 'ACCESS_DENIED'
+    });
+    // 只发一次：真正的权限拒绝不能靠刷新 token 重试来“绕过”。
+    expect(postCount).toBe(1);
+  });
+
+  it('CSRF 重试只有一次，二次仍失败时直接抛错', async () => {
+    let csrfIndex = 0;
+    let postCount = 0;
+    const fetchMock = vi.fn(async url => {
+      if (url === '/api/auth/csrf') return response(200, { token: `csrf-${csrfIndex++}` });
+      postCount += 1;
+      return response(403, { errorCode: 'CSRF_INVALID', message: 'Request validation failed.' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(post('/runs/r1/pause')).rejects.toMatchObject({ status: 403 });
+    expect(postCount).toBe(2);
+  });
+
   it('并发首屏 401 在会话确认后重试，不触发登出', async () => {
     const handler = vi.fn();
     setUnauthorizedHandler(handler);

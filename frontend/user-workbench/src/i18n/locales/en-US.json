@@ -1584,5 +1584,15 @@
   "ragEmbedding.probeOkShort": "Embedding endpoint is available",
   "ragEmbedding.probeFailedShort": "Embedding endpoint is currently unavailable",
   "ragEmbedding.save": "Save embedding settings",
-  "ragEmbedding.saved": "Embedding settings saved"
+  "ragEmbedding.saved": "Embedding settings saved",
+  "errorBoundary.title": "This section failed to render",
+  "errorBoundary.description": "Rendering or data loading failed in this area only; everything else still works. Retry when ready.",
+  "errorBoundary.globalDescription": "This page failed to render. Navigation still works; retry or switch to another page.",
+  "run.unnamedNode": "Unnamed node",
+  "run.breakpointBadge": "Break",
+  "run.breakpointTooltip": "Breakpoint set: the run pauses before this node",
+  "run.attemptCount": "{count} attempts",
+  "run.flowDependency": "Flow dependency",
+  "topbar.notificationsPending": "{count} tasks are waiting for you",
+  "topbar.openRuns": "View run list"
 }

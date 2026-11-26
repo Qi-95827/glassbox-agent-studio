@@ -1,5 +1,6 @@
 package dev.workbench.auth;
 
+import dev.workbench.framework.i18n.LocalizedMessages;
 import dev.workbench.persistence.entity.UserEntity;
 import dev.workbench.persistence.repository.UserRepository;
 import jakarta.servlet.FilterChain;
@@ -63,7 +64,7 @@ public class AuthenticationFilter extends OncePerRequestFilter {
             ? users.findById(text).filter(item -> "ACTIVE".equals(item.getStatus()))
             : java.util.Optional.<UserEntity>empty();
     if (user.isEmpty()) {
-      deny(response, 401, "请先登录。");
+      deny(request, response, 401, "AUTH_REQUIRED", "security.authRequired", "请先登录。");
       return;
     }
     var authentication =
@@ -75,17 +76,37 @@ public class AuthenticationFilter extends OncePerRequestFilter {
     context.setAuthentication(authentication);
     SecurityContextHolder.setContext(context);
     if (ADMIN_ONLY.stream().anyMatch(path::startsWith) && !"ADMIN".equals(user.get().getRole())) {
-      deny(response, 403, "该操作只允许管理员执行。");
+      deny(
+          request,
+          response,
+          403,
+          "ACCESS_DENIED",
+          "security.adminOnly",
+          "该操作只允许管理员执行。");
       return;
     }
     chain.doFilter(request, response);
   }
 
-  private static void deny(HttpServletResponse response, int status, String message)
+  /**
+   * 写出带稳定错误码的 JSON 拒绝响应。
+   *
+   * <p>错误码与界面语言无关，前端据此决定「刷新 CSRF token 重试」还是直接提示无权限；
+   * 译文来自受控资源包，`fallback` 只在资源缺失时兜底，两者都不含请求参数。
+   */
+  private static void deny(
+      HttpServletRequest request,
+      HttpServletResponse response,
+      int status,
+      String errorCode,
+      String messageKey,
+      String fallback)
       throws IOException {
     response.setStatus(status);
     response.setCharacterEncoding(StandardCharsets.UTF_8.name());
     response.setContentType("application/json;charset=UTF-8");
-    response.getWriter().write("{\"message\":\"" + message + "\"}");
+    String localized = LocalizedMessages.get(request.getLocale(), messageKey);
+    String message = messageKey.equals(localized) ? fallback : localized;
+    response.getWriter().write("{\"errorCode\":\"" + errorCode + "\",\"message\":\"" + message + "\"}");
   }
 }

@@ -1,5 +1,6 @@
 package dev.workbench.auth;
 
+import dev.workbench.framework.i18n.LocalizedMessages;
 import dev.workbench.persistence.repository.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Set;
@@ -11,6 +12,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 
@@ -56,22 +58,42 @@ public class SecurityConfiguration {
             errors ->
                 errors
                     .authenticationEntryPoint(
-                        (request, response, failure) -> {
-                          response.setStatus(401);
-                          response.setCharacterEncoding(
-                              java.nio.charset.StandardCharsets.UTF_8.name());
-                          response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                          response.getWriter().write("{\"message\":\"请先登录。\"}");
-                        })
+                        (request, response, failure) ->
+                            writeJson(
+                                response,
+                                401,
+                                "AUTH_REQUIRED",
+                                LocalizedMessages.get(request.getLocale(), "security.authRequired")))
                     .accessDeniedHandler(
                         (request, response, failure) -> {
-                          response.setStatus(403);
-                          response.setCharacterEncoding(
-                              java.nio.charset.StandardCharsets.UTF_8.name());
-                          response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                          response.getWriter().write("{\"message\":\"请求校验失败，请刷新页面后重试。\"}");
+                          // CSRF 校验失败与普通权限拒绝必须区分：前端只对前者刷新 token 重试。
+                          boolean csrf = failure instanceof CsrfException;
+                          writeJson(
+                              response,
+                              403,
+                              csrf ? "CSRF_INVALID" : "ACCESS_DENIED",
+                              LocalizedMessages.get(
+                                  request.getLocale(),
+                                  csrf ? "security.csrfInvalid" : "security.accessDenied"));
                         }));
     return http.build();
+  }
+
+  /**
+   * 写出带稳定错误码的 JSON 错误体。
+   *
+   * <p>错误码与界面语言无关，前端据此做结构化分支；`message` 只作为人类可读兜底。
+   * 两份文案都来自受控资源包，不含请求参数，因此无需再做 JSON 转义。
+   */
+  private static void writeJson(
+      jakarta.servlet.http.HttpServletResponse response, int status, String errorCode, String message)
+      throws java.io.IOException {
+    response.setStatus(status);
+    response.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+    response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+    response
+        .getWriter()
+        .write("{\"errorCode\":\"" + errorCode + "\",\"message\":\"" + message + "\"}");
   }
 
   /** 仅对初始化后的已登录状态修改请求要求 CSRF token；登录与初始化入口保持可用。 */

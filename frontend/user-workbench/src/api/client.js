@@ -25,13 +25,34 @@ let csrfEpoch = 0;
 let unauthorizedHandler = null;
 let recoveryPromise = null;
 
+/** 服务端稳定错误码：与界面语言无关，前端据此做结构化分支，而不是匹配译文。 */
+export const ERROR_CODES = {
+  CSRF_INVALID: 'CSRF_INVALID',
+  AUTH_REQUIRED: 'AUTH_REQUIRED',
+  ACCESS_DENIED: 'ACCESS_DENIED'
+};
+
 export class ApiError extends Error {
   constructor(message, status, body) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+    /** 稳定的机器可读错误码；旧版服务端没有该字段时为 null。 */
+    this.errorCode = body?.errorCode ?? null;
   }
+}
+
+/**
+ * 是否为「CSRF 校验失败」。
+ *
+ * <p>优先使用服务端 `errorCode`，它与界面语言无关；兼容尚未升级的服务端时退化为
+ * HTTP 特征判断——受保护写请求返回 403 就是校验失败的充分条件（真正的权限拒绝
+ * 也会走到这里，代价只是多发一次带新 token 的请求，随后仍然失败，不会越权）。
+ */
+export function isCsrfFailure(status, body) {
+  if (body?.errorCode) return body.errorCode === ERROR_CODES.CSRF_INVALID;
+  return status === 403;
 }
 
 export function setUnauthorizedHandler(handler) {
@@ -139,11 +160,8 @@ export async function request(path, options = {}) {
   let response = await send(path, { method, headers, body, signal: options.signal });
   let parsed = await readBody(response);
 
-  if (
-    mutating &&
-    response.status === 403 &&
-    String(parsed.message || '').includes('请求校验失败')
-  ) {
+  if (mutating && isCsrfFailure(response.status, parsed)) {
+    // 只有一次重试：token 刷新后仍然 403 说明不是校验失败，继续重试只会放大失败请求。
     const token = await ensureCsrf(true);
     if (token) headers['X-XSRF-TOKEN'] = token;
     response = await send(path, { method, headers, body, signal: options.signal });

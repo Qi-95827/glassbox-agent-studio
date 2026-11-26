@@ -1,19 +1,28 @@
+import { lazy } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Box, Button, Typography } from '@mui/material';
 import WorkbenchShell from './layout/WorkbenchShell';
 import AuthGate from './features/auth/AuthGate';
 import { ToastProvider } from './components/ToastProvider';
-import HomePage from './features/tasks/HomePage';
-import RunHistoryPage from './features/runs/RunHistoryPage';
-import RunDetailPage from './features/runs/RunDetailPage';
-import AgentsPage from './features/agents/AgentsPage';
-import WorkspacesPage from './features/workspaces/WorkspacesPage';
-import EvaluationsPage from './features/evaluation/EvalLabPage';
-import MonitoringPage from './features/monitoring/MonitoringPage';
-import ArchitecturePage from './features/architecture/ArchitecturePage';
-import SettingsPage from './features/settings/SettingsPage';
-import DocsPage from './features/docs/DocsPage';
 import { useI18n } from './i18n/I18nProvider';
+
+/**
+ * 路由页全部懒加载。
+ *
+ * <p>首屏只需要应用壳与首页；`ArchitecturePage` 单文件超过 4,300 行，同步引入会让所有
+ * 用户在任何页面都先下载并解析一遍架构图谱。拆成独立 chunk 后，只有真正进入对应路由才拉取。
+ * 加载占位与错误恢复由 `WorkbenchShell` 内的 Suspense / ErrorBoundary 统一提供。
+ */
+const HomePage = lazy(() => import('./features/tasks/HomePage'));
+const RunHistoryPage = lazy(() => import('./features/runs/RunHistoryPage'));
+const RunDetailPage = lazy(() => import('./features/runs/RunDetailPage'));
+const AgentsPage = lazy(() => import('./features/agents/AgentsPage'));
+const WorkspacesPage = lazy(() => import('./features/workspaces/WorkspacesPage'));
+const EvaluationsPage = lazy(() => import('./features/evaluation/EvalLabPage'));
+const MonitoringPage = lazy(() => import('./features/monitoring/MonitoringPage'));
+const ArchitecturePage = lazy(() => import('./features/architecture/ArchitecturePage'));
+const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
+const DocsPage = lazy(() => import('./features/docs/DocsPage'));
 
 function NotFound() {
   const { t } = useI18n();

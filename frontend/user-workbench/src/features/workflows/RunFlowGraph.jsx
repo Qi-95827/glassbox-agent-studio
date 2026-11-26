@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo } from 'react';
 import { Box, Stack, Typography, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import {
@@ -28,117 +28,139 @@ const toneColor = {
   info: '#1A73E8'
 };
 
-function FlowNode({ data }) {
-  const { node, selected, compact, onSelect, generatedAt, hasBreakpoint } = data;
-  const running = node.status === 'RUNNING';
-  const duration = nodeDuration(node, generatedAt);
-  return (
-    <>
-      <Handle type="target" position={Position.Left} style={handleStyle} />
-      <Box
-        role="button"
-        tabIndex={0}
-        aria-label={nodeTitle(node, '流程节点')}
-        aria-pressed={selected}
-        onClick={() => onSelect?.(node.id)}
-        onKeyDown={event => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onSelect?.(node.id);
-          }
-        }}
-        sx={{
-          width: compact ? 150 : 224,
-          minHeight: compact ? 64 : 88,
-          display: 'flex',
-          bgcolor: '#FFFFFF',
-          border: `${selected || running ? '2px' : '1px'} solid ${
-            running ? '#1A73E8' : selected ? '#5F6368' : googleTokens.outline
-          }`,
-          borderRadius: compact ? '12px' : '14px',
-          overflow: 'hidden',
-          cursor: 'pointer',
-          boxShadow: running
-            ? '0 0 0 4px rgba(26,115,232,.10), 0 8px 20px rgba(26,115,232,.16)'
-            : selected
-              ? '0 4px 14px rgba(60,64,67,.16)'
-              : '0 1px 2px rgba(60,64,67,.10)',
-          transition: 'border-color .18s ease, box-shadow .18s ease',
-          '&:hover': { borderColor: '#1A73E8' }
-        }}
-      >
+/**
+ * 节点卡片。
+ *
+ * <p>运行详情每 1.8s 轮询一次执行视图。若每次轮询都重建整张画布的节点组件，
+ * 30 个节点的图会持续产生数百次无意义的样式与布局计算，滚动与抽屉都会卡顿。
+ * 这里用 `memo` + 显式比较器，只在「节点数据、选中态、断点、紧凑模式、语言」真正变化时重绘。
+ *
+ * <p>React Query 的结构共享保证未变化的节点对象保持同一引用，因此比较器按引用比较 `node`
+ * 即可；不为每个字段做深比较，避免把节省下来的渲染时间又花在比较上。
+ */
+const FlowNode = memo(
+  function FlowNode({ data }) {
+    const { node, selected, compact, onSelect, generatedAt, hasBreakpoint, t } = data;
+    const running = node.status === 'RUNNING';
+    const duration = nodeDuration(node, generatedAt);
+    return (
+      <>
+        <Handle type="target" position={Position.Left} style={handleStyle} />
         <Box
-          sx={{
-            width: 4,
-            flexShrink: 0,
-            bgcolor: toneColor[statusTone(node.status)] || toneColor.neutral
+          role="button"
+          tabIndex={0}
+          aria-label={nodeTitle(node, t('common.unnamedStep'))}
+          aria-pressed={selected}
+          onClick={() => onSelect?.(node.id)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onSelect?.(node.id);
+            }
           }}
-        />
-        <Stack
-          spacing={compact ? 0.55 : 0.9}
           sx={{
-            flex: 1,
-            minWidth: 0,
-            px: compact ? 1.1 : 1.6,
-            py: compact ? 0.8 : 1.3,
-            justifyContent: 'center'
+            width: compact ? 150 : 224,
+            minHeight: compact ? 64 : 88,
+            display: 'flex',
+            bgcolor: '#FFFFFF',
+            border: `${selected || running ? '2px' : '1px'} solid ${
+              running ? '#1A73E8' : selected ? '#5F6368' : googleTokens.outline
+            }`,
+            borderRadius: compact ? '12px' : '14px',
+            overflow: 'hidden',
+            cursor: 'pointer',
+            boxShadow: running
+              ? '0 0 0 4px rgba(26,115,232,.10), 0 8px 20px rgba(26,115,232,.16)'
+              : selected
+                ? '0 4px 14px rgba(60,64,67,.16)'
+                : '0 1px 2px rgba(60,64,67,.10)',
+            transition: 'border-color .18s ease, box-shadow .18s ease',
+            '&:hover': { borderColor: '#1A73E8' }
           }}
         >
-          <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', minWidth: 0 }}>
-            <Typography
-              noWrap
-              title={nodeTitle(node)}
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                fontSize: compact ? 12.5 : 14,
-                fontWeight: 600,
-                lineHeight: 1.35,
-                color: googleTokens.text
-              }}
-            >
-              {nodeTitle(node)}
-            </Typography>
-            {hasBreakpoint && (
-              <Box
-                component="span"
-                title="已设置断点：运行到此节点前暂停"
+          <Box
+            sx={{
+              width: 4,
+              flexShrink: 0,
+              bgcolor: toneColor[statusTone(node.status)] || toneColor.neutral
+            }}
+          />
+          <Stack
+            spacing={compact ? 0.55 : 0.9}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              px: compact ? 1.1 : 1.6,
+              py: compact ? 0.8 : 1.3,
+              justifyContent: 'center'
+            }}
+          >
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', minWidth: 0 }}>
+              <Typography
+                noWrap
+                title={nodeTitle(node)}
                 sx={{
-                  px: 0.6,
-                  py: 0.1,
-                  borderRadius: 9999,
-                  bgcolor: '#FCE8E6',
-                  color: '#C5221F',
-                  fontSize: 10,
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: compact ? 12.5 : 14,
                   fontWeight: 600,
-                  flexShrink: 0
+                  lineHeight: 1.35,
+                  color: googleTokens.text
                 }}
               >
-                断点
-              </Box>
-            )}
-          </Stack>
-          <Stack direction="row" spacing={compact ? 0.6 : 1} sx={{ alignItems: 'center' }}>
-            <StatusChip value={node.status} />
-            {duration != null && (
-              <Typography
-                sx={{ fontSize: compact ? 10.5 : 11.5, color: googleTokens.textSecondary }}
-              >
-                {duration < 1000 ? `${Math.round(duration)}ms` : `${(duration / 1000).toFixed(1)}s`}
+                {nodeTitle(node)}
               </Typography>
-            )}
-            {node.attemptCount > 1 && !compact && (
-              <Typography sx={{ fontSize: 11.5, color: googleTokens.textSecondary }}>
-                {node.attemptCount} 次尝试
-              </Typography>
-            )}
+              {hasBreakpoint && (
+                <Box
+                  component="span"
+                  title={t('run.breakpointTooltip')}
+                  sx={{
+                    px: 0.6,
+                    py: 0.1,
+                    borderRadius: 9999,
+                    bgcolor: '#FCE8E6',
+                    color: '#C5221F',
+                    fontSize: 10,
+                    fontWeight: 600,
+                    flexShrink: 0
+                  }}
+                >
+                  {t('run.breakpointBadge')}
+                </Box>
+              )}
+            </Stack>
+            <Stack direction="row" spacing={compact ? 0.6 : 1} sx={{ alignItems: 'center' }}>
+              <StatusChip value={node.status} />
+              {duration != null && (
+                <Typography
+                  sx={{ fontSize: compact ? 10.5 : 11.5, color: googleTokens.textSecondary }}
+                >
+                  {duration < 1000
+                    ? `${Math.round(duration)}ms`
+                    : `${(duration / 1000).toFixed(1)}s`}
+                </Typography>
+              )}
+              {node.attemptCount > 1 && !compact && (
+                <Typography sx={{ fontSize: 11.5, color: googleTokens.textSecondary }}>
+                  {t('run.attemptCount', { count: node.attemptCount })}
+                </Typography>
+              )}
+            </Stack>
           </Stack>
-        </Stack>
-      </Box>
-      <Handle type="source" position={Position.Right} style={handleStyle} />
-    </>
-  );
-}
+        </Box>
+        <Handle type="source" position={Position.Right} style={handleStyle} />
+      </>
+    );
+  },
+  (previous, next) =>
+    previous.data.node === next.data.node &&
+    previous.data.selected === next.data.selected &&
+    previous.data.hasBreakpoint === next.data.hasBreakpoint &&
+    previous.data.compact === next.data.compact &&
+    previous.data.generatedAt === next.data.generatedAt &&
+    previous.data.onSelect === next.data.onSelect &&
+    previous.data.t === next.data.t
+);
 
 const nodeTypes = { trace: FlowNode };
 
@@ -189,6 +211,11 @@ function FlowCanvas({
   const height = compact ? 64 : 88;
   const gap = compact ? 24 : 38;
   const { fitView } = useReactFlow();
+
+  // 回调引用稳定：父组件每次渲染都会传入新的内联函数，直接放进 data 会让 memo 完全失效。
+  const handleSelect = useCallback(id => onSelectNode?.(id), [onSelectNode]);
+  const handleEdgeSelect = useCallback(edge => onSelectEdge?.(edge), [onSelectEdge]);
+
   const positions = useMemo(
     () => layout(nodes, edges, width, height, gap),
     [nodes, edges, width, height, gap]
@@ -201,85 +228,89 @@ function FlowCanvas({
     return () => clearTimeout(timer);
   }, [fitView, nodes.length, runId, viewportKey, compact]);
 
-  const graphNodes = nodes.map(node => ({
-    id: node.id,
-    type: 'trace',
-    position: positions.get(node.id) ?? { x: 0, y: 0 },
-    draggable: false,
-    selectable: false,
-    data: {
-      node,
-      selected: selectedId === node.id,
-      hasBreakpoint: Boolean(breakpoints?.has(node.id)),
-      compact,
-      onSelect: onSelectNode,
-      generatedAt
-    }
-  }));
+  const graphNodes = useMemo(
+    () =>
+      nodes.map(node => ({
+        id: node.id,
+        type: 'trace',
+        position: positions.get(node.id) ?? { x: 0, y: 0 },
+        draggable: false,
+        selectable: false,
+        data: {
+          node,
+          selected: selectedId === node.id,
+          hasBreakpoint: Boolean(breakpoints?.has(node.id)),
+          compact,
+          onSelect: handleSelect,
+          generatedAt,
+          t
+        }
+      })),
+    [nodes, positions, selectedId, breakpoints, compact, handleSelect, generatedAt, t]
+  );
 
-  const hasFocus = Boolean(focusIds?.size);
-  const dependencyEdges = edges
-    .filter(edge => byId.has(edge.fromNodeId) && byId.has(edge.toNodeId))
-    .map(edge => {
-      const id = `${edge.fromNodeId}:${edge.toNodeId}`;
-      const selectedEdge = selectedEdgeId === id;
-      const highlighted =
-        selectedEdge ||
-        edge.fromNodeId === selectedId ||
-        edge.toNodeId === selectedId ||
-        focusIds?.has(edge.fromNodeId) ||
-        focusIds?.has(edge.toNodeId);
-      const stroke = selectedEdge
-        ? '#1967D2'
-        : highlighted
-          ? googleTokens.primary
-          : hasFocus
-            ? '#9DB3C8'
-            : '#B6C2D2';
-      return {
-        id,
-        source: edge.fromNodeId,
-        target: edge.toNodeId,
-        type: 'default',
-        interactionWidth: 24,
-        style: {
-          stroke,
-          strokeWidth: selectedEdge ? 2.75 : highlighted ? 2 : 1.6,
-          opacity: highlighted || selectedEdge ? 1 : 0.9
-        },
-        data: { edge },
-        ariaLabel: '流程依赖'
-      };
-    });
+  const graphEdges = useMemo(() => {
+    const hasFocus = Boolean(focusIds?.size);
+    const dependencyEdges = edges
+      .filter(edge => byId.has(edge.fromNodeId) && byId.has(edge.toNodeId))
+      .map(edge => {
+        const id = `${edge.fromNodeId}:${edge.toNodeId}`;
+        const selectedEdge = selectedEdgeId === id;
+        const highlighted =
+          selectedEdge ||
+          edge.fromNodeId === selectedId ||
+          edge.toNodeId === selectedId ||
+          focusIds?.has(edge.fromNodeId) ||
+          focusIds?.has(edge.toNodeId);
+        const stroke = selectedEdge
+          ? '#1967D2'
+          : highlighted
+            ? googleTokens.primary
+            : hasFocus
+              ? '#9DB3C8'
+              : '#B6C2D2';
+        return {
+          id,
+          source: edge.fromNodeId,
+          target: edge.toNodeId,
+          type: 'default',
+          interactionWidth: 24,
+          style: {
+            stroke,
+            strokeWidth: selectedEdge ? 2.75 : highlighted ? 2 : 1.6,
+            opacity: highlighted || selectedEdge ? 1 : 0.9
+          },
+          data: { edge },
+          ariaLabel: t('run.flowDependency')
+        };
+      });
 
-  const reflectionEdges = (revisionEdges ?? [])
-    .filter(edge => byId.has(edge.reviewerNodeId) && byId.has(edge.targetNodeId))
-    .map(edge => {
-      const id = `revision:${edge.reviewerNodeId}:${edge.targetNodeId}`;
-      return {
-        id,
-        source: edge.reviewerNodeId,
-        target: edge.targetNodeId,
-        type: 'default',
-        interactionWidth: 20,
-        label: t('run.revisionEdge', {
+    const reflectionEdges = (revisionEdges ?? [])
+      .filter(edge => byId.has(edge.reviewerNodeId) && byId.has(edge.targetNodeId))
+      .map(edge => {
+        const label = t('run.revisionEdge', {
           count: edge.revisionCount ?? 0,
           max: edge.maxRevisions ?? 0
-        }),
-        labelStyle: { fill: '#B06000', fontSize: 10.5, fontWeight: 600 },
-        labelBgStyle: { fill: '#FEF7E0', fillOpacity: 0.95 },
-        labelBgPadding: [4, 2],
-        labelBgBorderRadius: 4,
-        style: { stroke: '#B06000', strokeWidth: 1.5, strokeDasharray: '6 4' },
-        data: { revisionEdge: edge },
-        ariaLabel: t('run.revisionEdge', {
-          count: edge.revisionCount ?? 0,
-          max: edge.maxRevisions ?? 0
-        })
-      };
-    });
+        });
+        return {
+          id: `revision:${edge.reviewerNodeId}:${edge.targetNodeId}`,
+          source: edge.reviewerNodeId,
+          target: edge.targetNodeId,
+          type: 'default',
+          interactionWidth: 20,
+          label,
+          labelStyle: { fill: '#B06000', fontSize: 10.5, fontWeight: 600 },
+          labelBgStyle: { fill: '#FEF7E0', fillOpacity: 0.95 },
+          labelBgPadding: [4, 2],
+          labelBgBorderRadius: 4,
+          style: { stroke: '#B06000', strokeWidth: 1.5, strokeDasharray: '6 4' },
+          data: { revisionEdge: edge },
+          ariaLabel: label
+        };
+      });
 
-  const graphEdges = [...dependencyEdges, ...reflectionEdges];
+    return [...dependencyEdges, ...reflectionEdges];
+  }, [edges, byId, selectedEdgeId, selectedId, focusIds, revisionEdges, t]);
 
   return (
     <Box sx={{ width: '100%', height: '100%', minHeight: 280, bgcolor: googleTokens.canvas }}>
@@ -288,8 +319,8 @@ function FlowCanvas({
         nodes={graphNodes}
         edges={graphEdges}
         nodeTypes={nodeTypes}
-        onNodeClick={(_, node) => onSelectNode?.(node.id)}
-        onEdgeClick={(_, edge) => onSelectEdge?.(edge.data?.edge)}
+        onNodeClick={(_, node) => handleSelect(node.id)}
+        onEdgeClick={(_, edge) => handleEdgeSelect(edge.data?.edge)}
         nodesDraggable={false}
         nodesConnectable={false}
         nodesFocusable={false}

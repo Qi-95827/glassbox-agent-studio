@@ -1,7 +1,14 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { absorbEventPage, useRunEvents, useRunStream } from './useRunExecution';
+import {
+  absorbEventPage,
+  pollingInterval,
+  useRunEvents,
+  useRunExecution,
+  useRunStream
+} from './useRunExecution';
+import { RUN_POLL_INTERVAL_MS } from './useRunExecution';
 import { runsApi } from '../api/runs';
 
 const event = (id, seq = id, runId = 'run-a') => ({
@@ -122,6 +129,141 @@ describe('useRunEvents', () => {
   });
 });
 
+describe('pollingInterval', () => {
+  it('终态运行不再轮询', () => {
+    expect(pollingInterval('COMPLETED', false, true)).toBe(false);
+    expect(pollingInterval('FAILED', false, true)).toBe(false);
+    expect(pollingInterval('CANCELLED', false, true)).toBe(false);
+  });
+
+  it('SSE 连通期间暂停重复的 REST 轮询', () => {
+    expect(pollingInterval('RUNNING', true, true)).toBe(false);
+  });
+
+  it('标签页不可见时不轮询，即使运行仍在进行', () => {
+    expect(pollingInterval('RUNNING', false, false)).toBe(false);
+    expect(pollingInterval('PAUSED', false, false)).toBe(false);
+  });
+
+  it('运行中、未连通且可见时按统一间隔兜底', () => {
+    expect(pollingInterval('RUNNING', false, true)).toBe(RUN_POLL_INTERVAL_MS);
+    expect(pollingInterval('PENDING', false, true)).toBe(RUN_POLL_INTERVAL_MS);
+  });
+
+  it('服务端状态未知时不启动轮询定时器', () => {
+    expect(pollingInterval(undefined, false, true)).toBe(false);
+  });
+});
+
+class FakeEventSource {
+  static instances = [];
+  constructor(url) {
+    this.url = url;
+    this.listeners = {};
+    this.closed = false;
+    FakeEventSource.instances.push(this);
+  }
+  addEventListener(name, callback) {
+    this.listeners[name] = callback;
+  }
+  close() {
+    this.closed = true;
+  }
+}
+
+const makeWrapper = client =>
+  function Wrapper({ children }) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  };
+
+describe('useRunExecution 的流与轮询协同', () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('终态运行不创建 EventSource', async () => {
+    vi.spyOn(runsApi, 'get').mockResolvedValue({ run: { STATUS: 'COMPLETED' } });
+    vi.spyOn(runsApi, 'executionView').mockResolvedValue({
+      runId: 'run-done',
+      runStatus: 'COMPLETED',
+      nodes: []
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunExecution('run-done'), {
+      wrapper: makeWrapper(client)
+    });
+
+    await waitFor(() => expect(result.current.status).toBe('COMPLETED'));
+    // 再等一轮微任务，确认没有任何迟到的连接被创建。
+    await new Promise(resolve => setTimeout(resolve, 40));
+    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(result.current.streamConnected).toBe(false);
+    expect(result.current.live).toBe(false);
+  });
+
+  it('运行中的运行建立 EventSource，并在连接后停止轮询', async () => {
+    vi.spyOn(runsApi, 'get').mockResolvedValue({ run: { STATUS: 'RUNNING' } });
+    vi.spyOn(runsApi, 'executionView').mockResolvedValue({
+      runId: 'run-live',
+      runStatus: 'RUNNING',
+      nodes: []
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunExecution('run-live'), {
+      wrapper: makeWrapper(client)
+    });
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    expect(FakeEventSource.instances[0].url).toBe('/api/runs/run-live/stream');
+    expect(result.current.live).toBe(true);
+
+    act(() => FakeEventSource.instances[0].onopen());
+    await waitFor(() => expect(result.current.streamConnected).toBe(true));
+    // 连接建立后轮询判据必须为 false，否则会出现 SSE 与 REST 双通道重复刷新。
+    expect(pollingInterval(result.current.status, result.current.streamConnected, true)).toBe(
+      false
+    );
+  });
+
+  it('高频 RUN_EVENT 在防抖窗口内合并为一次缓存失效', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useRunStream('run-burst', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    await waitFor(() => expect(result.current.connected).toBe(true));
+
+    act(() => {
+      for (let index = 0; index < 8; index += 1) source.listeners.RUN_EVENT({ data: '{}' });
+    });
+    // 一次 flush 固定失效 3 个查询键；8 个事件若逐个失效会是 24 次。
+    await waitFor(() => expect(invalidate).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 420));
+    expect(invalidate).toHaveBeenCalledTimes(3);
+  });
+
+  it('推理增量与正文增量走各自独立的通道', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunStream('run-think', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    act(() => source.listeners.MODEL_REASONING_DELTA({ data: '{"text":"先看文件"}' }));
+    act(() => source.listeners.MODEL_DELTA({ data: '{"text":"结论如下"}' }));
+
+    await waitFor(() => expect(result.current.reasoningText).toBe('先看文件'));
+    expect(result.current.streamText).toBe('结论如下');
+  });
+});
 describe('useRunStream', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

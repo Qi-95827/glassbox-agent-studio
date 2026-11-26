@@ -1584,5 +1584,15 @@
   "ragEmbedding.probeOkShort": "Embedding 端点可用",
   "ragEmbedding.probeFailedShort": "Embedding 端点暂不可用",
   "ragEmbedding.save": "保存 Embedding 设置",
-  "ragEmbedding.saved": "Embedding 设置已保存"
+  "ragEmbedding.saved": "Embedding 设置已保存",
+  "errorBoundary.title": "局部渲染失败",
+  "errorBoundary.description": "该区域的渲染或数据加载出错，其余功能不受影响；可点击重试。",
+  "errorBoundary.globalDescription": "页面渲染失败，导航仍可使用；可点击重试或切换到其他页面。",
+  "run.unnamedNode": "未命名节点",
+  "run.breakpointBadge": "断点",
+  "run.breakpointTooltip": "已设置断点：运行到此节点前暂停",
+  "run.attemptCount": "{count} 次尝试",
+  "run.flowDependency": "流程依赖",
+  "topbar.notificationsPending": "有 {count} 个任务等待你处理",
+  "topbar.openRuns": "查看运行列表"
 }

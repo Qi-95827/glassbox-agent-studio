@@ -12,6 +12,8 @@ import {
 } from '@mui/material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { runsApi } from '../../api/runs';
+import useDocumentVisible from '../../hooks/useDocumentVisible';
+import { RUN_POLL_INTERVAL_MS } from '../../hooks/useRunExecution';
 import { useI18n } from '../../i18n/I18nProvider';
 import { googleTokens } from '../../theme/googleTheme';
 
@@ -20,10 +22,14 @@ const riskColor = risk =>
 
 /**
  * Gate 5.5 审批抽屉：批准、改参放行（服务端二次 Gate 5 复验）或拒绝并回传理由。
+ *
+ * <p>审批单只能用轮询发现（服务端不会为未知运行推送），但仍按与运行详情相同的口径收敛：
+ * 运行进入终态后不再请求，标签页隐藏时暂停，间隔与运行轮询保持一致而不是更激进。
  */
 export default function ToolApprovalDrawer({ runId, live = true }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
+  const visible = useDocumentVisible();
   const [edited, setEdited] = useState({});
   const [reasons, setReasons] = useState({});
   const [busy, setBusy] = useState(null);
@@ -32,7 +38,7 @@ export default function ToolApprovalDrawer({ runId, live = true }) {
     queryKey: ['tool-approvals', runId],
     queryFn: ({ signal }) => runsApi.toolApprovals(runId, { signal }),
     enabled: Boolean(runId),
-    refetchInterval: live ? 1500 : false
+    refetchInterval: live && visible ? RUN_POLL_INTERVAL_MS : false
   });
   const pending = useMemo(
     () => (query.data ?? []).filter(item => item.status === 'PENDING'),

@@ -19,12 +19,33 @@ import LogoutRounded from '@mui/icons-material/LogoutRounded';
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined';
 import FactCheckOutlined from '@mui/icons-material/FactCheckOutlined';
 import TranslateRounded from '@mui/icons-material/TranslateRounded';
+import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import StatusChip from '../components/StatusChip';
 import { useAuth } from '../features/auth/AuthGate';
 import { useChrome } from './pageChrome';
 import { googleTokens } from '../theme/googleTheme';
 import { useI18n } from '../i18n/I18nProvider';
+import { tasksApi } from '../api/tasks';
+import useDocumentVisible from '../hooks/useDocumentVisible';
+
+/**
+ * 需要用户处理的任务状态。
+ *
+ * <p>通知红点不能只是一个常亮的装饰：它必须来自服务端真实任务状态，
+ * 否则菜单里写着「暂无通知」而红点一直亮着，反而会训练用户忽略它。
+ */
+const ATTENTION_STATUSES = new Set([
+  'WAITING_TOOL_APPROVAL',
+  'PAUSED',
+  'BLOCKED',
+  'AWAITING_REVIEW',
+  'FAILED',
+  'LIMITED',
+  'INTERRUPTED'
+]);
+
+const NOTIFICATION_POLL_MS = 60_000;
 
 const sectionKeys = {
   '/': 'nav.home',
@@ -33,6 +54,7 @@ const sectionKeys = {
   '/workspaces': 'nav.workspaces',
   '/evaluations': 'nav.evaluations',
   '/monitoring': 'nav.monitoring',
+  '/architecture': 'nav.architecture',
   '/settings': 'nav.settings',
   '/docs': 'nav.docs'
 };
@@ -102,6 +124,17 @@ export default function TopBar({ onOpenNav }) {
   const { t, locale, toggleLocale, isEnglish } = useI18n();
   const [userAnchor, setUserAnchor] = useState(null);
   const [notifyAnchor, setNotifyAnchor] = useState(null);
+  const visible = useDocumentVisible();
+
+  // 红点只反映服务端真实任务状态；查询失败时按「无待处理」处理，不制造假告警。
+  const attention = useQuery({
+    queryKey: ['tasks', 'attention-count'],
+    queryFn: tasksApi.list,
+    enabled: Boolean(user),
+    refetchInterval: visible ? NOTIFICATION_POLL_MS : false,
+    select: rows => rows.filter(row => ATTENTION_STATUSES.has(row.taskStatus ?? row.status)).length
+  });
+  const attentionCount = attention.data ?? 0;
 
   const trail = page?.trail?.length ? page.trail : fallbackTrail(location.pathname, t);
   const initial = (user?.displayName || user?.username || 'A').slice(0, 1).toUpperCase();
@@ -162,13 +195,25 @@ export default function TopBar({ onOpenNav }) {
           <HelpOutlineRounded fontSize="small" />
         </IconButton>
       </Tooltip>
-      <Tooltip title={t('topbar.notifications')}>
+      <Tooltip
+        title={
+          attentionCount > 0
+            ? t('topbar.notificationsPending', { count: attentionCount })
+            : t('topbar.notifications')
+        }
+      >
         <IconButton
           size="small"
           aria-label={t('topbar.notifications')}
           onClick={event => setNotifyAnchor(event.currentTarget)}
         >
-          <Badge variant="dot" color="error" overlap="circular">
+          <Badge
+            variant="dot"
+            color="error"
+            overlap="circular"
+            invisible={attentionCount === 0}
+            data-testid="topbar-notification-badge"
+          >
             <NotificationsNoneRounded fontSize="small" />
           </Badge>
         </IconButton>
@@ -184,18 +229,20 @@ export default function TopBar({ onOpenNav }) {
             {t('topbar.notificationsTitle')}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {t('topbar.notificationsEmpty')}
+            {attentionCount > 0
+              ? t('topbar.notificationsPending', { count: attentionCount })
+              : t('topbar.notificationsEmpty')}
           </Typography>
         </Box>
         <Divider />
         <MenuItem
           onClick={() => {
             setNotifyAnchor(null);
-            navigate('/evaluations');
+            navigate('/runs');
           }}
         >
           <FactCheckOutlined fontSize="small" sx={{ mr: 1 }} />
-          {t('topbar.openMonitoring')}
+          {t('topbar.openRuns')}
         </MenuItem>
       </Menu>
 

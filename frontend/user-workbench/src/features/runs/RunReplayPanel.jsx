@@ -6,21 +6,23 @@ import {
   Chip,
   CircularProgress,
   Divider,
-  List,
   ListItemButton,
   ListItemText,
   Paper,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
-  Typography
+  Typography,
+  useMediaQuery
 } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import ArrowBackRounded from '@mui/icons-material/ArrowBackRounded';
 import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded';
 import PlayArrowRounded from '@mui/icons-material/PlayArrowRounded';
 import PauseRounded from '@mui/icons-material/PauseRounded';
 import GpsFixedRounded from '@mui/icons-material/GpsFixedRounded';
 import { runsApi } from '../../api/runs';
+import VirtualList from '../../components/VirtualList';
 import { TraceSection, Readout } from '../../components/WorkbenchDialog';
 import { clock } from '../../utils/format';
 import { useI18n } from '../../i18n/I18nProvider';
@@ -161,6 +163,8 @@ export default function RunReplayPanel({
   onLocate
 }) {
   const { t, locale } = useI18n();
+  const theme = useTheme();
+  const wide = useMediaQuery(theme.breakpoints.up('lg'));
   const [filter, setFilter] = useState('all');
   const [selectedId, setSelectedId] = useState(null);
   const [playing, setPlaying] = useState(false);
@@ -169,6 +173,9 @@ export default function RunReplayPanel({
 
   const ready = Boolean(detail?.run && view?.runId);
   const scopedEvents = scopeEvents(events, view?.runId);
+
+  // 固定行高窗口虚拟滚动：千级事件只渲染可视区域，滚动与选中的响应保持稳定。
+  const listHeight = wide ? 540 : 220;
 
   const visible = scopedEvents.filter(event => filter === 'all' || group(event) === filter);
   const index = Math.max(
@@ -323,20 +330,21 @@ export default function RunReplayPanel({
                 {t('replay.order')}
               </Typography>
               <Divider />
-              <List
-                dense
-                disablePadding
-                sx={{ maxHeight: { xs: 220, lg: 540 }, overflowY: 'auto', p: 0.6 }}
-              >
-                {visible.map(item => (
+              <VirtualList
+                items={visible}
+                rowHeight={56}
+                height={listHeight}
+                ariaLabel={t('replay.order')}
+                testId="replay-event-list"
+                getKey={item => item.ID}
+                renderRow={item => (
                   <ListItemButton
-                    key={item.ID}
                     selected={item.ID === event.ID}
                     onClick={() => {
                       setPlaying(false);
                       setSelectedId(item.ID);
                     }}
-                    sx={{ borderRadius: 2 }}
+                    sx={{ borderRadius: 2, height: 52, mx: 0.6 }}
                   >
                     <ListItemText
                       primary={eventNames[item.EVENT_TYPE] || item.EVENT_TYPE}
@@ -344,8 +352,8 @@ export default function RunReplayPanel({
                       slotProps={{ primary: { fontSize: 13 }, secondary: { fontSize: 11.5 } }}
                     />
                   </ListItemButton>
-                ))}
-              </List>
+                )}
+              />
             </Paper>
 
             <Paper variant="outlined" sx={{ p: { xs: 1.75, sm: 2.25 }, borderRadius: 3 }}>

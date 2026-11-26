@@ -20,6 +20,7 @@ import RunListView from './RunListView';
 import NodeInspector from './NodeInspector';
 import RunDiagnosticsDrawer from './RunDiagnosticsDrawer';
 import EmptyState from '../../components/EmptyState';
+import ErrorBoundary from '../../components/ErrorBoundary';
 import { useToast } from '../../components/ToastProvider';
 import { useNodeDetail, useRunEvents, useRunExecution } from '../../hooks/useRunExecution';
 import { runsApi } from '../../api/runs';
@@ -69,7 +70,11 @@ export default function RunDetailPage() {
       ),
     [runId, selectedId, view?.runId, view?.nodes]
   );
-  const nodeDetail = useNodeDetail(runId, selectedInView ? selectedId : null, live);
+  const nodeDetail = useNodeDetail(
+    runId,
+    selectedInView ? selectedId : null,
+    live && !streamConnected
+  );
   const node = useMemo(
     () => (view?.nodes ?? []).find(item => item.id === selectedId) ?? null,
     [view?.nodes, selectedId]
@@ -296,32 +301,36 @@ export default function RunDetailPage() {
   };
 
   const inspector = (
-    <NodeInspector
-      open={inspectorOpen}
-      node={node}
-      detail={nodeDetail.data}
-      loading={nodeDetail.isLoading}
-      error={nodeDetail.error}
-      runId={runId}
-      taskId={detail?.task?.ID ?? view.taskId}
-      generatedAt={view.generatedAt}
-      runModelMode={detail?.task?.MODEL_MODE}
-      selectedEdge={selectedEdge}
-      glassboxRequest={glassboxRequest}
-      hasBreakpoint={Boolean(node && breakpoints.has(node.id))}
-      onToggleBreakpoint={() => node && toggleBreakpoint(node.id)}
-      cancelAction={(view.availableActions ?? []).find(action => action.actionCode === 'CANCEL')}
-      executor={node?.agentName || t('run.executor')}
-      onClose={() => setInspectorOpen(false)}
-      onCancelRun={() => {
-        const cancel = (view.availableActions ?? []).find(action => action.actionCode === 'CANCEL');
-        if (cancel) handleAction(cancel);
-      }}
-      onOpenLogs={() => {
-        setTab('replay');
-        setInspectorOpen(false);
-      }}
-    />
+    <ErrorBoundary scope="drawer" resetKeys={[runId, selectedId]}>
+      <NodeInspector
+        open={inspectorOpen}
+        node={node}
+        detail={nodeDetail.data}
+        loading={nodeDetail.isLoading}
+        error={nodeDetail.error}
+        runId={runId}
+        taskId={detail?.task?.ID ?? view.taskId}
+        generatedAt={view.generatedAt}
+        runModelMode={detail?.task?.MODEL_MODE}
+        selectedEdge={selectedEdge}
+        glassboxRequest={glassboxRequest}
+        hasBreakpoint={Boolean(node && breakpoints.has(node.id))}
+        onToggleBreakpoint={() => node && toggleBreakpoint(node.id)}
+        cancelAction={(view.availableActions ?? []).find(action => action.actionCode === 'CANCEL')}
+        executor={node?.agentName || t('run.executor')}
+        onClose={() => setInspectorOpen(false)}
+        onCancelRun={() => {
+          const cancel = (view.availableActions ?? []).find(
+            action => action.actionCode === 'CANCEL'
+          );
+          if (cancel) handleAction(cancel);
+        }}
+        onOpenLogs={() => {
+          setTab('replay');
+          setInspectorOpen(false);
+        }}
+      />
+    </ErrorBoundary>
   );
 
   return (
@@ -348,30 +357,32 @@ export default function RunDetailPage() {
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, position: 'relative' }}>
           {tab === 'flow' && (
             <Box sx={{ height: '100%', position: 'relative' }}>
-              <RunFlowGraph
-                nodes={view.nodes ?? []}
-                edges={view.edges ?? []}
-                revisionEdges={view.revisionEdges ?? []}
-                runId={runId}
-                selectedId={selectedId}
-                selectedEdgeId={
-                  selectedEdge ? `${selectedEdge.fromNodeId}:${selectedEdge.toNodeId}` : null
-                }
-                focusIds={new Set(focusItems.map(item => item.nodeId))}
-                breakpoints={breakpoints}
-                generatedAt={view.generatedAt}
-                viewportKey={inspectorOpen}
-                onSelectNode={id => {
-                  setSelectedId(id);
-                  setSelectedEdge(null);
-                  setInspectorOpen(true);
-                }}
-                onSelectEdge={edge => {
-                  setSelectedId(edge.toNodeId);
-                  setSelectedEdge(edge);
-                  setInspectorOpen(true);
-                }}
-              />
+              <ErrorBoundary scope="canvas" resetKeys={[runId, selectedId]}>
+                <RunFlowGraph
+                  nodes={view.nodes ?? []}
+                  edges={view.edges ?? []}
+                  revisionEdges={view.revisionEdges ?? []}
+                  runId={runId}
+                  selectedId={selectedId}
+                  selectedEdgeId={
+                    selectedEdge ? `${selectedEdge.fromNodeId}:${selectedEdge.toNodeId}` : null
+                  }
+                  focusIds={new Set(focusItems.map(item => item.nodeId))}
+                  breakpoints={breakpoints}
+                  generatedAt={view.generatedAt}
+                  viewportKey={inspectorOpen}
+                  onSelectNode={id => {
+                    setSelectedId(id);
+                    setSelectedEdge(null);
+                    setInspectorOpen(true);
+                  }}
+                  onSelectEdge={edge => {
+                    setSelectedId(edge.toNodeId);
+                    setSelectedEdge(edge);
+                    setInspectorOpen(true);
+                  }}
+                />
+              </ErrorBoundary>
 
               {(focusItems.length > 0 || view.reason) && (
                 <Box
@@ -571,7 +582,9 @@ export default function RunDetailPage() {
         onClose={() => setDiagnosticsOpen(false)}
       />
 
-      <ToolApprovalDrawer runId={runId} live={live} />
+      <ErrorBoundary scope="drawer" resetKeys={[runId]}>
+        <ToolApprovalDrawer runId={runId} live={live} />
+      </ErrorBoundary>
     </Box>
   );
 }
