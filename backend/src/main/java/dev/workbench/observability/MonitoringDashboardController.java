@@ -22,12 +22,20 @@ public class MonitoringDashboardController {
     this.ownership = ownership;
   }
 
+  /**
+   * 全局或单任务监控看板。
+   *
+   * <p>不传 {@code taskId}/{@code runId} 时保持原全局行为；传入时按归属收敛到单任务或单次运行，越权一律 404，
+   * 绝不回退成全局数据。
+   */
   @GetMapping("/api/monitoring/dashboard")
   public MonitoringDashboard dashboard(
       @RequestParam(defaultValue = "7d") String range,
       @RequestParam(required = false) String status,
-      @RequestParam(required = false) String model) {
-    return dashboard.dashboard(range, status, model);
+      @RequestParam(required = false) String model,
+      @RequestParam(required = false) String taskId,
+      @RequestParam(required = false) String runId) {
+    return dashboard.dashboard(range, status, model, taskId, runId);
   }
 
   @GetMapping("/api/monitoring/runs/{runId}/diagnostics")

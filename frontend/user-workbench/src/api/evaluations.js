@@ -28,10 +28,12 @@ export const evaluationApi = {
   datasetBatches: () => get('/evaluation-datasets/batches'),
   datasetBatch: id => get(`/evaluation-datasets/batches/${id}`),
   monitoring: () => get('/monitoring'),
-  monitoringDashboard: ({ range = '7d', status, model } = {}) => {
+  monitoringDashboard: ({ range = '7d', status, model, taskId, runId } = {}) => {
     const params = new URLSearchParams({ range });
     if (status) params.set('status', status);
     if (model) params.set('model', model);
+    if (taskId) params.set('taskId', taskId);
+    if (runId) params.set('runId', runId);
     return get(`/monitoring/dashboard?${params.toString()}`);
   },
   runDiagnostics: runId => get(`/monitoring/runs/${encodeURIComponent(runId)}/diagnostics`),

@@ -3,6 +3,7 @@ package dev.workbench.persistence.repository;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -86,8 +87,60 @@ public class MonitoringDashboardRepository {
         (String) row[10]);
   }
 
-  public List<ModelCallRow> modelCalls(List<String> runIds) {
-    if (runIds == null || runIds.isEmpty()) return List.of();
+  /**
+   * 任务筛选选项：可读任务的目标、最新一轮状态、最近活跃时间与运行总数。
+   *
+   * <p>只看任务与运行元数据，不读取任何提示词、模型输出或文件正文；按最近活跃排序并有硬上限，供监控页筛选下拉直接消费。
+   */
+  public List<TaskOptionRow> taskOptions(List<String> taskIds, int limit) {
+    if (taskIds == null || taskIds.isEmpty()) return List.of();
+    List<Object[]> rows =
+        sessions
+            .createQuery(
+                """
+                select t.id, t.goal, r.status, r.createdAt
+                from TaskEntity t
+                left join RunEntity r on r.taskId = t.id and not exists (
+                  select 1 from RunEntity newer where newer.taskId = r.taskId
+                    and (newer.createdAt > r.createdAt
+                      or (newer.createdAt = r.createdAt and newer.id > r.id)))
+                where t.id in :taskIds
+                """,
+                Object[].class)
+            .setParameter("taskIds", taskIds)
+            .getResultList();
+    Map<String, Long> counts = new java.util.LinkedHashMap<>();
+    for (Object[] row :
+        sessions
+            .createQuery(
+                "select r.taskId, count(r) from RunEntity r where r.taskId in :taskIds"
+                    + " group by r.taskId",
+                Object[].class)
+            .setParameter("taskIds", taskIds)
+            .getResultList())
+      counts.put((String) row[0], number(row[1]));
+    return rows.stream()
+        .map(
+            row ->
+                new TaskOptionRow(
+                    (String) row[0],
+                    (String) row[1],
+                    (String) row[2],
+                    (String) row[3],
+                    counts.getOrDefault((String) row[0], 0L)))
+        .sorted(
+            java.util.Comparator.comparing(
+                TaskOptionRow::latestAt,
+                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+        .limit(Math.max(1, limit))
+        .toList();
+  }
+
+  /** 任务筛选选项的原始投影；latestAt 只用于排序，不下发给前端。 */
+  public record TaskOptionRow(
+      String taskId, String goal, String latestStatus, String latestAt, long runCount) {}
+
+  public List<ModelCallRow> modelCalls(List<String> runIds) {    if (runIds == null || runIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
             .createQuery(

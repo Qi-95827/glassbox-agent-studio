@@ -140,6 +140,95 @@ class MonitoringDashboardServiceTest {
   }
 
   @Test
+  void taskScopedDashboardConvergesEveryBlockToTheSameFilteredRuns() {
+    String now = Instant.now().toString();
+    String earlier = Instant.parse(now).minusSeconds(120).toString();
+    task("task-a", "实现单文件番茄钟", now);
+    task("task-b", "教学剧本 3：ToolGateway 限额与安检演示", now);
+    // task-a 两轮迭代 + task-b 一条运行：单任务视图只能看到 task-a 的两轮。
+    run("run-a1", "task-a", "COMPLETED", 1000, null, earlier);
+    run("run-a2", "task-a", "COMPLETED", 3000, null, now);
+    run("run-b1", "task-b", "BLOCKED", 2000, "PATH_REJECTED", now);
+    node("node-a1", "run-a1", "ANALYST", "COMPLETED", "agent-a1", earlier, earlier);
+    node("node-a2", "run-a2", "CODER", "COMPLETED", "agent-a2", earlier, now);
+    node("node-b1", "run-b1", "CODER", "FAILED", "agent-b1", earlier, now);
+    model("m-a1", "run-a1", "agent-a1", "mock", "COMPLETED", 10, 5, 100, null, earlier);
+    model("m-a2", "run-a2", "agent-a2", "mock", "COMPLETED", 20, 8, 120, null, now);
+    model("m-b1", "run-b1", "agent-b1", "deepseek-flash", "FAILED", 8, 2, 300, "429", now);
+    tool("t-a2", "run-a2", "agent-a2", "WORKSPACE_WRITE", "COMPLETED", null, 20, now);
+    tool("t-b1", "run-b1", "agent-b1", "WORKSPACE_WRITE", "FAILED", "工具输入不符合约束", 20, now);
+
+    var scoped = dashboard.dashboard("7d", null, null, "task-a", null);
+
+    assertEquals("task-a", scoped.selectedTaskId());
+    assertEquals("实现单文件番茄钟", scoped.selectedTaskGoal());
+    assertEquals(2, scoped.summary().totalRuns());
+    assertEquals(2, scoped.summary().completedRuns());
+    assertEquals(0, scoped.summary().failedRuns());
+    assertEquals(2, scoped.summary().totalModelCalls());
+    assertEquals(30, scoped.summary().totalInputTokens());
+    assertEquals(1, scoped.summary().totalToolCalls());
+    assertEquals(2, scoped.rankings().recentRuns().size());
+    assertTrue(
+        scoped.rankings().recentRuns().stream().allMatch(run -> "task-a".equals(run.taskId())));
+    assertEquals(
+        1, scoped.distributions().modelBreakdown().size(), "圆环只应包含该任务的模型");
+    assertEquals("mock", scoped.distributions().modelBreakdown().getFirst().model());
+    assertEquals(1, scoped.distributions().toolBreakdown().size());
+    assertEquals(2, scoped.distributions().taskStatusBreakdown().stream()
+        .mapToLong(slice -> slice.count())
+        .sum());
+    assertTrue(
+        scoped.timeSeries().stream().mapToLong(point -> point.runCount()).sum() >= 2,
+        "时序图必须与同一份过滤后的运行集合一致");
+    // 筛选下拉仍然列出全部可读任务，便于一键切回。
+    assertEquals(2, scoped.taskOptions().size());
+    assertEquals(null, dashboard.dashboard("7d", null, null).selectedTaskId());
+  }
+
+  @Test
+  void runIdScopesToExactlyOneRunAndRejectsCrossTaskCombinations() {
+    String now = Instant.now().toString();
+    task("task-a", "实现单文件番茄钟", now);
+    task("task-b", "教学剧本 3：ToolGateway 限额与安检演示", now);
+    run("run-a1", "task-a", "COMPLETED", 1000, null, now);
+    run("run-a2", "task-a", "COMPLETED", 2000, null, now);
+    run("run-b1", "task-b", "BLOCKED", 2000, "PATH_REJECTED", now);
+
+    var one = dashboard.dashboard("all", null, null, "task-a", "run-a2");
+    assertEquals(1, one.summary().totalRuns());
+    assertEquals("run-a2", one.rankings().recentRuns().getFirst().runId());
+    assertEquals("task-a", one.selectedTaskId());
+
+    // 任务与运行不匹配、任务不可读：一律 404，绝不回退全局。
+    assertThrows(
+        org.springframework.dao.EmptyResultDataAccessException.class,
+        () -> dashboard.dashboard("all", null, null, "task-a", "run-b1"));
+    assertThrows(
+        org.springframework.dao.EmptyResultDataAccessException.class,
+        () -> dashboard.dashboard("all", null, null, "task-missing", null));
+  }
+
+  @Test
+  void taskScopeCombinesWithRangeStatusAndModelFilters() {
+    String now = Instant.now().toString();
+    String old = Instant.parse(now).minusSeconds(60 * 60 * 24 * 40L).toString();
+    task("task-a", "实现单文件番茄钟", now);
+    run("run-a1", "task-a", "COMPLETED", 1000, null, now);
+    run("run-a2", "task-a", "FAILED", 2000, null, old);
+    model("m-a1", "run-a1", "agent-a1", "mock", "COMPLETED", 10, 5, 100, null, now);
+    model("m-a2", "run-a2", "agent-a2", "deepseek-flash", "FAILED", 4, 1, 200, "429", old);
+
+    var combined = dashboard.dashboard("7d", "COMPLETED", "mock", "task-a", null);
+    assertEquals(1, combined.summary().totalRuns());
+    assertEquals("run-a1", combined.rankings().recentRuns().getFirst().runId());
+
+    var allRange = dashboard.dashboard("all", null, null, "task-a", null);
+    assertEquals(2, allRange.summary().totalRuns());
+    assertEquals(1, allRange.summary().failedRuns());
+  }
+
+  @Test
   void diagnosticsLocatesGatewayDenyAndReportsFiveSteps() {
     String now = Instant.now().toString();
     task("task-b", "教学剧本 3：ToolGateway 限额与安检演示", now);

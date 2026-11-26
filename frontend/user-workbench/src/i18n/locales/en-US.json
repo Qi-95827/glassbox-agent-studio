@@ -1823,5 +1823,14 @@
   "run.round.compareHint": "Round {from} → round {to}",
   "run.round.base": "Round {round} · {id}",
   "run.round.noPrevious": "This is the first round, so there is nothing to compare against yet.",
-  "home.iterationRounds": "{count} rounds so far"
+  "home.iterationRounds": "{count} rounds so far",
+  "monitoring.taskFilter.label": "Filter by task",
+  "monitoring.taskFilter.placeholder": "Search a goal or task id",
+  "monitoring.taskFilter.runCount": "{count} rounds",
+  "monitoring.taskFilter.focus": "Focus this task",
+  "monitoring.taskFilter.clear": "Back to all tasks",
+  "monitoring.taskFilter.focusedTitle": "Single-task monitoring focus",
+  "monitoring.taskFilter.focusedMeta": "Task #{id} · latest status {status} · {rounds} rounds · {runs} runs in view",
+  "monitoring.taskFilter.thisTask": "View task monitoring",
+  "monitoring.taskFilter.noTask": "This run has no linked task yet, so task monitoring cannot be opened."
 }

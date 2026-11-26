@@ -14,15 +14,20 @@ import {
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { traceExportUrl, runsApiExtras } from '../../api/traceExport';
 import { useI18n } from '../../i18n/I18nProvider';
+import { useAuth } from '../auth/AuthGate';
 
 /**
  * 运行的开放出口：导出标准 Trace，或把这次运行脱敏沉淀成评测用例。
  *
  * <p>导出走浏览器原生下载，服务端只读不写；沉淀必须先看预览——预览里的内容就是将要写进数据集的
  * 全部内容，不会再多带一份原始回复或文件内容。
+ *
+ * <p>「查看任务监控」只对管理员显示：/api/monitoring 在服务端是管理员专属接口，普通用户即便点了也只会
+ * 拿到 403，因此这里按角色隐藏而不是让用户先撞一次墙。
  */
-export default function RunTraceActions({ runId, onOpenEvalLab }) {
+export default function RunTraceActions({ runId, taskId, onOpenEvalLab, onOpenMonitoring }) {
   const { t } = useI18n();
+  const isAdmin = useAuth()?.user?.role === 'ADMIN';
   const [previewOpen, setPreviewOpen] = useState(false);
   const [exported, setExported] = useState(null);
   const [error, setError] = useState('');
@@ -76,6 +81,18 @@ export default function RunTraceActions({ runId, onOpenEvalLab }) {
         >
           {t('traceOpen.distill')}
         </Button>
+        {isAdmin && (
+          <Button
+            size="small"
+            variant="outlined"
+            data-testid="open-task-monitoring"
+            disabled={!taskId}
+            title={taskId ? undefined : t('monitoring.taskFilter.noTask')}
+            onClick={() => onOpenMonitoring?.(taskId)}
+          >
+            {t('monitoring.taskFilter.thisTask')}
+          </Button>
+        )}
         {exported && (
           <Typography variant="caption" color="success.main">
             {t('traceOpen.exported', { code: exported.datasetCode })}

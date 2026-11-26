@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -19,6 +20,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
@@ -30,8 +32,9 @@ import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import TokenRounded from '@mui/icons-material/TokenRounded';
 import VerifiedUserOutlined from '@mui/icons-material/VerifiedUserOutlined';
 import InsightsRounded from '@mui/icons-material/InsightsRounded';
+import FilterAltOffRounded from '@mui/icons-material/FilterAltOffRounded';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMonitoringAlerts, useMonitoringDashboard } from '../../hooks/useEvaluations';
 import { evaluationApi } from '../../api/evaluations';
 import { statusLabel, toolNameLabel, modelLabel } from '../../constants/labels';
@@ -104,6 +107,7 @@ function rateText(value) {
 export default function MonitoringPanel() {
   const { t, locale } = useI18n();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [range, setRange] = useState('7d');
   const [statusFilter, setStatusFilter] = useState('');
   const [modelFilter, setModelFilter] = useState('');
@@ -112,11 +116,21 @@ export default function MonitoringPanel() {
   const [donutMode, setDonutMode] = useState('taskStatus');
   const [anomaliesOnly, setAnomaliesOnly] = useState(false);
   const [diagnosticsRunId, setDiagnosticsRunId] = useState(null);
+  // 任务筛选以 URL 为唯一真相：刷新页面或分享链接都不丢筛选状态。
+  const selectedTaskId = searchParams.get('taskId') || '';
+
+  const selectTask = taskId => {
+    const next = new URLSearchParams(searchParams);
+    if (taskId) next.set('taskId', taskId);
+    else next.delete('taskId');
+    setSearchParams(next, { replace: true });
+  };
 
   const dashboard = useMonitoringDashboard({
     range,
     status: statusFilter || undefined,
     model: modelFilter || undefined,
+    taskId: selectedTaskId || undefined,
     autoRefresh
   });
   const alerts = useMonitoringAlerts(autoRefresh);
@@ -135,6 +149,16 @@ export default function MonitoringPanel() {
     [anomaliesOnly, recentRuns]
   );
   const modelOptions = data?.distributions?.modelBreakdown ?? [];
+  const taskOptions = useMemo(() => data?.taskOptions ?? [], [data]);
+  const selectedTaskOption = useMemo(
+    () => taskOptions.find(option => option.taskId === selectedTaskId) ?? null,
+    [selectedTaskId, taskOptions]
+  );
+  const focusTask = taskId => {
+    selectTask(taskId);
+    const top = typeof document === 'undefined' ? null : document.getElementById('monitoring-top');
+    if (top?.scrollIntoView) top.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const donutSlices = useMemo(() => {
     if (!data) return [];
@@ -188,7 +212,7 @@ export default function MonitoringPanel() {
   };
 
   return (
-    <Stack spacing={2}>
+    <Stack spacing={2} id="monitoring-top" data-testid="monitoring-panel">
       <Box
         sx={{
           bgcolor: '#FFFFFF',
@@ -253,6 +277,44 @@ export default function MonitoringPanel() {
               ))}
             </Select>
           </FormControl>
+
+          <Autocomplete
+            size="small"
+            data-testid="monitoring-task-filter"
+            sx={{ minWidth: 250, maxWidth: 340 }}
+            options={taskOptions}
+            value={selectedTaskOption}
+            onChange={(_, option) => selectTask(option?.taskId ?? '')}
+            getOptionLabel={option => option?.goal || option?.taskId || ''}
+            isOptionEqualToValue={(option, value) => option.taskId === value.taskId}
+            filterOptions={(options, state) => {
+              const query = state.inputValue.trim().toLowerCase();
+              if (!query) return options;
+              return options.filter(option =>
+                `${option.goal ?? ''} ${option.taskId}`.toLowerCase().includes(query)
+              );
+            }}
+            renderOption={(props, option) => (
+              <li {...props} key={option.taskId}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" noWrap>
+                    {oneLine(option.goal || option.taskId, 44)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {statusLabel(option.latestStatus, locale)} ·{' '}
+                    {t('monitoring.taskFilter.runCount', { count: option.runCount })}
+                  </Typography>
+                </Box>
+              </li>
+            )}
+            renderInput={params => (
+              <TextField
+                {...params}
+                label={t('monitoring.taskFilter.label')}
+                placeholder={t('monitoring.taskFilter.placeholder')}
+              />
+            )}
+          />
         </Stack>
 
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
@@ -294,6 +356,43 @@ export default function MonitoringPanel() {
       {dashboard.isError && (
         <Alert severity="error">
           {t('monitoring.loadFailed', { message: dashboard.error.message })}
+        </Alert>
+      )}
+
+      {selectedTaskId && (
+        <Alert
+          severity="info"
+          data-testid="monitoring-focus-banner"
+          icon={<InsightsRounded fontSize="small" />}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              data-testid="monitoring-focus-clear"
+              startIcon={<FilterAltOffRounded fontSize="small" />}
+              onClick={() => selectTask('')}
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              {t('monitoring.taskFilter.clear')}
+            </Button>
+          }
+        >
+          <Typography sx={{ fontSize: 14, fontWeight: 600 }}>
+            {t('monitoring.taskFilter.focusedTitle')}
+          </Typography>
+          <Typography variant="body2">
+            {oneLine(data?.selectedTaskGoal || selectedTaskOption?.goal || selectedTaskId, 120)}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {t('monitoring.taskFilter.focusedMeta', {
+              runs: summary?.totalRuns ?? 0,
+              rounds: selectedTaskOption?.runCount ?? 0,
+              status: selectedTaskOption?.latestStatus
+                ? statusLabel(selectedTaskOption.latestStatus, locale)
+                : t('common.unknown'),
+              id: shortId(selectedTaskId)
+            })}
+          </Typography>
         </Alert>
       )}
 
@@ -620,6 +719,16 @@ export default function MonitoringPanel() {
                         </TableCell>
                         <TableCell align="right">
                           <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
+                            <Button
+                              size="small"
+                              variant="text"
+                              data-testid={`focus-task-${run.runId}`}
+                              disabled={Boolean(run.taskId) && run.taskId === selectedTaskId}
+                              onClick={() => focusTask(run.taskId)}
+                              sx={{ minHeight: 28, fontSize: 12 }}
+                            >
+                              {t('monitoring.taskFilter.focus')}
+                            </Button>
                             <Button
                               size="small"
                               variant="contained"

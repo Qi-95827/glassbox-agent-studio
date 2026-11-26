@@ -3,7 +3,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import RunTraceActions from './RunTraceActions';
 import { runsApiExtras } from '../../api/traceExport';
+import { useAuth } from '../auth/AuthGate';
 import { setModuleLocale } from '../../i18n';
+
+vi.mock('../auth/AuthGate', () => ({ useAuth: vi.fn() }));
 
 const preview = {
   datasetId: 'ds-1',
@@ -32,6 +35,7 @@ const renderActions = props => {
 describe('RunTraceActions', () => {
   beforeEach(() => {
     setModuleLocale('zh-CN');
+    useAuth.mockReturnValue({ user: { role: 'USER' } });
     vi.spyOn(runsApiExtras, 'evalCasePreview').mockResolvedValue(preview);
     vi.spyOn(runsApiExtras, 'exportEvalCase').mockResolvedValue({
       datasetId: 'ds-1',
@@ -85,5 +89,19 @@ describe('RunTraceActions', () => {
     await screen.findByText('把排序网页做出来');
     fireEvent.click(screen.getByTestId('distill-eval-confirm'));
     expect(await screen.findByText('数据集写入失败')).toBeInTheDocument();
+  });
+
+  it('管理员可以从运行直达任务监控，并带上任务标识', () => {
+    useAuth.mockReturnValue({ user: { role: 'ADMIN' } });
+    const onOpenMonitoring = vi.fn();
+    renderActions({ taskId: 'task-1', onOpenMonitoring });
+    fireEvent.click(screen.getByTestId('open-task-monitoring'));
+    expect(onOpenMonitoring).toHaveBeenCalledWith('task-1');
+  });
+
+  it('普通用户看不到任务监控入口，避免点出 403', () => {
+    useAuth.mockReturnValue({ user: { role: 'USER' } });
+    renderActions({ taskId: 'task-1' });
+    expect(screen.queryByTestId('open-task-monitoring')).not.toBeInTheDocument();
   });
 });

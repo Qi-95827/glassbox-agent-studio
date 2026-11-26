@@ -15,7 +15,13 @@ public record MonitoringDashboard(
     Summary summary,
     List<TimeSeriesPoint> timeSeries,
     Distributions distributions,
-    Rankings rankings) {
+    Rankings rankings,
+    String selectedTaskId,
+    String selectedTaskGoal,
+    List<TaskOption> taskOptions) {
+
+  /** 当前账号可读任务的筛选选项；按最近活跃排序，不包含任何敏感正文。 */
+  public record TaskOption(String taskId, String goal, String latestStatus, long runCount) {}
 
   /** 顶部 KPI 概览。 */
   public record Summary(
@@ -71,8 +77,10 @@ public record MonitoringDashboard(
       List<SlowNode> slowestNodes,
       List<HighTokenRun> highTokenRuns) {}
 
+  /** 明细行带上任务标识，供「聚焦此任务」直接收敛到单任务视图。 */
   public record RecentRun(
       String runId,
+      String taskId,
       String taskTitle,
       String taskStatus,
       String runStatus,

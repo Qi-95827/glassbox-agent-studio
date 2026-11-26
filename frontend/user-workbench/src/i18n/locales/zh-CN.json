@@ -1823,5 +1823,14 @@
   "run.round.compareHint": "第 {from} 轮 → 第 {to} 轮",
   "run.round.base": "第 {round} 轮 · {id}",
   "run.round.noPrevious": "这是第一轮，还没有可对照的上一轮。",
-  "home.iterationRounds": "已迭代 {count} 轮"
+  "home.iterationRounds": "已迭代 {count} 轮",
+  "monitoring.taskFilter.label": "按任务筛选",
+  "monitoring.taskFilter.placeholder": "搜索任务目标或编号",
+  "monitoring.taskFilter.runCount": "{count} 轮",
+  "monitoring.taskFilter.focus": "聚焦此任务",
+  "monitoring.taskFilter.clear": "返回全部任务",
+  "monitoring.taskFilter.focusedTitle": "单任务监控聚焦",
+  "monitoring.taskFilter.focusedMeta": "任务 #{id} · 最新状态 {status} · 共 {rounds} 轮 · 当前视图 {runs} 条运行",
+  "monitoring.taskFilter.thisTask": "查看任务监控",
+  "monitoring.taskFilter.noTask": "当前运行还没有关联任务，无法打开任务监控。"
 }

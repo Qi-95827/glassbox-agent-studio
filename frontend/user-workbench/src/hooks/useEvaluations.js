@@ -33,10 +33,16 @@ export function useMonitoring(enabled = true) {
   });
 }
 
-export function useMonitoringDashboard({ range = '7d', status, model, autoRefresh = true } = {}) {
+export function useMonitoringDashboard({
+  range = '7d',
+  status,
+  model,
+  taskId,
+  autoRefresh = true
+} = {}) {
   return useQuery({
-    queryKey: ['monitoring-dashboard', range, status ?? null, model ?? null],
-    queryFn: () => evaluationApi.monitoringDashboard({ range, status, model }),
+    queryKey: ['monitoring-dashboard', range, status ?? null, model ?? null, taskId ?? null],
+    queryFn: () => evaluationApi.monitoringDashboard({ range, status, model, taskId }),
     refetchInterval: autoRefresh ? 30000 : false
   });
 }

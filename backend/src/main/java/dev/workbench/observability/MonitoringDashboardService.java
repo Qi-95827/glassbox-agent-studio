@@ -44,6 +44,9 @@ public class MonitoringDashboardService {
   private final OwnershipService ownership;
   private final ObjectMapper json;
 
+  /** 任务筛选下拉的硬上限：只用于筛选，不承担全量任务列表。 */
+  private static final int MAX_TASK_OPTIONS = 200;
+
   public MonitoringDashboardService(
       MonitoringDashboardRepository repository, OwnershipService ownership, ObjectMapper json) {
     this.repository = repository;
@@ -51,17 +54,58 @@ public class MonitoringDashboardService {
     this.json = json;
   }
 
+  /** 兼容原全局看板：不传任务/运行时行为与历史完全一致。 */
   @Transactional(readOnly = true)
   public MonitoringDashboard dashboard(String range, String status, String model) {
+    return dashboard(range, status, model, null, null);
+  }
+
+  /**
+   * 全局或单任务监控看板。
+   *
+   * <p>任务的收敛口径只有一份：{@code taskId} 传入时先核对它确实位于当前账号可读任务集合中，越权或不存在直接 404，
+   * 绝不回退成全局数据；{@code runId} 再在同一范围内精确过滤一条运行。KPI、趋势、分布与排行全部基于过滤后的同一份
+   * runs 集合计算，不存在口径漂移。
+   */
+  @Transactional(readOnly = true)
+  public MonitoringDashboard dashboard(
+      String range, String status, String model, String taskId, String runId) {
     String normalized = normalizeRange(range);
     String statusFilter = blankToNull(status);
     String modelFilter = blankToNull(model);
+    String scopedTaskId = blankToNull(taskId);
+    String scopedRunId = blankToNull(runId);
     Instant now = Instant.now();
     Instant from = rangeStart(normalized, now);
-    var taskIds = ownership.readableTaskIds();
-    if (taskIds.isEmpty()) return empty(normalized);
+    var readable = ownership.readableTaskIds();
+    var taskOptions = taskOptions(readable);
+    if (scopedTaskId != null && !readable.contains(scopedTaskId))
+      throw new org.springframework.dao.EmptyResultDataAccessException(1);
+    String scopedGoal = null;
+    for (var option : taskOptions)
+      if (option.taskId().equals(scopedTaskId)) scopedGoal = option.goal();
+    if (scopedRunId != null) {
+      // 运行归属先校验：跨账号运行一律 404，且运行必须落在被筛选的任务内。
+      ownership.requireRun(scopedRunId);
+      String runTaskId = ownership.taskIdOfRun(scopedRunId);
+      if (scopedTaskId != null && !scopedTaskId.equals(runTaskId))
+        throw new org.springframework.dao.EmptyResultDataAccessException(1);
+      scopedTaskId = runTaskId;
+    }
+    if (scopedGoal == null && scopedTaskId != null)
+      for (var option : taskOptions)
+        if (option.taskId().equals(scopedTaskId)) scopedGoal = option.goal();
+
+    List<String> taskIds =
+        scopedTaskId == null ? readable : List.of(scopedTaskId);
+    if (taskIds.isEmpty())
+      return empty(normalized, scopedTaskId, scopedGoal, taskOptions);
 
     List<RunRow> runs = repository.runs(taskIds, from == null ? null : from.toString());
+    if (scopedRunId != null) {
+      String exact = scopedRunId;
+      runs = runs.stream().filter(run -> exact.equals(run.id())).toList();
+    }
     if (statusFilter != null) {
       String wanted = statusFilter.toUpperCase(Locale.ROOT);
       runs = runs.stream().filter(run -> wanted.equals(run.status())).toList();
@@ -81,12 +125,7 @@ public class MonitoringDashboardService {
       modelCalls =
           modelCalls.stream().filter(call -> filteredRunIds.contains(call.runId())).toList();
     }
-    if (runs.isEmpty()) {
-      MonitoringDashboard empty = empty(normalized);
-      return new MonitoringDashboard(
-          empty.range(), empty.generatedAt(), empty.summary(), List.of(), empty.distributions(),
-          empty.rankings());
-    }
+    if (runs.isEmpty()) return empty(normalized, scopedTaskId, scopedGoal, taskOptions);
 
     List<ToolCallRow> toolCalls = repository.toolCalls(runIds);
     List<NodeRow> nodes = repository.nodes(runIds);
@@ -111,7 +150,21 @@ public class MonitoringDashboardService {
         summary,
         timeSeries(normalized, runs, aggregates, now),
         distributions(runs, taskStatuses, modelCalls, toolCalls, nodes, gatewayScan),
-        rankings(runs, aggregates, nodesByRun, taskStatuses));
+        rankings(runs, aggregates, nodesByRun, taskStatuses),
+        scopedTaskId,
+        scopedGoal,
+        taskOptions);
+  }
+
+  /** 当前账号可读任务的筛选选项；按最近活跃排序并限制条数。 */
+  private List<MonitoringDashboard.TaskOption> taskOptions(List<String> readable) {
+    if (readable.isEmpty()) return List.of();
+    return repository.taskOptions(readable, MAX_TASK_OPTIONS).stream()
+        .map(
+            row ->
+                new MonitoringDashboard.TaskOption(
+                    row.taskId(), row.goal(), row.latestStatus(), row.runCount()))
+        .toList();
   }
 
   private MonitoringDashboard.Summary summary(
@@ -356,6 +409,7 @@ public class MonitoringDashboardService {
                   RunAggregate aggregate = aggregates.getOrDefault(run.id(), new RunAggregate());
                   return new MonitoringDashboard.RecentRun(
                       run.id(),
+                      run.taskId(),
                       run.taskGoal(),
                       taskStatuses.get(run.id()),
                       run.status(),
@@ -542,14 +596,21 @@ public class MonitoringDashboardService {
         TaskStatus.CANCELLED.name());
   }
 
-  private static MonitoringDashboard empty(String range) {
+  private static MonitoringDashboard empty(
+      String range,
+      String selectedTaskId,
+      String selectedTaskGoal,
+      List<MonitoringDashboard.TaskOption> taskOptions) {
     return new MonitoringDashboard(
         range,
         Instant.now(),
         new MonitoringDashboard.Summary(0, 0, 0, 0, 0, 0, 0, null, null, 0, 0, 0, null, 0, 0, 0),
         List.of(),
         new MonitoringDashboard.Distributions(List.of(), List.of(), List.of(), List.of()),
-        new MonitoringDashboard.Rankings(List.of(), List.of(), List.of()));
+        new MonitoringDashboard.Rankings(List.of(), List.of(), List.of()),
+        selectedTaskId,
+        selectedTaskGoal,
+        taskOptions);
   }
 
   private static String normalizeRange(String range) {
