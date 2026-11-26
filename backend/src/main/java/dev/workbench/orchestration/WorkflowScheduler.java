@@ -65,6 +65,7 @@ class WorkflowScheduler {
   private final boolean parallelAllPlans;
   private final ReflectionCoordinator reflection;
   private final WorkflowMemoryContext memoryContext;
+  private final dev.workbench.store.RunIterationRecordService iterations;
   private final dev.workbench.tool.ToolApprovalService approvals;
   private final org.springframework.context.ApplicationEventPublisher publisher;
 
@@ -94,6 +95,7 @@ class WorkflowScheduler {
       @Value("${workbench.orchestration.parallel-all-plans:false}") boolean parallelAllPlans,
       ReflectionCoordinator reflection,
       WorkflowMemoryContext memoryContext,
+      dev.workbench.store.RunIterationRecordService iterations,
       dev.workbench.tool.ToolApprovalService approvals,
       org.springframework.context.ApplicationEventPublisher publisher) {
     this.evidence = evidence;
@@ -119,6 +121,7 @@ class WorkflowScheduler {
     this.parallelAllPlans = parallelAllPlans;
     this.reflection = java.util.Objects.requireNonNull(reflection, "反思协调器不能为空");
     this.memoryContext = java.util.Objects.requireNonNull(memoryContext, "项目记忆上下文组件不能为空");
+    this.iterations = iterations;
     this.approvals = approvals;
     this.publisher = publisher;
   }
@@ -563,6 +566,8 @@ class WorkflowScheduler {
     String criticFeedback = reflection.criticFeedback(runId, node.id());
     // 动态工作流此前完全忽略 memoryEnabled；这里与静态运行入口对齐，按混合评分召回并落库引用。
     String memorySection = memoryContext.load(task, runId);
+    // 同任务迭代：本轮调改要求与上一轮交付摘要必须进入节点提示词，否则第二轮仍会重复首轮行为。
+    String iterationSection = iterationSection(runId);
     var input =
         new StepInput(
             task.goal(),
@@ -576,7 +581,9 @@ class WorkflowScheduler {
             attempt.attemptNumber(),
             attempt.revisionIndex(),
             criticFeedback,
-            memorySection);
+            memorySection,
+            spec == null ? List.of() : spec.acceptanceCriteria(),
+            iterationSection);
     String id = attempt.agentId();
     var request =
         new AgentExecutionRequest(
@@ -658,6 +665,28 @@ class WorkflowScheduler {
     return text.length() <= max ? text : text.substring(0, max - 1) + "…";
   }
 
+  /**
+   * 本轮迭代的上下文段落。
+   *
+   * <p>只有当前运行确实由调改迭代创建时才追加；首轮运行返回 {@code null}，提示词结构与历史完全一致。
+   */
+  private String iterationSection(String runId) {
+    if (iterations == null) return null;
+    return iterations
+        .note(runId)
+        .map(
+            note ->
+                "同任务第 "
+                    + note.roundIndex()
+                    + " 轮调改要求（用户在上轮交付后提出，必须逐条满足）："
+                    + note.feedback()
+                    + (note.targetNodeKey() == null ? "" : "\n本轮重点修订节点：" + note.targetNodeKey())
+                    + (note.previousSummary() == null
+                        ? ""
+                        : "\n上一轮交付结论摘要（只作为背景，不能当作已通过验证）：" + note.previousSummary()))
+        .orElse(null);
+  }
+
   private static AgentInput stepInput(
       String runId,
       TaskDefinition task,
@@ -685,6 +714,7 @@ class WorkflowScheduler {
     return new AgentInput(runId, text, sources);
   }
 
+  /** 节点输入：任务契约、节点规格验收条件与本轮迭代要求分开列出，避免把未验证内容当作已通过。 */
   private record StepInput(
       String goal,
       String step,
@@ -697,5 +727,7 @@ class WorkflowScheduler {
       int attemptNumber,
       int revisionIndex,
       String criticFeedback,
-      String memoryContext) {}
+      String memoryContext,
+      List<String> nodeAcceptanceCriteria,
+      String iterationRequirement) {}
 }

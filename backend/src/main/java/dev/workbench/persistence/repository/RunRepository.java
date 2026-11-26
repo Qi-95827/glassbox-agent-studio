@@ -349,4 +349,12 @@ public interface RunRepository extends JpaRepository<RunEntity, String> {
       @Param("taskIds") List<String> taskIds,
       @Param("running") String running,
       @Param("completed") String completed);
+
+  /** 按任务聚合运行总数：单任务多轮迭代时一次查完，避免任务列表出现 N+1 查询。 */
+  @Query(
+      """
+      select new dev.workbench.persistence.repository.TaskRunCount(r.taskId, count(r))
+      from RunEntity r where r.taskId in :taskIds group by r.taskId
+      """)
+  List<TaskRunCount> countByTaskIds(@Param("taskIds") java.util.Collection<String> taskIds);
 }

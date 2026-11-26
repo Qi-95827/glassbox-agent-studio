@@ -21,6 +21,7 @@ export function normalizeTask(row) {
     archived: Boolean(row.ARCHIVED_AT),
     archivedAt: row.ARCHIVED_AT,
     version: row.VERSION,
+    runCount: Number(row.RUN_COUNT ?? 1),
     fileScopes: parseFileScopes(row)
   };
 }

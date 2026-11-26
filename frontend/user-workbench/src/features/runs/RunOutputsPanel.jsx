@@ -25,6 +25,7 @@ import MarkdownView from '../../components/MarkdownView';
 import { Readout, TraceSection } from '../../components/WorkbenchDialog';
 import { useRunDelivery } from '../../hooks/useRunExecution';
 import { runsApi, reportUrl } from '../../api/runs';
+import RunIterationCard from './RunIterationCard';
 import { useToast } from '../../components/ToastProvider';
 import { checkStatusLabel, planRoleLabel, statusLabel } from '../../constants/labels';
 import { oneLine, parseJson, shortId } from '../../utils/format';
@@ -160,7 +161,14 @@ function FileRow({ file, runId, onPreview }) {
 }
 
 /** 交付说明：结论、文件、核对情况与 Git 交付入口。 */
-export default function RunOutputsPanel({ detail, runId, workspaceId }) {
+export default function RunOutputsPanel({
+  detail,
+  runId,
+  workspaceId,
+  taskId,
+  roundIndex,
+  onIterateStarted
+}) {
   const { t, locale } = useI18n();
   const delivery = useRunDelivery(runId);
   const [preview, setPreview] = useState(null);
@@ -260,6 +268,13 @@ export default function RunOutputsPanel({ detail, runId, workspaceId }) {
             ))}
           </Alert>
         )}
+
+        <RunIterationCard
+          run={run}
+          taskId={taskId ?? task?.ID}
+          roundIndex={roundIndex}
+          onStarted={onIterateStarted}
+        />
 
         <Box
           sx={{

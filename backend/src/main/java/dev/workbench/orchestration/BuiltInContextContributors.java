@@ -68,6 +68,27 @@ public class BuiltInContextContributors {
   }
 
   @Bean
+  public AgentContextContributor iterationContext(
+      dev.workbench.store.RunIterationRecordService iterations) {
+    return contributor(
+        "run-iteration",
+        15,
+        input -> {
+          var note = iterations.note(input.runId()).orElse(null);
+          if (note == null) return new AgentInput("", List.of());
+          String text =
+              "同任务第 "
+                  + note.roundIndex()
+                  + " 轮调改要求（用户在上轮交付后提出，必须逐条满足）："
+                  + note.feedback();
+          if (note.targetNodeKey() != null) text += "\n本轮重点修订节点：" + note.targetNodeKey();
+          if (note.previousSummary() != null)
+            text += "\n上一轮交付结论摘要（只作为背景，不能当作已通过验证）：" + note.previousSummary();
+          return new AgentInput(text, List.of());
+        });
+  }
+
+  @Bean
   public AgentContextContributor projectMemoryContext(
       ObjectMapper json,
       MemoryService memories,

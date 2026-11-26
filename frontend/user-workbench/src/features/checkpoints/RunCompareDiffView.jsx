@@ -29,13 +29,23 @@ function MetricRow({ label, base, target }) {
  * 行级对比，因此「哪个节点的话变了」可以直接看出来。文件内容不按版本留存，所以这里只对照声明写入
  * 范围，并把这条限制显式写出来。
  */
-export default function RunCompareDiffView({ runId, candidates = [], onOpenRun }) {
+export default function RunCompareDiffView({
+  runId,
+  candidates = [],
+  initialOtherRunId,
+  onOpenRun
+}) {
   const { t } = useI18n();
   const [otherRunId, setOtherRunId] = useState('');
 
   useEffect(() => {
+    // 轮次切换条会指定「上一轮」；只有它确实在候选里时才作为初始选中项。
+    if (initialOtherRunId && candidates.some(candidate => candidate.runId === initialOtherRunId)) {
+      setOtherRunId(initialOtherRunId);
+      return;
+    }
     if (!otherRunId && candidates.length) setOtherRunId(candidates[0].runId);
-  }, [candidates, otherRunId]);
+  }, [candidates, initialOtherRunId, otherRunId]);
 
   const diff = useQuery({
     queryKey: ['run-diff', runId, otherRunId],

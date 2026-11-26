@@ -467,6 +467,43 @@ public class PlanService implements dev.workbench.framework.workflow.plan.PlanOp
   }
 
   /**
+   * 由已保存的动态计划与节点重建等价模板。
+   *
+   * <p>同任务迭代要让下一轮沿用上一轮那张受控图，而不是退回旧固定计划；模板标识、版本、授权边界与尝试上限全部 取自源计划本身，节点顺序与依赖按节点键还原。
+   */
+  public WorkflowTemplate templateOf(String runId) {
+    WorkflowPlan plan = workflowPlan(runId);
+    if (plan == null) throw new IllegalStateException("源运行没有动态计划，不能重建模板。");
+    var nodes = find(runId);
+    if (nodes.isEmpty()) throw new IllegalStateException("源运行没有可复制的计划节点，不能重建模板。");
+    var keys = new java.util.LinkedHashMap<UUID, String>();
+    for (var node : nodes) keys.put(node.id(), node.key());
+    return new WorkflowTemplate(
+        plan.templateId(),
+        plan.templateVersion(),
+        plan.scope(),
+        plan.maxAttempts(),
+        nodes.stream()
+            .map(
+                node ->
+                    node.systemCheck()
+                        ? WorkflowTemplate.Step.systemCheck(
+                            node.key(),
+                            node.label(),
+                            node.phase(),
+                            node.checkRef(),
+                            node.dependencyIds().stream().map(keys::get).sorted().toList())
+                        : new WorkflowTemplate.Step(
+                            node.key(),
+                            node.label(),
+                            node.phase(),
+                            node.definitionRef(),
+                            node.dependencyIds().stream().map(keys::get).sorted().toList(),
+                            node.budget()))
+            .toList());
+  }
+
+  /**
    * 执行节点前读取规格，并按任务当前授权复核读写范围。
    *
    * <p>历史模板计划没有规格时返回 {@code null}，继续使用任务级文件范围。

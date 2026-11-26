@@ -66,6 +66,8 @@ public enum EventType {
   RECOVERY_STARTED,
   /** 从历史运行的某个节点分叉出一条新的分支运行；源运行证据不变。 */
   FORK_STARTED,
+  /** 同一任务收到用户调改意见后开启下一轮运行；源运行证据不变。 */
+  RUN_ITERATION_STARTED,
   /** 本次任务装配用户确认的项目背景，不记录正文。 */
   MEMORY_LOADED,
   /** 开始受控测试。 */

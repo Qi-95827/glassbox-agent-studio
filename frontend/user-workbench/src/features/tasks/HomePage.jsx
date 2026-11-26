@@ -52,6 +52,11 @@ function RunRow({ task, t, locale }) {
             <Typography variant="caption" color="text.secondary">
               {entryKindLabel(task.entryKind, locale)}
             </Typography>
+            {Number(task.runCount) > 1 && (
+              <Typography variant="caption" color="primary">
+                {t('home.iterationRounds', { count: task.runCount })}
+              </Typography>
+            )}
             <Typography variant="caption" color="text.secondary">
               {timeAgo(task.createdAt, locale)}
             </Typography>

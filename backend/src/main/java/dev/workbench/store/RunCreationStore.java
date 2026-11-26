@@ -432,6 +432,65 @@ public class RunCreationStore {
         });
   }
 
+  /**
+   * 同任务迭代：在既有任务下新建一轮运行并物化复制来的候选图。
+   *
+   * <p>不创建任务行、不改写源运行；运行预算沿用源运行上限，保证新一轮与首轮共用同一套停机防线。
+   */
+  public void createIterationRunFromPlan(
+      String id,
+      String taskId,
+      String parentRunId,
+      CandidateRunPlan plan,
+      RunSnapshot source) {
+    createIterationRun(id, taskId, parentRunId, source, false, null, plan);
+  }
+
+  /** 同任务迭代：沿用源运行的动态模板重建一轮受控图；不再要求用户二次确认计划。 */
+  public void createIterationRunFromTemplate(
+      String id,
+      String taskId,
+      String parentRunId,
+      WorkflowTemplate template,
+      RunSnapshot source) {
+    createIterationRun(id, taskId, parentRunId, source, false, template, null);
+  }
+
+  /** 同任务迭代：源运行没有可选模板时，按任务既有固定计划执行路径创建同一 taskId 的新运行。 */
+  public void createIterationRunFromLegacyPlan(
+      String id, String taskId, String parentRunId, RunSnapshot source, boolean includeCoder) {
+    createIterationRun(id, taskId, parentRunId, source, includeCoder, null, null);
+  }
+
+  private void createIterationRun(
+      String id,
+      String taskId,
+      String parentRunId,
+      RunSnapshot source,
+      boolean includeCoder,
+      WorkflowTemplate workflow,
+      CandidateRunPlan plan) {
+    createRun(
+        id,
+        taskId,
+        parentRunId,
+        0,
+        0,
+        source.maxRounds(),
+        source.maxTools(),
+        source.maxPerTool(),
+        source.maxReportedTokens(),
+        source.maxIdenticalTools(),
+        source.maxSeconds(),
+        0,
+        includeCoder,
+        source.maxAgentRounds(),
+        source.maxAgentTools(),
+        workflow,
+        plan,
+        false);
+  }
+
   private void createRun(
       String id,
       String taskId,

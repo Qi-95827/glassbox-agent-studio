@@ -44,5 +44,7 @@ export const runsApi = {
   diff: (runId, otherRunId, options) => get(`/runs/${runId}/diff/${otherRunId}`, options),
   forks: (runId, options) => get(`/runs/${runId}/forks`, options),
   fork: (runId, payload) => post(`/runs/${runId}/forks`, payload),
+  iterate: (runId, payload) => post(`/runs/${runId}/iterate`, payload),
+  rounds: taskId => get(`/tasks/${encodeURIComponent(taskId)}/runs`),
   architectureXray: (runId, options) => get(`/runs/${runId}/architecture-xray`, options)
 };

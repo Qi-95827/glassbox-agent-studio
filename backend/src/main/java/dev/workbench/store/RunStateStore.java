@@ -72,6 +72,14 @@ public class RunStateStore {
     return runRows.findByTaskId(taskId).stream().map(RunData::apiFields).toList();
   }
 
+  /** 任务到运行总数的只读映射；单任务多轮迭代不再让任务列表重复裂行。 */
+  public Map<String, Long> runCounts(List<String> taskIds) {
+    if (taskIds == null || taskIds.isEmpty()) return Map.of();
+    var result = new java.util.LinkedHashMap<String, Long>();
+    for (var row : runRows.countByTaskIds(taskIds)) result.put(row.taskId(), row.runCount());
+    return Map.copyOf(result);
+  }
+
   public boolean hasRecovery(String parent) {
     return runRows.hasRecovery(parent);
   }

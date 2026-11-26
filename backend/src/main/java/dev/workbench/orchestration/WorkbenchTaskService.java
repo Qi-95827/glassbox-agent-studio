@@ -99,13 +99,23 @@ public class WorkbenchTaskService {
   }
 
   public List<Map<String, Object>> tasks() {
-    return tasks.tasks().stream()
-        .filter(
-            row -> {
-              Object id = row.get("ID");
-              return id instanceof String taskId && ownership.canReadTask(taskId);
-            })
-        .toList();
+    var rows =
+        tasks.tasks().stream()
+            .filter(
+                row -> {
+                  Object id = row.get("ID");
+                  return id instanceof String taskId && ownership.canReadTask(taskId);
+                })
+            .toList();
+    // 单任务多轮迭代：列表仍按任务去重（最新一轮由查询保证），这里补上总轮次供界面提示。
+    var counts =
+        runs.runCounts(
+            rows.stream().map(row -> String.valueOf(row.get("ID"))).toList());
+    for (var row : rows) {
+      long count = counts.getOrDefault(String.valueOf(row.get("ID")), 1L);
+      row.put("RUN_COUNT", count);
+    }
+    return rows;
   }
 
   @Transactional

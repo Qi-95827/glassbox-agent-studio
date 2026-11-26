@@ -23,6 +23,7 @@ import ExecutionTimelinePanel from '../checkpoints/ExecutionTimelinePanel';
 import CheckpointTimeTravelPanel from '../checkpoints/CheckpointTimeTravelPanel';
 import RunCompareDiffView from '../checkpoints/RunCompareDiffView';
 import RunTraceActions from './RunTraceActions';
+import RunRoundsBar from './RunRoundsBar';
 import EmptyState from '../../components/EmptyState';
 import ErrorBoundary from '../../components/ErrorBoundary';
 import { useToast } from '../../components/ToastProvider';
@@ -58,6 +59,7 @@ export default function RunDetailPage() {
   const [busyAction, setBusyAction] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [glassboxRequest, setGlassboxRequest] = useState(null);
+  const [compareTargetRunId, setCompareTargetRunId] = useState('');
   const consumedQueryRequest = useRef('');
   const inlineInspector = useMediaQuery('(min-width:1024px)');
   const requestedNodeId = searchParams.get('nodeId');
@@ -82,10 +84,33 @@ export default function RunDetailPage() {
     queryFn: () => runsApi.forks(runId),
     enabled: Boolean(runId)
   });
+  const taskId = detail?.task?.ID ?? view?.taskId ?? null;
+  // 同任务轮次：单任务多轮迭代时提供顶部切换与「与上一轮对照」入口。
+  const roundsQuery = useQuery({
+    queryKey: ['task-runs', taskId],
+    queryFn: () => runsApi.rounds(taskId),
+    enabled: Boolean(taskId)
+  });
+  // 保持引用稳定：轮次数组直接参与下方对照候选的 useMemo。
+  const rounds = useMemo(() => roundsQuery.data ?? [], [roundsQuery.data]);
+  const currentRound = rounds.find(item => item.runId === runId) ?? null;
   const forkCandidates = (forksQuery.data?.forks ?? []).map(item => ({
     runId: item.runId,
     label: item.sourceNodeKey ?? undefined
   }));
+  const compareCandidates = useMemo(() => {
+    const extra = rounds
+      .filter(round => round.runId !== runId)
+      .map(round => ({
+        runId: round.runId,
+        label: translate(locale, 'run.round.base', {
+          round: round.roundIndex,
+          id: shortId(round.runId)
+        })
+      }));
+    const known = new Set(extra.map(item => item.runId));
+    return [...extra, ...forkCandidates.filter(item => !known.has(item.runId))];
+  }, [forkCandidates, locale, rounds, runId]);
   const selectedInView = useMemo(
     () =>
       Boolean(
@@ -119,6 +144,7 @@ export default function RunDetailPage() {
     setInspectorOpen(false);
     setTab('flow');
     setGlassboxRequest(null);
+    setCompareTargetRunId('');
     consumedQueryRequest.current = '';
   }, [runId]);
 
@@ -370,7 +396,24 @@ export default function RunDetailPage() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <RunTraceActions runId={runId} onOpenEvalLab={() => navigate('/evaluations')} />
+      <RunRoundsBar
+        rounds={rounds}
+        currentRunId={runId}
+        onSelect={id => navigate(`/runs/${id}`)}
+        onComparePrevious={previousRunId => {
+          setCompareTargetRunId(previousRunId);
+          setTab('compare');
+        }}
+      />
+
+      <RunTraceActions
+        runId={runId}
+        taskId={taskId}
+        onOpenEvalLab={() => navigate('/evaluations')}
+        onOpenMonitoring={id => {
+          if (id) navigate(`/monitoring?taskId=${encodeURIComponent(id)}`);
+        }}
+      />
 
       <RunHeader
         view={view}
@@ -567,7 +610,14 @@ export default function RunDetailPage() {
               detail={detail}
               view={view}
               runId={runId}
+              taskId={taskId}
+              roundIndex={currentRound?.roundIndex ?? 1}
               workspaceId={detail?.task?.WORKSPACE_ID}
+              onIterateStarted={created => {
+                queryClient.invalidateQueries({ queryKey: ['task-runs', taskId] });
+                queryClient.invalidateQueries({ queryKey: ['tasks'] });
+                navigate(`/runs/${created.runId}`);
+              }}
             />
           )}
 
@@ -591,7 +641,8 @@ export default function RunDetailPage() {
             <Box sx={{ p: 2, overflow: 'auto', height: '100%' }}>
               <RunCompareDiffView
                 runId={runId}
-                candidates={forkCandidates}
+                candidates={compareCandidates}
+                initialOtherRunId={compareTargetRunId || undefined}
                 onOpenRun={id => navigate(`/runs/${id}`)}
               />
             </Box>
