@@ -599,7 +599,8 @@ class WorkflowScheduler {
     String nodeWorkspaceId = files.isEmpty() ? null : task.workspaceId();
     String criticFeedback = reflection.criticFeedback(runId, node.id());
     // 动态工作流此前完全忽略 memoryEnabled；这里与静态运行入口对齐，按混合评分召回并落库引用。
-    String memorySection = memoryContext.load(task, runId);
+    var loadedMemory = memoryContext.loadWithEvidence(task, runId);
+    String memorySection = loadedMemory.promptSection();
     // 同任务迭代：本轮调改要求与上一轮交付摘要必须进入节点提示词，否则第二轮仍会重复首轮行为。
     String iterationSection = iterationSection(runId);
     var input =
@@ -650,7 +651,9 @@ class WorkflowScheduler {
                 node.definitionSha256(),
                 writeFiles)
             .withModelConnection(task.modelConnectionId())
-            .withLocale(task.locale());
+            .withLocale(task.locale())
+            // 同一次尝试的 Prompt 与装配快照必须使用同一批记忆证据，避免两次查库之间被删除导致矛盾。
+            .withResolvedMemories(loadedMemory.matches());
     // 交给执行器的是完整正文；摘要与截断只发生在落库与页面展示层。
     return agent.execute(request);
   }

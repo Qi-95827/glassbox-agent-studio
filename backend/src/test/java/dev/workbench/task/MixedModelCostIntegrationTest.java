@@ -19,6 +19,65 @@ import org.springframework.boot.test.context.SpringBootTest;
     })
 class MixedModelCostIntegrationTest {
   @Autowired CostService costs;
+  @Autowired dev.workbench.persistence.repository.RunCostLimitRepository limits;
+
+  @Test
+  void historicalEmptyPriceMappingIsCompletedBeforeInheritance() {
+    var targetKind = ModelKind.forMode(ModelMode.DEEPSEEK);
+    var mockPrice = costs.publish("default", "mock", "CNY", 0, 0, 100, 100, "test");
+    costs.publish("default", targetKind.code(), "CNY", 2_000_000, 4_000_000, 100, 100, "test");
+    String parentRunId = UUID.randomUUID().toString();
+    String childRunId = UUID.randomUUID().toString();
+    // 历史预算行只有默认价格版本，modelPriceVersionsJson 是空映射。
+    limits.save(
+        new dev.workbench.persistence.entity.RunCostLimitEntity(
+            parentRunId,
+            5_000L,
+            mockPrice.id(),
+            "{}",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z"));
+
+    var prepared =
+        costs.prepareInheritedLimit(parentRunId, ModelMode.DEEPSEEK).orElseThrow();
+    assertEquals(5_000L, prepared.remainingMicros());
+    assertTrue(
+        prepared.modelPriceVersionsJson().contains(targetKind.code()),
+        "历史空映射必须在继承前补全目标模型价格：" + prepared.modelPriceVersionsJson());
+
+    costs.applyPreparedLimit(childRunId, prepared);
+    var reservation = costs.reserve(childRunId, targetKind);
+    var settlement = costs.settle(reservation, Integer.valueOf(100), Integer.valueOf(100));
+    assertEquals(Long.valueOf(600L), settlement.actualMicros());
+  }
+
+  @Test
+  void preparedLimitUsesTheFrozenPriceEvenIfThePriceTableChangesBeforeApply() {
+    var targetKind = ModelKind.forMode(ModelMode.DEEPSEEK);
+    var mockPrice = costs.publish("default", "mock", "CNY", 0, 0, 100, 100, "test");
+    costs.publish("default", targetKind.code(), "CNY", 2_000_000, 4_000_000, 100, 100, "test");
+    String parentRunId = UUID.randomUUID().toString();
+    String childRunId = UUID.randomUUID().toString();
+    limits.save(
+        new dev.workbench.persistence.entity.RunCostLimitEntity(
+            parentRunId,
+            5_000L,
+            mockPrice.id(),
+            "{}",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z"));
+
+    var prepared =
+        costs.prepareInheritedLimit(parentRunId, ModelMode.DEEPSEEK).orElseThrow();
+    // 冻结后平台又发布了新价格版本：落库必须仍使用快照里的旧绑定，不因二次查价而变化。
+    costs.publish("default", targetKind.code(), "CNY", 9_000_000, 9_000_000, 100, 100, "test");
+    costs.applyPreparedLimit(childRunId, prepared);
+
+    var stored = limits.findById(childRunId).orElseThrow();
+    assertEquals(prepared.modelPriceVersionsJson(), stored.getModelPriceVersionsJson());
+    assertDoesNotThrow(() -> costs.reserve(childRunId, targetKind));
+  }
+
 
   @Test
   void hardBudgetCanBeCreatedForOneModeAndSettledWithAnotherModelsPrice() {

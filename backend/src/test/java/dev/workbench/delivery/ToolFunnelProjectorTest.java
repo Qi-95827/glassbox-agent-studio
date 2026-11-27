@@ -3,6 +3,7 @@ package dev.workbench.delivery;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.workbench.domain.AgentRole;
@@ -53,6 +54,9 @@ class ToolFunnelProjectorTest {
         ToolFunnelProjector.project(node, snapshot(granted, false), definition);
 
     assertNotNull(funnel);
+    // 装配证据必须标注来自哪次尝试，前端据此显示「尝试 #N」。
+    assertEquals(1, ToolFunnelProjector.project(node, snapshot(granted, false), definition, 1).attemptNumber());
+    assertNull(funnel.attemptNumber(), "未指定尝试号时保持 null，而不是伪造 1");
     assertEquals("workspace-edit", funnel.definitionId());
     assertEquals(1, funnel.definitionVersion());
     assertEquals(

@@ -81,8 +81,73 @@ class EvalCompareAttributionTest {
     assertEquals(true, diffs.getFirst().get("candidateApplied"));
   }
 
+  @Test
+  void missingAppliedEvidenceIsInsufficientInsteadOfAttributable() {
+    when(lab.detail("run-a"))
+        .thenReturn(
+            detail(
+                "run-a",
+                Map.of("enableReflection", false, "repeatK", 1),
+                Map.of()));
+    when(lab.detail("run-b"))
+        .thenReturn(
+            detail(
+                "run-b",
+                Map.of("enableReflection", true, "repeatK", 1),
+                Map.of()));
+
+    var compared = service.compare("run-a", "run-b");
+
+    assertEquals(false, compared.get("fullyAttributable"));
+    @SuppressWarnings("unchecked")
+    var warnings = (List<String>) compared.get("attributionWarnings");
+    assertEquals(1, warnings.size(), warnings.toString());
+    assertTrue(warnings.getFirst().contains("缺少生效证据"), warnings.toString());
+
+    @SuppressWarnings("unchecked")
+    var diffs = (List<Map<String, Object>>) compared.get("configDiff");
+    var row = diffs.getFirst();
+    assertEquals("INSUFFICIENT_EVIDENCE", row.get("attributionStatus"));
+    assertEquals(false, row.get("attributable"));
+    assertEquals(0, row.get("baselineAppliedCount"));
+    assertEquals(1, row.get("baselineTotalCases"));
+  }
+
+  @Test
+  void partiallyReportedAppliedEvidenceIsStillInsufficientWithAccurateCoverage() {
+    when(lab.detail("run-a"))
+        .thenReturn(
+            detailWithTraces(
+                "run-a",
+                Map.of("enableReflection", false, "repeatK", 1),
+                List.of(Map.of("reflectionApplied", true), Map.of())));
+    when(lab.detail("run-b"))
+        .thenReturn(
+            detailWithTraces(
+                "run-b",
+                Map.of("enableReflection", true, "repeatK", 1),
+                List.of(Map.of("reflectionApplied", true), Map.of())));
+
+    var compared = service.compare("run-a", "run-b");
+
+    assertEquals(false, compared.get("fullyAttributable"));
+    @SuppressWarnings("unchecked")
+    var diffs = (List<Map<String, Object>>) compared.get("configDiff");
+    var row = diffs.getFirst();
+    assertEquals("INSUFFICIENT_EVIDENCE", row.get("attributionStatus"));
+    assertEquals(1, row.get("baselineAppliedCount"));
+    assertEquals(2, row.get("baselineTotalCases"));
+    assertEquals(1, row.get("candidateAppliedCount"));
+    assertEquals(2, row.get("candidateTotalCases"));
+  }
+
   private static EvalLabService.Detail detail(
       String id, Map<String, Object> config, Map<String, Object> trace) {
+    return detailWithTraces(id, config, List.of(trace));
+  }
+
+  private static EvalLabService.Detail detailWithTraces(
+      String id, Map<String, Object> config, List<Map<String, Object>> traces) {
     var run =
         new EvalLabService.RunView(
             id,
@@ -107,29 +172,32 @@ class EvalCompareAttributionTest {
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:00:00Z",
             "2026-01-01T00:00:01Z");
-    var sample =
-        new EvalLabService.CaseView(
-            id + "-c1",
-            "CODING_REFLECTION",
-            "s1",
-            "样例",
-            "Sample",
-            "mini",
-            1,
-            null,
-            true,
-            1.0,
-            null,
-            Map.of(),
-            List.of(),
-            Map.of(),
-            trace,
-            "",
-            50L,
-            50,
-            50,
-            0.0,
-            "2026-01-01T00:00:01Z");
-    return new EvalLabService.Detail(run, List.of(sample));
+    var samples = new java.util.ArrayList<EvalLabService.CaseView>();
+    for (int index = 0; index < traces.size(); index += 1) {
+      samples.add(
+          new EvalLabService.CaseView(
+              id + "-c" + (index + 1),
+              "CODING_REFLECTION",
+              "s1",
+              "样例",
+              "Sample",
+              "mini",
+              1,
+              null,
+              true,
+              1.0,
+              null,
+              Map.of(),
+              List.of(),
+              Map.of(),
+              traces.get(index),
+              "",
+              50L,
+              50,
+              50,
+              0.0,
+              "2026-01-01T00:00:01Z"));
+    }
+    return new EvalLabService.Detail(run, List.copyOf(samples));
   }
 }

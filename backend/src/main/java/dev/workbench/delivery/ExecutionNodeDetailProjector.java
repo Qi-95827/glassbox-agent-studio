@@ -141,10 +141,8 @@ final class ExecutionNodeDetailProjector {
       PlanNode node,
       List<WorkflowAttempt> attempts,
       List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded> assemblies) {
-    var latest =
-        attempts.stream()
-            .max(java.util.Comparator.comparingInt(WorkflowAttempt::number))
-            .orElse(null);
+    // 与前端一致：按 attemptNo 降序找最近一次「拥有装配快照」的尝试，而不是只看最大 attemptNo。
+    var latest = latestAttemptWithAssembly(attempts, assemblies);
     if (latest == null) return null;
     var snapshot =
         assemblies.stream()
@@ -154,7 +152,20 @@ final class ExecutionNodeDetailProjector {
             .orElse(null);
     if (snapshot == null) return null;
     var definition = definitions.resolve(snapshot.components().definition());
-    return ToolFunnelProjector.project(node, snapshot, definition);
+    return ToolFunnelProjector.project(node, snapshot, definition, latest.number());
+  }
+
+  /** 三端统一口径：最近一次拥有装配快照的尝试（按 number 降序），与前端 latestAssemblyAttempt 一致。 */
+  static WorkflowAttempt latestAttemptWithAssembly(
+      List<WorkflowAttempt> attempts,
+      List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded> assemblies) {
+    if (attempts == null || assemblies == null) return null;
+    return attempts.stream()
+        .filter(
+            attempt ->
+                assemblies.stream().anyMatch(recorded -> recorded.agentId().equals(attempt.agentId())))
+        .max(java.util.Comparator.comparingInt(WorkflowAttempt::number))
+        .orElse(null);
   }
 
   private AttemptView attemptView(

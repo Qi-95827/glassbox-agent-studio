@@ -322,9 +322,11 @@ public class AgentScopeExecutor implements AgentExecutor {
             request.writeEnabled());
     var memoryPort = memoryPorts == null ? null : memoryPorts.getIfAvailable();
     var memoryMatches =
-        memoryPort == null || request.context().runId() == null
-            ? List.<AgentAssemblySnapshot.MemoryMatchView>of()
-            : memoryPort.matchesForRun(request.context().runId());
+        request.resolvedMemories() != null
+            ? request.resolvedMemories()
+            : memoryPort == null || request.context().runId() == null
+                ? List.<AgentAssemblySnapshot.MemoryMatchView>of()
+                : memoryPort.matchesForRun(request.context().runId());
     var components =
         new AgentAssemblySnapshot.Components(
             definition.ref(),

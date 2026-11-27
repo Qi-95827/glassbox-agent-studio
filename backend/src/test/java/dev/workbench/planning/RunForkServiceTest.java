@@ -180,6 +180,12 @@ class RunForkServiceTest {
     when(plans.specsByNode(sourceId.toString())).thenReturn(Map.of(node.id(), spec(node.id())));
     when(plans.revisionEdges(sourceId.toString())).thenReturn(List.of());
 
+    var prepared =
+        new dev.workbench.planning.CostLimitPort.PreparedInheritedLimit(
+            1_000_000L, "price-1", "{\"mock\":\"price-1\"}");
+    when(costs.prepareInheritedLimit(sourceId.toString(), ModelMode.MOCK))
+        .thenReturn(java.util.Optional.of(prepared));
+
     var forked =
         service.fork(sourceId.toString(), new RunForkService.Request(null, null, null, null, null));
 
@@ -190,7 +196,8 @@ class RunForkServiceTest {
     assertTrue(forkTask.memoryEnabled(), "记忆开关必须继承，不能被默认关掉");
     assertEquals(richTask(ModelMode.MOCK, true).roleBudgets(), forkTask.roleBudgets(), "角色预算不得被清空");
     assertEquals(richTask(ModelMode.MOCK, true).toolBudgets(), forkTask.toolBudgets(), "工具预算不得被清空");
-    verify(costs).inheritLimit(sourceId.toString(), forked.runId(), ModelMode.MOCK);
+    verify(costs).prepareInheritedLimit(sourceId.toString(), ModelMode.MOCK);
+    verify(costs).applyPreparedLimit(forked.runId(), prepared);
   }
 
   @Test
@@ -210,8 +217,9 @@ class RunForkServiceTest {
     // 未显式覆盖时必须沿用源连接且复验启用归属，而不是悄悄换成当前默认连接或放行已禁用连接。
     assertEquals("conn-src", captor.getValue().modelConnectionId());
     verify(connections).requireEnabledOwned("conn-src");
-    // BYOK 走用户自己的额度，不继承平台费用上限。
-    verify(costs, never()).inheritLimit(anyString(), anyString());
+    // BYOK 走用户自己的额度，不继承平台费用上限，也不触发预算解析。
+    verify(costs, never()).prepareInheritedLimit(anyString(), any());
+    verify(costs, never()).applyPreparedLimit(anyString(), any());
 
     // 用户显式覆盖：只改变连接这一个变量。
     when(connections.requireEnabledOwned("conn-new")).thenReturn("conn-new");
@@ -224,7 +232,7 @@ class RunForkServiceTest {
     var overrideTask = overrideCaptor.getAllValues().get(1);
     assertEquals("conn-new", overrideTask.modelConnectionId());
     assertEquals(captor.getValue().roleBudgets(), overrideTask.roleBudgets());
-    verify(costs, never()).inheritLimit(anyString(), anyString());
+    verify(costs, never()).prepareInheritedLimit(anyString(), any());
   }
 
   @Test
@@ -285,7 +293,7 @@ class RunForkServiceTest {
     when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.MOCK, true));
     org.mockito.Mockito.doThrow(new IllegalStateException("平台未配置模型 deepseek-chat 的生效价格版本"))
         .when(costs)
-        .requireForkPricingReady(sourceId.toString(), ModelMode.DEEPSEEK);
+        .prepareInheritedLimit(sourceId.toString(), ModelMode.DEEPSEEK);
 
     var error =
         assertThrows(
@@ -297,6 +305,62 @@ class RunForkServiceTest {
     assertTrue(error.getMessage().contains("生效价格版本"));
     verify(creations, never())
         .persistFromCandidate(any(), any(), any(), anyString(), any(), any(), any());
+  }
+
+  @Test
+  void forkPreservesPrivateAgentBindingMetadata() {
+    when(records.runSnapshot(sourceId.toString())).thenReturn(snapshot(RunStatus.COMPLETED));
+    when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.MOCK, true));
+    var node =
+        new dev.workbench.framework.workflow.plan.PlanNode(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            dev.workbench.domain.AgentRole.REVIEWER,
+            null,
+            dev.workbench.framework.workflow.plan.PlanNodeStatus.PENDING,
+            null,
+            null,
+            null,
+            java.time.Instant.parse("2026-01-01T00:00:00Z"),
+            List.of(),
+            new dev.workbench.framework.agent.definition.AgentDefinitionRef("private-review", 3),
+            "c".repeat(64),
+            UUID.randomUUID(),
+            "review",
+            "私有审查",
+            "review",
+            true,
+            false,
+            new dev.workbench.framework.workflow.plan.WorkflowNodeBudget(4, 2),
+            dev.workbench.framework.workflow.plan.PlanNodeKind.AGENT,
+            null,
+            new dev.workbench.framework.workflow.plan.AgentBindingInfo(
+                "PRIVATE",
+                "MANUAL",
+                "用户手动选择的私有 Agent",
+                "私有代码审查",
+                "f".repeat(64),
+                "{\"skills\":[],\"tools\":[{\"id\":\"t1\",\"version\":1,\"name\":\"读取\",\"kind\":\"READ\",\"sha256\":\"a\"}]}"));
+    when(plans.find(sourceId.toString())).thenReturn(List.of(node));
+    when(plans.specsByNode(sourceId.toString())).thenReturn(Map.of(node.id(), spec(node.id())));
+    when(plans.revisionEdges(sourceId.toString())).thenReturn(List.of());
+
+    service.fork(sourceId.toString(), new RunForkService.Request(null, null, null, null, null));
+
+    var planCaptor =
+        org.mockito.ArgumentCaptor.forClass(
+            dev.workbench.framework.workflow.plan.CandidateRunPlan.class);
+    verify(creations)
+        .persistFromCandidate(
+            any(), any(), any(), anyString(), planCaptor.capture(), any(), any());
+    var binding = planCaptor.getValue().nodes().getFirst().binding();
+    org.junit.jupiter.api.Assertions.assertNotNull(binding, "私有 Agent 绑定不得丢成 null");
+    org.junit.jupiter.api.Assertions.assertEquals("MANUAL", binding.source());
+    org.junit.jupiter.api.Assertions.assertEquals("私有代码审查", binding.name());
+    org.junit.jupiter.api.Assertions.assertEquals("f".repeat(64), binding.specSha256());
+    org.junit.jupiter.api.Assertions.assertEquals(1, binding.tools().size());
+    org.junit.jupiter.api.Assertions.assertEquals("t1", binding.tools().getFirst().id());
   }
 
   private TaskDefinition richTask(ModelMode mode, boolean withBudgets) {

@@ -56,8 +56,11 @@ class LegacyH2StartupIntegrationTest {
       probe = Files.createTempFile("agent-workbench-legacy-h2-probe-", ".mv.db");
       try {
         Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
-      } catch (java.io.IOException locked) {
-        log.info("本地 H2 文件正在被占用，跳过历史副本启动用例：{}", locked.getMessage());
+      } catch (java.io.IOException copyFailure) {
+        if (!isLocked(copyFailure))
+          throw new IllegalStateException(
+              "无法复制本地 H2 历史副本：" + copyFailure.getMessage(), copyFailure);
+        log.info("本地 H2 文件正在被占用，跳过历史副本启动用例：{}", copyFailure.getMessage());
         return false;
       }
       String base = probe.toString();
@@ -105,6 +108,16 @@ class LegacyH2StartupIntegrationTest {
     registry.add("spring.datasource.password", () -> "");
     registry.add("workbench.workspace-root", () -> dir.resolve("workspaces").toString());
     isolatedUrl = url;
+  }
+
+  /** 只有文件不存在或明确被 OS 锁定才算合法跳过；权限/只读卷等异常必须显式失败。 */
+  private static boolean isLocked(java.io.IOException failure) {
+    String message = String.valueOf(failure.getMessage()).toLowerCase(java.util.Locale.ROOT);
+    return message.contains("lock")
+        || message.contains("another process")
+        || message.contains("sharing violation")
+        || message.contains("被占用")
+        || message.contains("另一个程序");
   }
 
   @Test

@@ -60,6 +60,16 @@ export default function RunDetailPage() {
   const [busyAction, setBusyAction] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [glassboxRequest, setGlassboxRequest] = useState(null);
+
+  // 统一节点定位：任何「换节点」入口都必须同时清掉旧的边/回边选中态，
+  // 否则上一节点的反思回边会串到新节点上，拼出从未发生过的评审关系。
+  const selectNode = (nodeId, { switchToFlow = false } = {}) => {
+    setSelectedEdge(null);
+    setSelectedRevisionEdge(null);
+    setSelectedId(nodeId);
+    setInspectorOpen(true);
+    if (switchToFlow) setTab('flow');
+  };
   const [compareTargetRunId, setCompareTargetRunId] = useState('');
   const consumedQueryRequest = useRef('');
   const inlineInspector = useMediaQuery('(min-width:1024px)');
@@ -157,8 +167,7 @@ export default function RunDetailPage() {
     const running = view.nodes?.find(item => item.status === 'RUNNING')?.id;
     const next = active || running || null;
     if (next) {
-      setSelectedId(next);
-      setInspectorOpen(true);
+      selectNode(next);
     }
   }, [view, selectedId, requestedNodeId]);
 
@@ -171,11 +180,7 @@ export default function RunDetailPage() {
     if (!target) return;
     consumedQueryRequest.current = requestKey;
     const allowed = ['react', 'result', 'handoff', 'gateway', 'llm', 'assembly'];
-    setSelectedId(target.id);
-    setSelectedEdge(null);
-    setSelectedRevisionEdge(null);
-    setInspectorOpen(true);
-    setTab('flow');
+    selectNode(target.id, { switchToFlow: true });
     setGlassboxRequest({
       nodeId: target.id,
       section: allowed.includes(requestedGlassbox) ? requestedGlassbox : 'result',
@@ -459,10 +464,7 @@ export default function RunDetailPage() {
                   activityByNode={activityByNode}
                   streamingNodeId={streamNodeId}
                   onSelectNode={id => {
-                    setSelectedId(id);
-                    setSelectedEdge(null);
-                    setSelectedRevisionEdge(null);
-                    setInspectorOpen(true);
+                    selectNode(id);
                   }}
                   onSelectEdge={edge => {
                     setSelectedId(edge.toNodeId);
@@ -611,11 +613,7 @@ export default function RunDetailPage() {
                   'BLOCKED'
                 ].map(code => [code, eventNameLabel(code, locale)])
               )}
-              onLocate={nodeId => {
-                setSelectedId(nodeId);
-                setInspectorOpen(true);
-                setTab('flow');
-              }}
+              onLocate={nodeId => selectNode(nodeId, { switchToFlow: true })}
             />
           )}
 
@@ -640,15 +638,7 @@ export default function RunDetailPage() {
               <Stack spacing={2}>
                 <ExecutionTimelinePanel
                   runId={runId}
-                  onOpenNode={id => {
-                    // 时间轴是「换节点」入口：旧节点/旧回边的选中态必须一起清掉，
-                    // 否则上一节点的反思回边会串到新节点上，拼出从未发生过的评审关系。
-                    setSelectedEdge(null);
-                    setSelectedRevisionEdge(null);
-                    setSelectedId(id);
-                    setInspectorOpen(true);
-                    setTab('flow');
-                  }}
+                  onOpenNode={id => selectNode(id, { switchToFlow: true })}
                 />
                 <CheckpointTimeTravelPanel runId={runId} onForked={id => navigate(`/runs/${id}`)} />
               </Stack>
@@ -671,11 +661,7 @@ export default function RunDetailPage() {
               detail={detail}
               view={view}
               onAction={handleAction}
-              onSelectNode={id => {
-                setSelectedId(id);
-                setInspectorOpen(true);
-                setTab('flow');
-              }}
+              onSelectNode={id => selectNode(id, { switchToFlow: true })}
               onRecover={id =>
                 handleAction({ actionCode: 'RECOVER', checkpointId: id, enabled: true })
               }

@@ -309,7 +309,8 @@ public class ExecutionViewService {
       String definitionId,
       Integer definitionVersion,
       List<ToolGrantView> granted,
-      List<ToolFilterView> filtered) {}
+      List<ToolFilterView> filtered,
+      Integer attemptNumber) {}
 
   public record ToolGrantView(String kind, Integer version) {}
 

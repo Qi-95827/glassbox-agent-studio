@@ -77,6 +77,64 @@ class StreamingSseMaskingTest {
     assertNoLeak(splitRandomly(BODY + "\n" + PEM, random), splitRandomly(REASONING, random));
   }
 
+  @Test
+  void quotedJsonAndGithubPatTokensNeverLeakAcrossFrames() {
+    String text =
+        "JSON 凭据：{\"password\": \"super-secret-998877\", 'token': 'abc987654'}，"
+            + "令牌 github_pat_11AA22BB33CC44DD55EE66 结束。";
+    for (List<String> frames :
+        List.of(
+            splitEveryCharacter(text),
+            List.of(text.substring(0, text.indexOf("super-secret") + 3), text.substring(text.indexOf("super-secret") + 3)),
+            List.of(text.substring(0, text.indexOf("github_pat_") + 5), text.substring(text.indexOf("github_pat_") + 5)))) {
+      CapturingPublisher publisher = new CapturingPublisher();
+      ControlledAgentRuntime runtime = runtime(publisher);
+      for (String frame : frames) {
+        runtime.modelDelta(frame);
+        runtime.modelReasoningDelta(frame);
+      }
+      runtime.modelResult(null, null);
+      String content = publisher.joined("MODEL_DELTA");
+      String reasoning = publisher.joined("MODEL_REASONING_DELTA");
+      assertFalse(content.contains("super-secret-998877"), "双引号 JSON 口令泄露：" + content);
+      assertFalse(content.contains("abc987654"), "单引号 KV 令牌泄露：" + content);
+      assertFalse(content.contains("github_pat_11AA22BB33CC44DD55EE66"), "GitHub PAT 泄露：" + content);
+      assertFalse(reasoning.contains("super-secret-998877"), "思考链泄露口令：" + reasoning);
+      assertTrue(content.startsWith("JSON 凭据："), content);
+      assertTrue(content.contains("结束。"), content);
+    }
+  }
+
+  @Test
+  void abortedStreamMasksUnclosedPrivateKeyAndPartialCredentials() {
+    CapturingPublisher keyPublisher = new CapturingPublisher();
+    ControlledAgentRuntime keyRuntime = runtime(keyPublisher);
+    keyRuntime.modelDelta("已准备私钥：-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234567890");
+    keyRuntime.modelFailed();
+    String keyText = keyPublisher.joined("MODEL_DELTA");
+    assertFalse(keyText.contains("MIIEowIBAAKCAQEA1234567890"), "中断时未闭合私钥正文泄露：" + keyText);
+    assertFalse(keyText.contains("BEGIN RSA PRIVATE KEY"), "私钥头也不应原样保留：" + keyText);
+    assertTrue(keyText.startsWith("已准备私钥："), keyText);
+
+    CapturingPublisher jsonPublisher = new CapturingPublisher();
+    ControlledAgentRuntime jsonRuntime = runtime(jsonPublisher);
+    jsonRuntime.modelDelta("配置：{\"api_key\": \"sk-partial");
+    jsonRuntime.modelFailed();
+    String jsonText = jsonPublisher.joined("MODEL_DELTA");
+    assertFalse(jsonText.contains("sk-partial"), "中断时半截 api_key 泄露：" + jsonText);
+    assertTrue(jsonText.contains("***MASKED***"), jsonText);
+  }
+
+  @Test
+  void ordinaryJsonStreamsUnchanged() {
+    String json = "{\"status\":\"ok\",\"url\":\"http://localhost:8088/runs\"}";
+    CapturingPublisher publisher = new CapturingPublisher();
+    ControlledAgentRuntime runtime = runtime(publisher);
+    for (char c : json.toCharArray()) runtime.modelDelta(String.valueOf(c));
+    runtime.modelResult(null, null);
+    assertEquals(json, publisher.joined("MODEL_DELTA"));
+  }
+
   private void assertNoLeak(List<String> contentFrames, List<String> reasoningFrames) {
     CapturingPublisher publisher = new CapturingPublisher();
     ControlledAgentRuntime runtime = runtime(publisher);

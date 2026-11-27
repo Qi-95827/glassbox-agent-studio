@@ -100,7 +100,9 @@ public class ToolMcpRunner implements EvalCategoryRunner {
                 null,
                 null,
                 null,
-                scopes,
+                effect == ToolEffect.WRITE
+                    ? (target != null && !target.isBlank() ? List.of(target) : scopes)
+                    : List.<String>of(),
                 () -> "simulated:" + name);
         var node = JSON.readTree(result);
         status = node.path("status").asText("SUCCEEDED");

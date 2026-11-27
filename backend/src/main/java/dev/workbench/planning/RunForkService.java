@@ -80,6 +80,9 @@ public class RunForkService {
   private final RunForkRepository forks;
   private final CostLimitPort costs;
   private final dev.workbench.store.RunIterationRecordService iterations;
+  private final org.springframework.transaction.support.TransactionTemplate tx;
+  private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+      new com.fasterxml.jackson.databind.ObjectMapper();
 
   @org.springframework.beans.factory.annotation.Autowired
   public RunForkService(
@@ -92,7 +95,8 @@ public class RunForkService {
       RunEvidenceRecordService evidence,
       RunForkRepository forks,
       CostLimitPort costs,
-      dev.workbench.store.RunIterationRecordService iterations) {
+      dev.workbench.store.RunIterationRecordService iterations,
+      org.springframework.transaction.support.TransactionTemplate tx) {
     this.records = records;
     this.plans = plans;
     this.workspaceAuthorization = workspaceAuthorization;
@@ -103,6 +107,33 @@ public class RunForkService {
     this.forks = forks;
     this.costs = costs;
     this.iterations = iterations;
+    this.tx = tx;
+  }
+
+  /** 兼容不涉及调改轮次覆盖的测试构造。 */
+  public RunForkService(
+      PlanningRunReader records,
+      PlanService plans,
+      WorkspaceAuthorizationService workspaceAuthorization,
+      CandidateRunPersister taskCreations,
+      CandidateRunDispatcher runs,
+      ModelConnectionService connections,
+      RunEvidenceRecordService evidence,
+      RunForkRepository forks,
+      CostLimitPort costs,
+      dev.workbench.store.RunIterationRecordService iterations) {
+    this(
+        records,
+        plans,
+        workspaceAuthorization,
+        taskCreations,
+        runs,
+        connections,
+        evidence,
+        forks,
+        costs,
+        iterations,
+        null);
   }
 
   /** 兼容不涉及调改轮次覆盖的测试构造。 */
@@ -126,6 +157,7 @@ public class RunForkService {
         evidence,
         forks,
         costs,
+        null,
         null);
   }
 
@@ -146,8 +178,11 @@ public class RunForkService {
     var prepared = prepare(task);
     ModelMode mode = mode(task, request2);
     String connectionId = connection(task, mode, request2.modelConnectionId());
-    // 跨平台切换模型前同步核验价格版本：缺价格时在落库前拒绝，避免派发出首次预留必停的子运行。
-    if (mode != ModelMode.USER) costs.requireForkPricingReady(sourceRunId, mode);
+    // 跨平台切换模型前一次性冻结预算与价格绑定：缺价格/币种冲突在落库前拒绝，且不再二次查价。
+    var preparedLimit =
+        mode == ModelMode.USER
+            ? java.util.Optional.<CostLimitPort.PreparedInheritedLimit>empty()
+            : costs.prepareInheritedLimit(sourceRunId, mode);
     String nodeKey = nodeKey(sourceRunId, request2.sourceNodeKey());
     var plan = plan(sourceRunId, nodeKey, addendum);
 
@@ -156,28 +191,33 @@ public class RunForkService {
     var forkTask = taskDefinition(task, UUID.fromString(taskId), mode, connectionId, addendum);
     String message =
         "从运行 " + sourceRunId + " 分叉" + (nodeKey == null ? "整图重跑" : "（源节点 " + nodeKey + "）") + "。";
-    taskCreations.persistFromCandidate(
-        forkTask,
-        UUID.fromString(runId),
-        PlanCandidateConfirmationService.defaultRunLimits(),
-        message,
-        plan,
-        prepared,
-        null);
-    forks.save(
-        new RunForkEntity(
-            runId,
-            sourceRunId,
-            nodeKey,
-            blank(request2.checkpointId()),
-            addendum,
-            mode.code(),
-            connectionId,
-            Instant.now().toString()));
-    evidence.event(runId, EventType.FORK_STARTED, message);
-    // 费用上限与源运行一致（BYOK 除外：自带 Key 走用户自己的额度，不继承平台预算）；显式切换平台模型时补齐目标价格绑定。
-    if (mode != ModelMode.USER) costs.inheritLimit(sourceRunId, runId, mode);
-    // 提交后才派发；派发失败不会留下已派发却没有计划或授权的运行。
+    // 任务、叉记录、审计事件与预算继承必须同一事务提交：任一步失败都不留下孤儿运行。
+    Runnable persist =
+        () -> {
+          taskCreations.persistFromCandidate(
+              forkTask,
+              UUID.fromString(runId),
+              PlanCandidateConfirmationService.defaultRunLimits(),
+              message,
+              plan,
+              prepared,
+              null);
+          forks.save(
+              new RunForkEntity(
+                  runId,
+                  sourceRunId,
+                  nodeKey,
+                  blank(request2.checkpointId()),
+                  addendum,
+                  mode.code(),
+                  connectionId,
+                  Instant.now().toString()));
+          evidence.event(runId, EventType.FORK_STARTED, message);
+          preparedLimit.ifPresent(limit -> costs.applyPreparedLimit(runId, limit));
+        };
+    if (tx == null) persist.run();
+    else tx.executeWithoutResult(status -> persist.run());
+    // 事务提交成功后才派发；派发失败不会留下已派发却没有计划或授权的运行。
     runs.dispatchConfirmed(runId);
     return new Forked(runId, taskId, task.workspaceId(), sourceRunId);
   }
@@ -276,9 +316,51 @@ public class RunForkService {
               spec.writeFiles(),
               spec.outputs(),
               acceptance,
-              null));
+              binding(node)));
     }
     return new CandidateRunPlan(1, digest(planNodes), planNodes, edges(sourceRunId, keysById));
+  }
+
+  /**
+   * 复制节点的 Agent 选择记录：私有 Agent 的 source/reason/名称/规格摘要与组件都必须保真，
+   * 否则物化层会写出「kind=PRIVATE 但 source=BUILTIN、未指定私有 Agent」的自相矛盾证据。
+   */
+  private static dev.workbench.framework.workflow.plan.AgentBinding binding(PlanNode node) {
+    var info = node.agentBinding();
+    if (info == null || node.definitionRef() == null) return null;
+    return new dev.workbench.framework.workflow.plan.AgentBinding(
+        node.definitionRef().id(),
+        node.definitionRef().version(),
+        info.source(),
+        info.reason(),
+        info.name(),
+        info.specSha256(),
+        null,
+        null,
+        components(info.componentsJson(), "skills"),
+        components(info.componentsJson(), "tools"));
+  }
+
+  private static List<dev.workbench.framework.workflow.plan.BindingComponent> components(
+      String body, String field) {
+    if (body == null || body.isBlank()) return List.of();
+    try {
+      var node = JSON.readTree(body).path(field);
+      if (!node.isArray()) return List.of();
+      var result = new ArrayList<dev.workbench.framework.workflow.plan.BindingComponent>();
+      for (var item : node)
+        result.add(
+            new dev.workbench.framework.workflow.plan.BindingComponent(
+                item.path("id").asText(null),
+                item.path("version").asInt(0),
+                item.path("name").asText(null),
+                item.path("kind").asText(null),
+                item.path("sha256").asText(null)));
+      return result;
+    } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
+      // 组件快照损坏时宁可留空，也不伪造组件；source/name/spec 仍完整保留。
+      return List.of();
+    }
   }
 
   /** 反思回边按节点键重新指向新图；指向不存在节点的历史回边不再复制。 */

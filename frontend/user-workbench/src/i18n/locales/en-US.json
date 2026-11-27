@@ -1847,9 +1847,12 @@
   "monitoring.taskFilter.thisTask": "View task monitoring",
   "monitoring.taskFilter.noTask": "This run has no linked task yet, so task monitoring cannot be opened.",
   "evalLab.compare.notAppliedBadge": "Not applied · non-attributable",
-  "evalLab.compare.attributionWarningTitle": "Unapplied experiment switches detected — metric deltas cannot be attributed to them",
+  "evalLab.compare.attributionWarningTitle": "Unapplied or insufficient-evidence experiment switches detected — metric deltas cannot be attributed to them",
   "evalLab.compare.appliedSummary": "Requested {baseline} → {candidate}; applied A={baseApplied} / B={candApplied}",
   "evalLab.compare.appliedYes": "applied",
   "evalLab.compare.appliedNo": "not applied",
-  "evalLab.compare.appliedUnknown": "unreported"
+  "evalLab.compare.appliedUnknown": "unreported",
+  "evalLab.compare.insufficientEvidenceBadge": "Insufficient evidence · cannot attribute",
+  "evalLab.compare.coverage": "coverage A {baseline} / B {candidate}",
+  "inspector.grantedToolsWithAttempt": "{count} tools granted · attempt #{attempt}"
 }

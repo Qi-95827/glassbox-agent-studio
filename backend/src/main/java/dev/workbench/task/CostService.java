@@ -202,11 +202,40 @@ public class CostService
             time));
   }
 
+  @Override
+  public java.util.Optional<dev.workbench.planning.CostLimitPort.PreparedInheritedLimit>
+      prepareInheritedLimit(String parentRunId, ModelMode childMode) {
+    if (parentRunId == null || childMode == null || childMode == ModelMode.USER)
+      return java.util.Optional.empty();
+    var parent = limits.findById(parentRunId).orElse(null);
+    if (parent == null) return java.util.Optional.empty();
+    long remaining =
+        Math.max(0, parent.getMaxCostMicros() - parent.getSettledMicros() - parent.getReservedMicros());
+    String modelPricesJson = resolveChildModelPrices(parent, childMode);
+    return java.util.Optional.of(
+        new dev.workbench.planning.CostLimitPort.PreparedInheritedLimit(
+            remaining, parent.getPriceVersionId(), modelPricesJson));
+  }
+
+  @Override
+  public void applyPreparedLimit(
+      String childRunId, dev.workbench.planning.CostLimitPort.PreparedInheritedLimit prepared) {
+    if (childRunId == null || prepared == null || limits.existsById(childRunId)) return;
+    String time = Instant.now().toString();
+    limits.save(
+        new RunCostLimitEntity(
+            childRunId,
+            prepared.remainingMicros(),
+            prepared.defaultPriceVersionId(),
+            prepared.modelPriceVersionsJson(),
+            time,
+            time));
+  }
+
   private String resolveChildModelPrices(RunCostLimitEntity parent, ModelMode childMode) {
     String existingJson = parent.getModelPriceVersionsJson();
     if (childMode == null || childMode == ModelMode.USER) return existingJson;
     var bindings = readModelPrices(existingJson);
-    if (bindings.isEmpty()) return existingJson;
     String modelCode = ModelKind.forMode(childMode).code();
     if (bindings.containsKey(modelCode)) return existingJson;
     var active =
@@ -216,10 +245,8 @@ public class CostService
                 () ->
                     new IllegalStateException(
                         "平台未配置模型 " + modelCode + " 的生效价格版本，无法继承预算并切换该模型。"));
-    var parentPrice =
-        parent.getPriceVersionId() == null
-            ? null
-            : prices.findById(parent.getPriceVersionId()).orElse(null);
+    // 历史空映射也要有币种基线：优先父预算默认价格版本；缺失时从已有映射的任一价格版本解析。
+    var parentPrice = resolveParentPrice(parent, bindings);
     if (parentPrice != null && !parentPrice.getCurrency().equals(active.getCurrency())) {
       throw new IllegalStateException(
           "目标模型价格币种（"
@@ -231,6 +258,20 @@ public class CostService
     var updated = new java.util.LinkedHashMap<>(bindings);
     updated.put(modelCode, active.getId());
     return writeModelPrices(updated);
+  }
+
+  /** 父预算币种解析：默认价格版本优先，其次任意已绑定模型的价格版本。 */
+  private dev.workbench.persistence.entity.ProviderPriceVersionEntity resolveParentPrice(
+      RunCostLimitEntity parent, Map<String, String> bindings) {
+    if (parent.getPriceVersionId() != null) {
+      var direct = prices.findById(parent.getPriceVersionId()).orElse(null);
+      if (direct != null) return direct;
+    }
+    for (String priceId : bindings.values()) {
+      var candidate = prices.findById(priceId).orElse(null);
+      if (candidate != null) return candidate;
+    }
+    return null;
   }
 
   /** 任务级预算只绑定默认价格；每次实际调用仍按 modelId 查表计价。 */

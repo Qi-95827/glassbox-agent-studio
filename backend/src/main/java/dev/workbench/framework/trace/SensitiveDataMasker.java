@@ -27,6 +27,43 @@ public final class SensitiveDataMasker {
   private static final Pattern URL_CREDENTIALS =
       Pattern.compile("(?<=://)[^/\\s:@'\"]+:[^/\\s@'\"]+@");
 
+  private static final String KV_KEY =
+      "(?:api[_-]?key|secret|password|passwd|token|authorization|cookie)";
+  private static final String KV_VALUE_CHARS = "[^\"'\\s,;}\\]。，；！？、）》」』】]";
+
+  /**
+   * 流式切点检测：与完整脱敏共享同一形态集合（PEM/JWT/AWS/Google/GitHub/GitLab/Bearer/sk-/URL/KV），
+   * 并额外覆盖引号键名、引号值和尚未完结的前缀，保证跨帧切点不会把敏感串前半段先放出去。
+   */
+  static final Pattern STREAM_PARTIAL =
+      Pattern.compile(
+          "(?s)sk-[A-Za-z0-9_-]*"
+              + "|(?i:bearer)[ \\t]+[A-Za-z0-9._~+/=-]*"
+              + "|eyJ[A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]*){0,2}"
+              + "|(?i:[\"']?"
+              + KV_KEY
+              + "[\"']?)[ \\t]*[:=][ \\t]*[\"']?"
+              + KV_VALUE_CHARS
+              + "*"
+              + "|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*"
+              + "|(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]*"
+              + "|(?<![A-Za-z0-9])AIza[A-Za-z0-9_-]*"
+              + "|(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9_]*|github_pat_[A-Za-z0-9_]*)"
+              + "|(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]*"
+              + "|://[^/\\s:@'\"]+:[^/\\s@'\"]*@?");
+
+  private static final Pattern UNCLOSED_PEM =
+      Pattern.compile("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*");
+  private static final Pattern TRUNCATED_TOKEN =
+      Pattern.compile(
+          "(?i)(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|Bearer[ \\t]+|eyJ))"
+              + "[A-Za-z0-9._~+/=-]*");
+  private static final Pattern TRUNCATED_KV =
+      Pattern.compile(
+          "(?i)([\"']?" + KV_KEY + "[\"']?[ \\t]*[:=][ \\t]*[\"']?)" + KV_VALUE_CHARS + "*");
+  private static final Pattern TRUNCATED_URL_CREDENTIALS =
+      Pattern.compile("://[^/\\s:@'\"]+:[^/\\s@'\"]*$");
+
   /** 键值对允许单/双引号与 JSON、HTML 转义引号；值遇到引号、括号、分隔符即停止，绝不吞结构符。 */
   private static final Pattern SECRET_KV_PATTERN =
       Pattern.compile(
@@ -64,6 +101,22 @@ public final class SensitiveDataMasker {
 
   public static TruncatedText maskAndTruncate(String input) {
     return maskAndTruncate(input, DEFAULT_MAX_CHARS);
+  }
+
+  /**
+   * 失败/中断收尾：先做完整匹配脱敏，再兜底掩码残留在末尾的未闭合敏感块。
+   *
+   * <p>流被取消时可能只收到 `-----BEGIN ... PRIVATE KEY-----` 或半截 `"api_key": "sk-...`；
+   * 这些无法被完整匹配命中，必须在这里整体替换，绝不原样发到 SSE。
+   */
+  public static String maskFinal(String input) {
+    if (input == null || input.isEmpty()) return input;
+    String value = mask(input);
+    value = UNCLOSED_PEM.matcher(value).replaceAll("***MASKED-PRIVATE-KEY***");
+    value = TRUNCATED_TOKEN.matcher(value).replaceAll("$1***MASKED***");
+    value = TRUNCATED_KV.matcher(value).replaceAll("$1***MASKED***");
+    value = TRUNCATED_URL_CREDENTIALS.matcher(value).replaceAll("://***MASKED***");
+    return value;
   }
 
   /**

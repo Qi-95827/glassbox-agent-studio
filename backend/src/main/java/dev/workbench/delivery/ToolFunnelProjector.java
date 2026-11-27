@@ -20,6 +20,15 @@ final class ToolFunnelProjector {
 
   static ExecutionViewService.ToolFunnelView project(
       PlanNode node, AgentAssemblySnapshot snapshot, AgentDefinition definition) {
+    return project(node, snapshot, definition, null);
+  }
+
+  /** 与前端 {@code latestAssemblyAttempt} 使用同一规则：最近一次拥有装配快照的尝试。 */
+  static ExecutionViewService.ToolFunnelView project(
+      PlanNode node,
+      AgentAssemblySnapshot snapshot,
+      AgentDefinition definition,
+      Integer attemptNumber) {
     if (node == null || snapshot == null || definition == null) return null;
     var components = snapshot.components();
     var granted = components.tools();
@@ -52,6 +61,10 @@ final class ToolFunnelProjector {
       filtered.add(new ExecutionViewService.ToolFilterView(kind.name(), reason));
     }
     return new ExecutionViewService.ToolFunnelView(
-        components.definition().id(), components.definition().version(), List.copyOf(grants), List.copyOf(filtered));
+        components.definition().id(),
+        components.definition().version(),
+        List.copyOf(grants),
+        List.copyOf(filtered),
+        attemptNumber);
   }
 }

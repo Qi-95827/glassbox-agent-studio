@@ -60,6 +60,8 @@ vi.mock('./RunHeader', () => ({
         data-testid="switch-timeline"
         onClick={() => props.onTab?.('timeline')}
       />
+      <button type="button" data-testid="switch-replay" onClick={() => props.onTab?.('replay')} />
+      <button type="button" data-testid="switch-list" onClick={() => props.onTab?.('list')} />
     </div>
   )
 }));
@@ -103,8 +105,20 @@ vi.mock('../checkpoints/ExecutionTimelinePanel', () => ({
   )
 }));
 vi.mock('../checkpoints/CheckpointTimeTravelPanel', () => ({ default: () => null }));
-vi.mock('./RunReplayPanel', () => ({ default: () => null }));
-vi.mock('./RunListView', () => ({ default: () => null }));
+vi.mock('./RunReplayPanel', () => ({
+  default: props => (
+    <button type="button" data-testid="replay-locate" onClick={() => props.onLocate?.('review')} />
+  )
+}));
+vi.mock('./RunListView', () => ({
+  default: props => (
+    <button
+      type="button"
+      data-testid="list-select"
+      onClick={() => props.onSelectNode?.('review')}
+    />
+  )
+}));
 vi.mock('./RunOutputsPanel', () => ({ default: () => null }));
 vi.mock('../checkpoints/RunCompareDiffView', () => ({ default: () => null }));
 
@@ -205,6 +219,34 @@ describe('RunDetailPage 反思回边点击', () => {
     // 切到时间轴 Tab，再从时间轴打开 review 节点：旧反思回边必须立即清空。
     fireEvent.click(screen.getByTestId('switch-timeline'));
     fireEvent.click(await screen.findByTestId('timeline-open-review'));
+
+    await waitFor(() => expect(screen.getByTestId('inspector-node')).toHaveTextContent('review'));
+    expect(screen.getByTestId('inspector-revision')).toHaveTextContent('none');
+  });
+
+  it('从事件回放定位节点时同样必须清空旧反思回边', async () => {
+    renderPage();
+    await userEvent.click(await screen.findByTestId('click-revision-edge'));
+    await waitFor(() =>
+      expect(screen.getByTestId('inspector-revision')).toHaveTextContent('review->write:1/2')
+    );
+
+    fireEvent.click(screen.getByTestId('switch-replay'));
+    fireEvent.click(await screen.findByTestId('replay-locate'));
+
+    await waitFor(() => expect(screen.getByTestId('inspector-node')).toHaveTextContent('review'));
+    expect(screen.getByTestId('inspector-revision')).toHaveTextContent('none');
+  });
+
+  it('从列表视图定位节点时同样必须清空旧反思回边', async () => {
+    renderPage();
+    await userEvent.click(await screen.findByTestId('click-revision-edge'));
+    await waitFor(() =>
+      expect(screen.getByTestId('inspector-revision')).toHaveTextContent('review->write:1/2')
+    );
+
+    fireEvent.click(screen.getByTestId('switch-list'));
+    fireEvent.click(await screen.findByTestId('list-select'));
 
     await waitFor(() => expect(screen.getByTestId('inspector-node')).toHaveTextContent('review'));
     expect(screen.getByTestId('inspector-revision')).toHaveTextContent('none');

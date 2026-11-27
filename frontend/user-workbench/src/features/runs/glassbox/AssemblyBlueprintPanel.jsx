@@ -2,6 +2,7 @@ import { Box, Chip, Stack, Typography } from '@mui/material';
 import LockOutlined from '@mui/icons-material/LockOutlined';
 import CheckCircleOutlineRounded from '@mui/icons-material/CheckCircleOutlineRounded';
 import { TraceSection, Readout } from '../../../components/WorkbenchDialog';
+import { latestAssemblyAttempt } from './assemblyAttempt';
 import { modelLabel, toolNameLabel } from '../../../constants/labels';
 import { googleTokens } from '../../../theme/googleTheme';
 import { useI18n } from '../../../i18n/I18nProvider';
@@ -23,7 +24,7 @@ const FILTER_REASON_KEY = {
 export default function AssemblyBlueprintPanel({ node, attempts, toolFunnel = null }) {
   const { t, locale } = useI18n();
   // attempts 按 attemptNo 升序返回；与后端 toolFunnel 口径保持一致，取最新一次带装配快照的尝试。
-  const latest = [...(attempts ?? [])].reverse().find(item => item.assembly) ?? null;
+  const latest = latestAssemblyAttempt(attempts);
   const components = latest?.assembly?.components ?? null;
   const grantedMap = components?.tools ?? {};
   const grantedKeys = Object.keys(grantedMap);

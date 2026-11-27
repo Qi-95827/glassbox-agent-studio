@@ -36,12 +36,8 @@ describe('NodeInspector 装配入口摘要口径', () => {
           number: 2,
           models: [],
           tools: [],
-          assembly: {
-            components: {
-              model: { mode: 'DEEPSEEK', name: 'deepseek-chat' },
-              tools: { WORKSPACE_READ: 1, WORKSPACE_SEARCH: 1, WORKSPACE_WRITE: 2 }
-            }
-          }
+          // 第 2 次尝试没有装配快照：入口摘要必须回退到最近一次「有快照」的尝试 #1，并标明尝试号。
+          assembly: null
         }
       ],
       checks: [],
@@ -62,8 +58,8 @@ describe('NodeInspector 装配入口摘要口径', () => {
       />
     );
 
-    // 必须显示最新第 2 次尝试授予的 3 项工具，而不是第 1 次尝试的 1 项工具。
-    expect(screen.getByText('放行工具 3 项')).toBeInTheDocument();
-    expect(screen.queryByText('放行工具 1 项')).not.toBeInTheDocument();
+    // 第 2 次尝试没有快照：必须显示最近一次有快照的 #1 授予的 1 项工具，并标明尝试号。
+    expect(screen.getByText('已装配 1 个工具 · 尝试 #1')).toBeInTheDocument();
+    expect(screen.queryByText('已装配 3 个工具 · 尝试 #2')).not.toBeInTheDocument();
   });
 });

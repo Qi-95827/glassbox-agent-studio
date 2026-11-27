@@ -19,6 +19,7 @@ import CloseRounded from '@mui/icons-material/CloseRounded';
 import OpenInFullRounded from '@mui/icons-material/OpenInFullRounded';
 import SwapHorizRounded from '@mui/icons-material/SwapHorizRounded';
 import VerifiedUserOutlined from '@mui/icons-material/VerifiedUserOutlined';
+import { latestAssemblyAttempt } from './glassbox/assemblyAttempt';
 import PsychologyOutlined from '@mui/icons-material/PsychologyOutlined';
 import WidgetsOutlined from '@mui/icons-material/WidgetsOutlined';
 import ChevronRightRounded from '@mui/icons-material/ChevronRightRounded';
@@ -213,7 +214,8 @@ export default function NodeInspector({
   const edgeToLabel = nodeTitle(node, t('glassbox.currentNode'), locale);
 
   // 与装配蓝图面板、后端 toolFunnel 取同一次（最新）尝试的装配快照，避免三处口径分叉。
-  const latestAssembly = [...(attempts ?? [])].reverse().find(item => item.assembly)?.assembly;
+  const latestAttempt = latestAssemblyAttempt(attempts);
+  const latestAssembly = latestAttempt?.assembly;
   const grantedToolCount = Object.keys(latestAssembly?.components?.tools ?? {}).length;
   const deniedToolCount = tools.filter(call => call.status === 'FAILED').length;
   const totalOutTokens = models.reduce((sum, call) => sum + (Number(call.outputTokens) || 0), 0);
@@ -506,7 +508,14 @@ export default function NodeInspector({
                 <GlassboxEntryCard
                   icon={<WidgetsOutlined sx={{ fontSize: 16 }} />}
                   title={t('glassbox.assembly')}
-                  subtitle={t('inspector.grantedTools', { count: grantedToolCount })}
+                  subtitle={
+                    latestAttempt?.number
+                      ? t('inspector.grantedToolsWithAttempt', {
+                          count: grantedToolCount,
+                          attempt: latestAttempt.number
+                        })
+                      : t('inspector.grantedTools', { count: grantedToolCount })
+                  }
                   accentBg="#F3E8FD"
                   accentFg="#7627BB"
                   onClick={() => openGlassbox('assembly')}

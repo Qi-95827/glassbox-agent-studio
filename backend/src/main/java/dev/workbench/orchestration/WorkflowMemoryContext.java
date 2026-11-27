@@ -55,19 +55,32 @@ class WorkflowMemoryContext {
   }
 
   /**
+   * 一次节点尝试的记忆解析结果：Prompt 段落与装配快照证据来自同一批匹配，绝不再分别查库。
+   */
+  record Loaded(String promptSection, List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.MemoryMatchView> matches) {
+    Loaded {
+      promptSection = promptSection == null ? "" : promptSection;
+      matches = matches == null ? List.of() : List.copyOf(matches);
+    }
+  }
+
+  /**
    * 返回追加到节点输入的记忆段落；未启用记忆或无工作区时返回空串。
    *
    * @throws IllegalStateException 记忆段落超过字符上限
    */
   String load(TaskDefinition task, String runId) {
-    if (task == null || !task.memoryEnabled() || task.workspaceId() == null) return "";
-    if (runId == null || runId.isBlank()) return "";
-    // 多节点动态工作流共享同一份召回：已有冻结结果时直接复用，不再重复落库、计数或发事件。
+    return loadWithEvidence(task, runId).promptSection();
+  }
+
+  /** 单次解析：同一批 MemoryMatch 同时生成 Prompt 段落与装配快照证据。 */
+  Loaded loadWithEvidence(TaskDefinition task, String runId) {
+    if (task == null || !task.memoryEnabled() || task.workspaceId() == null)
+      return new Loaded("", List.of());
+    if (runId == null || runId.isBlank()) return new Loaded("", List.of());
     var frozen = memories.frozenMatches(runId);
-    if (!frozen.isEmpty()) return render(frozen);
-    // 0 命中同样是「已执行过加载」：用 run_memory_loads 区分「已加载但为空」与「尚未加载」，
-    // 否则每个下游节点都会重复检索、重复发事件。
-    if (memories.loadForRun(runId).recorded()) return "";
+    if (!frozen.isEmpty()) return loaded(frozen);
+    if (memories.loadForRun(runId).recorded()) return new Loaded("", List.of());
     String query =
         task.goal()
             + "\n"
@@ -82,7 +95,25 @@ class WorkflowMemoryContext {
         runId,
         EventType.MEMORY_LOADED,
         "动态工作流节点已按混合评分召回 " + context.size() + " 条已确认记忆；得分与理由写入装配快照，内容视为不可信数据。");
-    return section(context);
+    return new Loaded(section(context), views(matches));
+  }
+
+  private Loaded loaded(List<dev.workbench.framework.memory.MemoryMatch> matches) {
+    return new Loaded(render(matches), views(matches));
+  }
+
+  private static List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.MemoryMatchView>
+      views(List<dev.workbench.framework.memory.MemoryMatch> matches) {
+    return matches.stream()
+        .map(
+            match ->
+                new dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.MemoryMatchView(
+                    match.memoryId(),
+                    match.memoryType().name(),
+                    match.totalScore(),
+                    match.matchedReason(),
+                    match.memoryVersion()))
+        .toList();
   }
 
   private String render(List<dev.workbench.framework.memory.MemoryMatch> matches) {

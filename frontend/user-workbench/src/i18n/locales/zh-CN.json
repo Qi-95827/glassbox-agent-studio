@@ -1847,9 +1847,12 @@
   "monitoring.taskFilter.thisTask": "查看任务监控",
   "monitoring.taskFilter.noTask": "当前运行还没有关联任务，无法打开任务监控。",
   "evalLab.compare.notAppliedBadge": "未生效 · 不可归因",
-  "evalLab.compare.attributionWarningTitle": "存在未生效的实验开关，当前指标差值不可归因于该变量",
+  "evalLab.compare.attributionWarningTitle": "存在未生效或证据不足的实验开关，当前指标差值不可归因于该变量",
   "evalLab.compare.appliedSummary": "请求 {baseline} → {candidate}；实际生效 A={baseApplied} / B={candApplied}",
   "evalLab.compare.appliedYes": "已生效",
   "evalLab.compare.appliedNo": "未生效",
-  "evalLab.compare.appliedUnknown": "未上报"
+  "evalLab.compare.appliedUnknown": "未上报",
+  "evalLab.compare.insufficientEvidenceBadge": "证据不足 · 无法归因",
+  "evalLab.compare.coverage": "覆盖 A {baseline} / B {candidate}",
+  "inspector.grantedToolsWithAttempt": "已装配 {count} 个工具 · 尝试 #{attempt}"
 }

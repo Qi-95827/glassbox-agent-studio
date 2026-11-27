@@ -316,6 +316,18 @@ export default function EvalAbComparePanel({ meta }) {
               )}
               {(comparison.configDiff ?? []).map(row => {
                 const unapplied = row.attributable === false;
+                const insufficient = row.attributionStatus === 'INSUFFICIENT_EVIDENCE';
+                const badge = insufficient
+                  ? t('evalLab.compare.insufficientEvidenceBadge')
+                  : unapplied
+                    ? t('evalLab.compare.notAppliedBadge')
+                    : '';
+                const coverage = insufficient
+                  ? t('evalLab.compare.coverage', {
+                      baseline: `${row.baselineAppliedCount ?? 0}/${row.baselineTotalCases ?? 0}`,
+                      candidate: `${row.candidateAppliedCount ?? 0}/${row.candidateTotalCases ?? 0}`
+                    })
+                  : '';
                 const appliedLabel = value =>
                   value === true
                     ? t('evalLab.compare.appliedYes')
@@ -331,13 +343,14 @@ export default function EvalAbComparePanel({ meta }) {
                     candApplied: appliedLabel(row.candidateApplied)
                   });
                 const label = `${row.field}: ${String(row.baseline ?? '—')} → ${String(row.candidate ?? '—')}${
-                  unapplied ? ` (${t('evalLab.compare.notAppliedBadge')})` : ''
+                  badge ? ` (${badge}${coverage ? `, ${coverage}` : ''})` : ''
                 }`;
                 return (
                   <Tooltip key={row.field} title={detail}>
                     <Chip
                       data-testid={`config-diff-${row.field}`}
                       data-attributable={unapplied ? 'false' : 'true'}
+                      data-attribution-status={row.attributionStatus ?? 'ATTRIBUTABLE'}
                       size="small"
                       variant={unapplied ? 'filled' : 'outlined'}
                       color={unapplied ? 'warning' : 'default'}

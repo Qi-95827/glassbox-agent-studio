@@ -159,15 +159,21 @@ public class EvalCompareService {
       String appliedKey = SWITCH_APPLIED_KEYS.get(field);
       Boolean baseApplied = appliedKey == null ? null : appliedState(baseline.cases(), appliedKey);
       Boolean candApplied = appliedKey == null ? null : appliedState(candidate.cases(), appliedKey);
-      boolean attributable =
-          appliedKey == null
-              || (!Boolean.FALSE.equals(baseApplied) && !Boolean.FALSE.equals(candApplied));
+      var baseStats = appliedKey == null ? null : appliedStats(baseline.cases(), appliedKey);
+      var candStats = appliedKey == null ? null : appliedStats(candidate.cases(), appliedKey);
+      String attributionStatus = attributionStatus(appliedKey, baseStats, candStats);
+      boolean attributable = "ATTRIBUTABLE".equals(attributionStatus);
       var row = new LinkedHashMap<String, Object>();
       row.put("field", field);
       row.put("baseline", left);
       row.put("candidate", right);
       row.put("baselineApplied", baseApplied);
       row.put("candidateApplied", candApplied);
+      row.put("baselineAppliedCount", baseStats == null ? 0 : baseStats.trueCount());
+      row.put("baselineTotalCases", baseStats == null ? 0 : baseStats.totalCases());
+      row.put("candidateAppliedCount", candStats == null ? 0 : candStats.trueCount());
+      row.put("candidateTotalCases", candStats == null ? 0 : candStats.totalCases());
+      row.put("attributionStatus", attributionStatus);
       row.put("attributable", attributable);
       if (!attributable) {
         row.put(
@@ -183,6 +189,25 @@ public class EvalCompareService {
       } else {
         row.put("note", "");
       }
+      if ("INSUFFICIENT_EVIDENCE".equals(attributionStatus))
+        row.put(
+            "note",
+            field
+                + " 请求值不同（"
+                + left
+                + " → "
+                + right
+                + "），但缺少生效证据：基线覆盖 "
+                + (baseStats == null ? 0 : baseStats.trueCount())
+                + "/"
+                + (baseStats == null ? 0 : baseStats.totalCases())
+                + " 题、候选覆盖 "
+                + (candStats == null ? 0 : candStats.trueCount())
+                + "/"
+                + (candStats == null ? 0 : candStats.totalCases())
+                + " 题（失败题或旧题未上报 "
+                + appliedKey
+                + "），当前指标差值不可归因给此变量。");
       rows.add(row);
     }
     return List.copyOf(rows);
@@ -203,6 +228,39 @@ public class EvalCompareService {
       if (Boolean.TRUE.equals(value)) seenTrue = true;
     }
     return seenTrue ? Boolean.TRUE : null;
+  }
+
+  /** 单个消融开关在批次内的三态归因：已生效 / 未生效 / 证据不足。 */
+  private static String attributionStatus(
+      String appliedKey, AppliedStats base, AppliedStats candidate) {
+    if (appliedKey == null) return "ATTRIBUTABLE";
+    if (base.falseCount() > 0 || candidate.falseCount() > 0) return "NOT_APPLIED";
+    if (base.totalCases() == 0
+        || candidate.totalCases() == 0
+        || base.trueCount() < base.totalCases()
+        || candidate.trueCount() < candidate.totalCases()) return "INSUFFICIENT_EVIDENCE";
+    return "ATTRIBUTABLE";
+  }
+
+  private record AppliedStats(int trueCount, int falseCount, int totalCases) {}
+
+  /**
+   * 逐题统计某开关真实生效事实；缺失 {@code *Applied} 的失败题/旧题计入总题数但不计入 true，
+   * 因此不会被误判成「已生效」。
+   */
+  private static AppliedStats appliedStats(
+      List<EvalLabService.CaseView> cases, String appliedKey) {
+    if (cases == null || cases.isEmpty()) return new AppliedStats(0, 0, 0);
+    int trueCount = 0;
+    int falseCount = 0;
+    for (var row : cases) {
+      var trace = row.trace();
+      if (trace == null || !trace.containsKey(appliedKey)) continue;
+      Object value = trace.get(appliedKey);
+      if (Boolean.TRUE.equals(value)) trueCount += 1;
+      if (Boolean.FALSE.equals(value)) falseCount += 1;
+    }
+    return new AppliedStats(trueCount, falseCount, cases.size());
   }
 
   private static List<Map<String, Object>> categoryComparison(

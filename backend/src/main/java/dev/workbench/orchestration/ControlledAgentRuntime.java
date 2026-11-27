@@ -409,9 +409,9 @@ final class ControlledAgentRuntime implements AgentRuntime {
    */
   /** 冲刷正文与思考链的滞留窗口；重复调用安全。 */
   private void flushStreamMaskers() {
-    String content = contentMasker.flush();
+    String content = contentMasker.flushFinal();
     if (!content.isEmpty()) publishTransient("MODEL_DELTA", content, java.util.Map.of());
-    String reasoning = reasoningMasker.flush();
+    String reasoning = reasoningMasker.flushFinal();
     if (!reasoning.isEmpty())
       publishTransient("MODEL_REASONING_DELTA", reasoning, java.util.Map.of());
   }

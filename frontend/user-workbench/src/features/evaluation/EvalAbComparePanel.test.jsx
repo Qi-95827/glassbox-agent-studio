@@ -159,3 +159,38 @@ it('flags unapplied switches on the main comparison view as non-attributable', a
   expect(chip).toHaveAttribute('data-attributable', 'false');
   expect(chip).toHaveTextContent(/Not applied · non-attributable/);
 });
+
+it('marks insufficient evidence as non-attributable with coverage and a warning bar', async () => {
+  setComparable(true);
+  setAttribution({
+    fullyAttributable: false,
+    attributionWarnings: [
+      'enableReflection 请求值不同，但缺少生效证据：基线覆盖 1/2 题、候选覆盖 1/2 题，当前指标差值不可归因给此变量。'
+    ],
+    configDiff: [
+      {
+        field: 'enableReflection',
+        baseline: false,
+        candidate: true,
+        baselineApplied: true,
+        candidateApplied: null,
+        baselineAppliedCount: 1,
+        baselineTotalCases: 2,
+        candidateAppliedCount: 1,
+        candidateTotalCases: 2,
+        attributionStatus: 'INSUFFICIENT_EVIDENCE',
+        attributable: false,
+        note: 'enableReflection 缺少生效证据，覆盖 1/2 题。'
+      }
+    ]
+  });
+  await openComparison();
+  const chip = screen.getByTestId('config-diff-enableReflection');
+  expect(chip).toHaveAttribute('data-attributable', 'false');
+  expect(chip).toHaveAttribute('data-attribution-status', 'INSUFFICIENT_EVIDENCE');
+  expect(chip).toHaveTextContent(/Insufficient evidence/);
+  expect(chip).toHaveTextContent(/coverage A 1\/2 \/ B 1\/2/);
+  expect(screen.getByTestId('compare-attribution-warning')).toHaveTextContent(
+    /insufficient-evidence/i
+  );
+});

@@ -27,7 +27,47 @@ public record AgentExecutionRequest(
     String expectedDefinitionSha256,
     List<String> writeFiles,
     String modelConnectionId,
-    String locale) {
+    String locale,
+    List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.MemoryMatchView>
+        resolvedMemories) {
+
+  /** 兼容未预解析记忆的直跑路径；装配时再回退按 runId 查询。 */
+  public AgentExecutionRequest(
+      AgentRole role,
+      String agentId,
+      AgentInput context,
+      String workspaceId,
+      List<String> fileScopes,
+      boolean writeEnabled,
+      Scenario scenario,
+      ModelMode modelMode,
+      CheckpointStage stage,
+      String previous,
+      AgentRuntime runtime,
+      AgentDefinitionRef definitionRef,
+      String expectedDefinitionSha256,
+      List<String> writeFiles,
+      String modelConnectionId,
+      String locale) {
+    this(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeFiles,
+        modelConnectionId,
+        locale,
+        null);
+  }
   /** 旧调用没有语言偏好；默认中文，保持历史行为。 */
   public AgentExecutionRequest(
       AgentRole role,
@@ -239,7 +279,31 @@ public record AgentExecutionRequest(
         expectedDefinitionSha256,
         writeFiles,
         modelMode == ModelMode.USER ? modelConnectionId : null,
-        locale);
+        locale,
+        resolvedMemories);
+  }
+
+  /** 把调度器一次性解析出的记忆证据挂到请求上；执行器不再二次查库。 */
+  public AgentExecutionRequest withResolvedMemories(
+      List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.MemoryMatchView> memories) {
+    return new AgentExecutionRequest(
+        role,
+        agentId,
+        context,
+        workspaceId,
+        fileScopes,
+        writeEnabled,
+        scenario,
+        modelMode,
+        stage,
+        previous,
+        runtime,
+        definitionRef,
+        expectedDefinitionSha256,
+        writeFiles,
+        modelConnectionId,
+        locale,
+        memories);
   }
 
   public AgentExecutionRequest withModelConnection(String connectionId) {
@@ -260,7 +324,8 @@ public record AgentExecutionRequest(
         expectedDefinitionSha256,
         writeFiles,
         connectionId,
-        locale);
+        locale,
+        resolvedMemories);
   }
 
   /** 任务语言随执行请求向下传递；Prompt 与工具描述按此选择语言。 */
@@ -281,7 +346,8 @@ public record AgentExecutionRequest(
         expectedDefinitionSha256,
         writeFiles,
         modelConnectionId,
-        value);
+        value,
+        resolvedMemories);
   }
 
   public AgentExecutionRequest {
@@ -316,5 +382,6 @@ public record AgentExecutionRequest(
             : locale.strip().toLowerCase(java.util.Locale.ROOT).startsWith("en")
                 ? "en-US"
                 : "zh-CN";
+    resolvedMemories = resolvedMemories == null ? null : List.copyOf(resolvedMemories);
   }
 }

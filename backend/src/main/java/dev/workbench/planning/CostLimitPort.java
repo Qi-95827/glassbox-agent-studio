@@ -10,8 +10,25 @@ import dev.workbench.domain.ModelMode;
  * 实现仍由 {@code task.CostService} 提供，Spring 按类型注入。
  */
 public interface CostLimitPort {
+  /** 父运行剩余额度与价格绑定的不可变快照：一次冻结、一次落库，中途改价不再影响子运行。 */
+  record PreparedInheritedLimit(
+      long remainingMicros, String defaultPriceVersionId, String modelPriceVersionsJson) {}
+
   /** 把父运行剩余的费用上限继承给子运行；无父预算时实现应为无操作。 */
   void inheritLimit(String parentRunId, String childRunId);
+
+  /**
+   * 在落库前一次性解析要继承的预算：剩余额度、父预算币种与目标模型价格绑定全部冻结。
+   *
+   * <p>父运行没有预算记录、或子运行使用自带 Key（BYOK 不继承平台预算）时返回空。
+   */
+  default java.util.Optional<PreparedInheritedLimit> prepareInheritedLimit(
+      String parentRunId, ModelMode childMode) {
+    return java.util.Optional.empty();
+  }
+
+  /** 用已冻结的快照写子运行预算账本；不得二次查价。 */
+  default void applyPreparedLimit(String childRunId, PreparedInheritedLimit prepared) {}
 
   /**
    * 校验分叉目标平台模型在父运行预算下的价格版本就绪性。
