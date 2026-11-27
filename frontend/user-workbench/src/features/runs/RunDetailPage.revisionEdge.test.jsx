@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -52,7 +52,17 @@ vi.mock('../../layout/pageChrome', () => ({ usePageChrome: () => {} }));
 vi.mock('../../components/ToastProvider', () => ({
   useToast: () => ({ success: () => {}, error: () => {}, info: () => {}, warning: () => {} })
 }));
-vi.mock('./RunHeader', () => ({ default: () => <div data-testid="run-header" /> }));
+vi.mock('./RunHeader', () => ({
+  default: props => (
+    <div data-testid="run-header">
+      <button
+        type="button"
+        data-testid="switch-timeline"
+        onClick={() => props.onTab?.('timeline')}
+      />
+    </div>
+  )
+}));
 vi.mock('./RunTraceActions', () => ({ default: () => null }));
 vi.mock('./RunRoundsBar', () => ({ default: () => null }));
 vi.mock('./ToolApprovalDrawer', () => ({ default: () => null }));
@@ -81,7 +91,17 @@ vi.mock('./NodeInspector', () => ({
     </div>
   )
 }));
-vi.mock('../checkpoints/ExecutionTimelinePanel', () => ({ default: () => null }));
+vi.mock('../checkpoints/ExecutionTimelinePanel', () => ({
+  default: props => (
+    <div data-testid="execution-timeline-panel">
+      <button
+        type="button"
+        data-testid="timeline-open-review"
+        onClick={() => props.onOpenNode?.('review')}
+      />
+    </div>
+  )
+}));
 vi.mock('../checkpoints/CheckpointTimeTravelPanel', () => ({ default: () => null }));
 vi.mock('./RunReplayPanel', () => ({ default: () => null }));
 vi.mock('./RunListView', () => ({ default: () => null }));
@@ -173,5 +193,20 @@ describe('RunDetailPage 反思回边点击', () => {
   it('历史 node 参数仍兼容，不会静默落空', async () => {
     renderPage('/runs/r1?node=review');
     await waitFor(() => expect(screen.getByTestId('inspector-node')).toHaveTextContent('review'));
+  });
+
+  it('先点反思回边再从时间轴切到另一节点时，必须清空旧回边避免错挂', async () => {
+    renderPage();
+    await userEvent.click(await screen.findByTestId('click-revision-edge'));
+    await waitFor(() =>
+      expect(screen.getByTestId('inspector-revision')).toHaveTextContent('review->write:1/2')
+    );
+
+    // 切到时间轴 Tab，再从时间轴打开 review 节点：旧反思回边必须立即清空。
+    fireEvent.click(screen.getByTestId('switch-timeline'));
+    fireEvent.click(await screen.findByTestId('timeline-open-review'));
+
+    await waitFor(() => expect(screen.getByTestId('inspector-node')).toHaveTextContent('review'));
+    expect(screen.getByTestId('inspector-revision')).toHaveTextContent('none');
   });
 });

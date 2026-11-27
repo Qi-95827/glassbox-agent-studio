@@ -26,28 +26,44 @@ class LegacyH2DoubleStartupIntegrationTest {
   private static final String OLD_TASK = "44e0466a-1263-4eca-9a5d-06a382fbbc4d";
   private static final String OLD_RUN = "75869944-3c0a-493a-9f1e-7d87a65df69f";
 
+  private static final org.slf4j.Logger log =
+      org.slf4j.LoggerFactory.getLogger(LegacyH2DoubleStartupIntegrationTest.class);
+
   /**
-   * 只有当本地副本确实是「含 2026-11-11 历史任务」的旧库时才运行；样本被替换时跳过而不是误报。
+   * 只有当本地副本确实是「含 2026-11-11 历史任务」的旧库时才运行；区分缺样本/锁文件与意外异常，
+   * 不再把所有 Exception 一律静默吞成跳过。
    */
   static boolean legacyCopyAvailable() {
     if (!Files.exists(SOURCE)) return false;
     Path probe = null;
     try {
       probe = Files.createTempFile("agent-workbench-legacy-double-probe-", ".mv.db");
-      Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
+      try {
+        Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
+      } catch (java.io.IOException locked) {
+        log.info("本地 H2 文件正在被占用，跳过双启动历史副本用例：{}", locked.getMessage());
+        return false;
+      }
       String base = probe.toString();
       base = base.substring(0, base.length() - ".mv.db".length()).replace('\\', '/');
       try (var connection =
               java.sql.DriverManager.getConnection(
-                  "jdbc:h2:file:" + base + ";IFEXISTS=TRUE;ACCESS_DATA_READ_ONLY=TRUE", "sa", "");
+                  "jdbc:h2:file:" + base + ";IFEXISTS=TRUE;ACCESS_MODE_DATA=r", "sa", "");
           var statement = connection.prepareStatement("select count(*) from tasks where id = ?")) {
         statement.setString(1, OLD_TASK);
         try (var rows = statement.executeQuery()) {
           return rows.next() && rows.getInt(1) == 1;
         }
+      } catch (java.sql.SQLException sql) {
+        String state = sql.getSQLState();
+        if ("42S02".equals(state) || "90020".equals(String.valueOf(sql.getErrorCode()))) {
+          log.info("本地 H2 副本不包含历史 tasks 样本（SQLState={}），跳过双启动历史副本用例。", state);
+          return false;
+        }
+        throw new IllegalStateException("探测本地 H2 历史副本失败（SQLState=" + state + "）：" + sql.getMessage(), sql);
       }
-    } catch (Exception unavailable) {
-      return false;
+    } catch (java.io.IOException io) {
+      throw new IllegalStateException("无法创建 H2 探测临时副本：" + io.getMessage(), io);
     } finally {
       if (probe != null) {
         try {

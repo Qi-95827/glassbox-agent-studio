@@ -29,6 +29,11 @@ public class EvalCompareService {
           "packIds",
           "maxCostUsd",
           "judgeModelConnectionId");
+  private static final Map<String, String> SWITCH_APPLIED_KEYS =
+      Map.of(
+          "enableReflection", "reflectionApplied",
+          "enableCompaction", "compactionApplied",
+          "enableLongTermMemory", "longTermMemoryApplied");
   private static final Map<String, String> OVERALL_KEYS = new LinkedHashMap<>();
 
   static {
@@ -75,7 +80,15 @@ public class EvalCompareService {
             "createdAt", candidate.run().createdAt()));
     boolean comparable = comparable(baseline, candidate);
     result.put("comparable", comparable);
-    result.put("configDiff", configDiff(baseConfig, candidateConfig));
+    var diffs = configDiff(baseline, candidate);
+    var attributionWarnings =
+        diffs.stream()
+            .filter(row -> Boolean.FALSE.equals(row.get("attributable")))
+            .map(row -> String.valueOf(row.get("note")))
+            .toList();
+    result.put("configDiff", diffs);
+    result.put("fullyAttributable", attributionWarnings.isEmpty());
+    result.put("attributionWarnings", attributionWarnings);
     result.put("categoryComparison", categoryComparison(baseSummary, candidateSummary, comparable));
     var deltas = new ArrayList<>(metricDeltas(baseSummary, candidateSummary));
     deltas.add(
@@ -135,19 +148,61 @@ public class EvalCompareService {
   }
 
   private static List<Map<String, Object>> configDiff(
-      Map<String, Object> baseline, Map<String, Object> candidate) {
+      EvalLabService.Detail baseline, EvalLabService.Detail candidate) {
+    var leftConfig = baseline.run().config();
+    var rightConfig = candidate.run().config();
     var rows = new ArrayList<Map<String, Object>>();
     for (String field : CONFIG_FIELDS) {
-      Object left = baseline.get(field);
-      Object right = candidate.get(field);
+      Object left = leftConfig.get(field);
+      Object right = rightConfig.get(field);
       if (java.util.Objects.equals(left, right)) continue;
+      String appliedKey = SWITCH_APPLIED_KEYS.get(field);
+      Boolean baseApplied = appliedKey == null ? null : appliedState(baseline.cases(), appliedKey);
+      Boolean candApplied = appliedKey == null ? null : appliedState(candidate.cases(), appliedKey);
+      boolean attributable =
+          appliedKey == null
+              || (!Boolean.FALSE.equals(baseApplied) && !Boolean.FALSE.equals(candApplied));
       var row = new LinkedHashMap<String, Object>();
       row.put("field", field);
       row.put("baseline", left);
       row.put("candidate", right);
+      row.put("baselineApplied", baseApplied);
+      row.put("candidateApplied", candApplied);
+      row.put("attributable", attributable);
+      if (!attributable) {
+        row.put(
+            "note",
+            field
+                + " 请求值不同（"
+                + left
+                + " → "
+                + right
+                + "），但评测运行器未实际下推该开关（"
+                + appliedKey
+                + "=false），当前指标差值不可归因给此变量。");
+      } else {
+        row.put("note", "");
+      }
       rows.add(row);
     }
     return List.copyOf(rows);
+  }
+
+  /**
+   * 汇总同一批次内某个实验开关的实际生效事实：任一题显式上报 {@code false} 即视为未生效，
+   * 避免把「请求开了开关、但执行器没下推」的随机波动包装成实验归因。
+   */
+  private static Boolean appliedState(List<EvalLabService.CaseView> cases, String appliedKey) {
+    if (cases == null || cases.isEmpty()) return null;
+    boolean seenTrue = false;
+    for (var row : cases) {
+      var trace = row.trace();
+      if (trace == null || !trace.containsKey(appliedKey)) continue;
+      Object value = trace.get(appliedKey);
+      if (Boolean.FALSE.equals(value)) return Boolean.FALSE;
+      if (Boolean.TRUE.equals(value)) seenTrue = true;
+    }
+    return seenTrue ? Boolean.TRUE : null;
   }
 
   private static List<Map<String, Object>> categoryComparison(

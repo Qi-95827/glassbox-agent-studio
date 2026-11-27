@@ -474,11 +474,11 @@ class WorkflowScheduler {
   /**
    * 节点是否命中「尚未放行」的用户断点。
    *
-   * <p>只对 Agent 节点生效；系统检查节点不产生副作用，也不接受断点。
+   * <p>系统检查节点同样可以被用户打断点（前端检查器对两类节点都开放），因此不能再按节点类型排除：
+   * 断点必须在认领前生效，否则「打了断点却没停」会让用户误以为检查点没有执行。
    */
   private boolean breakpointHit(String runId, PlanNode node, Set<String> released) {
-    return !node.systemCheck()
-        && traces != null
+    return traces != null
         && !released.contains(node.id().toString())
         && traces.planControl(runId).breakpoints().contains(node.id().toString());
   }

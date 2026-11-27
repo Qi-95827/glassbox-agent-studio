@@ -57,15 +57,16 @@ class PlanCandidateRevisionService {
 
   /** 只有就绪、未消费、且仍是本组最新输入版本的候选才能被改写。 */
   private void requireEditable(PlanCandidateEntity row, String expectedCandidateSha256) {
+    // 并发基线必填：缺基线就无法区分「正常修订」与「覆盖他人刚写入的修订」，一律拒绝。
+    if (expectedCandidateSha256 == null || expectedCandidateSha256.isBlank())
+      throw new IllegalArgumentException("修改计划草稿必须携带当前候选摘要，请刷新后重试。");
     if (row.getRunId() != null)
       throw new IllegalStateException("该候选已用于运行 " + row.getRunId() + "，不能再修改。");
     if (!PlanCandidateStatus.READY.name().equals(row.getStatus()))
       throw new IllegalStateException("候选当前状态为 " + row.getStatus() + "，不能修改。");
     if (store.latestInputVersion(row.getGroupId()) != row.getInputVersion())
       throw new IllegalStateException("已有更新的输入版本，请重新生成计划后再修改。");
-    if (expectedCandidateSha256 != null
-        && !expectedCandidateSha256.isBlank()
-        && !expectedCandidateSha256.equals(row.getCandidateSha256()))
+    if (!expectedCandidateSha256.equals(row.getCandidateSha256()))
       throw new IllegalStateException("候选已被修改过，请刷新后再应用画布。");
   }
 }

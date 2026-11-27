@@ -39,6 +39,8 @@ class RunForkServiceTest {
   private final RunForkRepository forks = mock(RunForkRepository.class);
   private final dev.workbench.planning.CostLimitPort costs =
       mock(dev.workbench.planning.CostLimitPort.class);
+  private final dev.workbench.store.RunIterationRecordService iterations =
+      mock(dev.workbench.store.RunIterationRecordService.class);
 
   private RunForkService service;
   private final UUID sourceId = UUID.randomUUID();
@@ -48,7 +50,17 @@ class RunForkServiceTest {
   void setUp() {
     service =
         new RunForkService(
-            records, plans, authorization, creations, runs, connections, evidence, forks, costs);
+            records,
+            plans,
+            authorization,
+            creations,
+            runs,
+            connections,
+            evidence,
+            forks,
+            costs,
+            iterations);
+    when(iterations.note(anyString())).thenReturn(java.util.Optional.empty());
     when(records.taskDefinition(taskId.toString())).thenReturn(task());
     when(plans.find(sourceId.toString())).thenReturn(List.of());
     when(authorization.prepare(anyString(), any(), any(), any()))
@@ -178,7 +190,7 @@ class RunForkServiceTest {
     assertTrue(forkTask.memoryEnabled(), "记忆开关必须继承，不能被默认关掉");
     assertEquals(richTask(ModelMode.MOCK, true).roleBudgets(), forkTask.roleBudgets(), "角色预算不得被清空");
     assertEquals(richTask(ModelMode.MOCK, true).toolBudgets(), forkTask.toolBudgets(), "工具预算不得被清空");
-    verify(costs).inheritLimit(sourceId.toString(), forked.runId());
+    verify(costs).inheritLimit(sourceId.toString(), forked.runId(), ModelMode.MOCK);
   }
 
   @Test
@@ -229,6 +241,60 @@ class RunForkServiceTest {
                 service.fork(
                     sourceId.toString(), new RunForkService.Request(null, null, null, null, null)));
     assertTrue(error.getMessage().contains("未启用"));
+    verify(creations, never())
+        .persistFromCandidate(any(), any(), any(), anyString(), any(), any(), any());
+  }
+
+  @Test
+  void forkFromIteratedRunUsesThatRoundsEffectiveModelAndConnection() {
+    // 源任务第 1 轮是 MOCK，但第 2 轮调改切换成了 BYOK conn-round2；从第 2 轮分叉不能悄悄退回 MOCK。
+    when(records.runSnapshot(sourceId.toString())).thenReturn(snapshot(RunStatus.COMPLETED));
+    when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.MOCK, true));
+    when(iterations.note(sourceId.toString()))
+        .thenReturn(
+            java.util.Optional.of(
+                new dev.workbench.store.RunIterationRecordService.Note(
+                    sourceId.toString(),
+                    2,
+                    "改用自备模型",
+                    "上轮交付",
+                    null,
+                    "user",
+                    "conn-round2",
+                    "2026-01-02T00:00:00Z")));
+    when(connections.requireEnabledOwned("conn-round2")).thenReturn("conn-round2");
+    var node = planNode();
+    when(plans.find(sourceId.toString())).thenReturn(List.of(node));
+    when(plans.specsByNode(sourceId.toString())).thenReturn(Map.of(node.id(), spec(node.id())));
+    when(plans.revisionEdges(sourceId.toString())).thenReturn(List.of());
+
+    service.fork(sourceId.toString(), new RunForkService.Request(null, null, null, null, null));
+
+    var captor = org.mockito.ArgumentCaptor.forClass(TaskDefinition.class);
+    verify(creations)
+        .persistFromCandidate(captor.capture(), any(), any(), anyString(), any(), any(), any());
+    assertEquals(ModelMode.USER, captor.getValue().modelMode());
+    assertEquals("conn-round2", captor.getValue().modelConnectionId());
+    verify(connections).requireEnabledOwned("conn-round2");
+    verify(costs, never()).inheritLimit(anyString(), anyString(), any());
+  }
+
+  @Test
+  void crossPlatformForkChecksPricingReadinessBeforePersisting() {
+    when(records.runSnapshot(sourceId.toString())).thenReturn(snapshot(RunStatus.COMPLETED));
+    when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.MOCK, true));
+    org.mockito.Mockito.doThrow(new IllegalStateException("平台未配置模型 deepseek-chat 的生效价格版本"))
+        .when(costs)
+        .requireForkPricingReady(sourceId.toString(), ModelMode.DEEPSEEK);
+
+    var error =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                service.fork(
+                    sourceId.toString(),
+                    new RunForkService.Request(null, null, null, "deepseek", null)));
+    assertTrue(error.getMessage().contains("生效价格版本"));
     verify(creations, never())
         .persistFromCandidate(any(), any(), any(), anyString(), any(), any(), any());
   }

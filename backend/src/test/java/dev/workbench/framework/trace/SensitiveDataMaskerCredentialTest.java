@@ -57,6 +57,27 @@ class SensitiveDataMaskerCredentialTest {
   }
 
   @Test
+  void strictMaxLengthNeverExceedsTheRequestedColumnWidth() {
+    String longSource = "x".repeat(120);
+    assertEquals(80, SensitiveDataMasker.maskToMaxLength(longSource, 80).length());
+    assertEquals(32, SensitiveDataMasker.maskToMaxLength("y".repeat(64), 32).length());
+    // 短限长不得被 maskAndTruncate 的 256 保底抬高，也不得追加任何后缀。
+    assertFalse(SensitiveDataMasker.maskToMaxLength(longSource, 80).contains("已截断"));
+    assertEquals(80, SensitiveDataMasker.maskToMaxLength(longSource, 80).length());
+
+    String secret = "source=sk-live-9f8e7d6c5b4a3210-" + "z".repeat(120);
+    String masked = SensitiveDataMasker.maskToMaxLength(secret, 80);
+    assertTrue(masked.length() <= 80, masked);
+    assertFalse(masked.contains("sk-live-9f8e7d6c5b4a3210"), masked);
+    assertTrue(masked.contains("***MASKED"), masked);
+
+    assertEquals("", SensitiveDataMasker.maskToMaxLength("", 10));
+    assertNull(SensitiveDataMasker.maskToMaxLength(null, 10));
+    assertThrows(
+        IllegalArgumentException.class, () -> SensitiveDataMasker.maskToMaxLength("abc", 0));
+  }
+
+  @Test
   void ordinaryTextIsUnchanged() {
     String text = "排序页面需要保留原生实现并给出证据。";
 

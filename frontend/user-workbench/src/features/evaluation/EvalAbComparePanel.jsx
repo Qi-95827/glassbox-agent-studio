@@ -15,6 +15,7 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  Tooltip,
   Typography
 } from '@mui/material';
 import CompareArrowsRounded from '@mui/icons-material/CompareArrowsRounded';
@@ -179,6 +180,19 @@ export default function EvalAbComparePanel({ meta }) {
           {!comparison.comparable && (
             <Alert severity="warning">{t('evalLab.compare.datasetMismatch')}</Alert>
           )}
+          {(comparison.attributionWarnings?.length > 0 ||
+            comparison.fullyAttributable === false) && (
+            <Alert severity="warning" data-testid="compare-attribution-warning">
+              <Typography sx={{ fontSize: 12.5, fontWeight: 600 }}>
+                {t('evalLab.compare.attributionWarningTitle')}
+              </Typography>
+              {(comparison.attributionWarnings ?? []).map((note, idx) => (
+                <Typography key={idx} variant="caption" sx={{ display: 'block', mt: 0.35 }}>
+                  {note}
+                </Typography>
+              ))}
+            </Alert>
+          )}
           <Box
             sx={{
               display: 'grid',
@@ -300,14 +314,38 @@ export default function EvalAbComparePanel({ meta }) {
                   {t('evalLab.compare.unchanged')}
                 </Typography>
               )}
-              {(comparison.configDiff ?? []).map(row => (
-                <Chip
-                  key={row.field}
-                  size="small"
-                  variant="outlined"
-                  label={`${row.field}: ${String(row.baseline ?? '—')} → ${String(row.candidate ?? '—')}`}
-                />
-              ))}
+              {(comparison.configDiff ?? []).map(row => {
+                const unapplied = row.attributable === false;
+                const appliedLabel = value =>
+                  value === true
+                    ? t('evalLab.compare.appliedYes')
+                    : value === false
+                      ? t('evalLab.compare.appliedNo')
+                      : t('evalLab.compare.appliedUnknown');
+                const detail =
+                  row.note ||
+                  t('evalLab.compare.appliedSummary', {
+                    baseline: String(row.baseline ?? '—'),
+                    candidate: String(row.candidate ?? '—'),
+                    baseApplied: appliedLabel(row.baselineApplied),
+                    candApplied: appliedLabel(row.candidateApplied)
+                  });
+                const label = `${row.field}: ${String(row.baseline ?? '—')} → ${String(row.candidate ?? '—')}${
+                  unapplied ? ` (${t('evalLab.compare.notAppliedBadge')})` : ''
+                }`;
+                return (
+                  <Tooltip key={row.field} title={detail}>
+                    <Chip
+                      data-testid={`config-diff-${row.field}`}
+                      data-attributable={unapplied ? 'false' : 'true'}
+                      size="small"
+                      variant={unapplied ? 'filled' : 'outlined'}
+                      color={unapplied ? 'warning' : 'default'}
+                      label={label}
+                    />
+                  </Tooltip>
+                );
+              })}
             </Stack>
           </Box>
 

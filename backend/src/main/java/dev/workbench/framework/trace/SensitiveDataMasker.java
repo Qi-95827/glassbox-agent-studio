@@ -31,7 +31,7 @@ public final class SensitiveDataMasker {
   private static final Pattern SECRET_KV_PATTERN =
       Pattern.compile(
           "(?i)(\"?'?(?:api[_-]?key|secret|password|passwd|token|authorization|cookie)'?\"?\\s*[:=]\\s*\"?'?)"
-              + "([^\"'\\s,;}\\]]{6,})");
+              + "([^\"'\\s,;}\\]。，；！？、）》」』】]{6,})");
 
   private SensitiveDataMasker() {}
 
@@ -64,5 +64,19 @@ public final class SensitiveDataMasker {
 
   public static TruncatedText maskAndTruncate(String input) {
     return maskAndTruncate(input, DEFAULT_MAX_CHARS);
+  }
+
+  /**
+   * 严格限长脱敏：先脱敏，再硬截断到不超过 {@code maxChars}。
+   *
+   * <p>与 {@link #maskAndTruncate} 的区别是**绝不抬高下限、绝不追加后缀**：调用方明确要求
+   * varchar(32/64/80) 这类短列时，多一个字符就是数据库列宽溢出。{@code maskAndTruncate} 的 256 字
+   * 保底只适用于长文本快照。
+   */
+  public static String maskToMaxLength(String input, int maxChars) {
+    if (input == null) return null;
+    if (maxChars < 1) throw new IllegalArgumentException("限长必须为正数。");
+    String masked = mask(input);
+    return masked.length() <= maxChars ? masked : masked.substring(0, maxChars);
   }
 }

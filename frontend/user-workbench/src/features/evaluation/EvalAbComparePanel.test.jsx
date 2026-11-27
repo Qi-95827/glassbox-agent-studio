@@ -8,8 +8,9 @@ import { ToastProvider } from '../../components/ToastProvider';
 import EvalAbComparePanel from './EvalAbComparePanel';
 import EvalRunsPanel from './EvalRunsPanel';
 
-const { runs, row, setComparable } = vi.hoisted(() => {
+const { runs, row, setComparable, setAttribution } = vi.hoisted(() => {
   let comparable = true;
+  let attribution = { configDiff: [], fullyAttributable: true, attributionWarnings: [] };
   return {
     runs: ['baseline', 'candidate'].map(id => ({
       id,
@@ -38,7 +39,8 @@ const { runs, row, setComparable } = vi.hoisted(() => {
       codeScore: 1,
       status: 'UNCHANGED'
     },
-    setComparable: value => (value == null ? comparable : (comparable = value))
+    setComparable: value => (value == null ? comparable : (comparable = value)),
+    setAttribution: value => (value == null ? attribution : (attribution = value))
   };
 });
 
@@ -75,7 +77,8 @@ vi.mock('../../api/evalLab', () => ({
       metricDeltas: setComparable()
         ? [{ metric: 'avgActualInput', baseline: 115, candidate: 31, delta: -84 }]
         : [],
-      caseDiff: setComparable() ? [row] : []
+      caseDiff: setComparable() ? [row] : [],
+      ...setAttribution()
     })
   }
 }));
@@ -122,8 +125,37 @@ it('overlays both six-axis public batch series and displays real input token del
 
 it('keeps the radar visible and suppresses per-case deltas when public hashes differ', async () => {
   setComparable(false);
+  setAttribution({ configDiff: [], fullyAttributable: true, attributionWarnings: [] });
   await openComparison();
   expect(await screen.findByRole('alert')).toHaveTextContent(/question sets/i);
   expect(screen.getByRole('img', { name: 'Six-domain capability radar' })).toBeInTheDocument();
   expect(screen.queryByText('English question')).not.toBeInTheDocument();
+});
+
+it('flags unapplied switches on the main comparison view as non-attributable', async () => {
+  setComparable(true);
+  setAttribution({
+    fullyAttributable: false,
+    attributionWarnings: [
+      'enableReflection 请求值不同（false → true），但评测运行器未实际下推该开关（reflectionApplied=false），当前指标差值不可归因给此变量。'
+    ],
+    configDiff: [
+      {
+        field: 'enableReflection',
+        baseline: false,
+        candidate: true,
+        baselineApplied: false,
+        candidateApplied: false,
+        attributable: false,
+        note: 'enableReflection 请求值不同（false → true），但评测运行器未实际下推该开关（reflectionApplied=false），当前指标差值不可归因给此变量。'
+      }
+    ]
+  });
+  await openComparison();
+  const warning = await screen.findByTestId('compare-attribution-warning');
+  expect(warning).toHaveTextContent(/cannot be attributed|non-attributable/i);
+  expect(warning).toHaveTextContent(/reflectionApplied=false/);
+  const chip = screen.getByTestId('config-diff-enableReflection');
+  expect(chip).toHaveAttribute('data-attributable', 'false');
+  expect(chip).toHaveTextContent(/Not applied · non-attributable/);
 });

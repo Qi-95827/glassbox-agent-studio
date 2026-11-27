@@ -166,21 +166,71 @@ public class CostService
   @Override
   @Transactional
   public void inheritLimit(String parentRunId, String childRunId) {
+    inheritLimit(parentRunId, childRunId, null);
+  }
+
+  /** 分叉前同步核验跨平台模型切换所需的价格绑定，避免派发出首次预留必败的运行。 */
+  @Override
+  public void requireForkPricingReady(String parentRunId, ModelMode childMode) {
+    if (parentRunId == null || childMode == null || childMode == ModelMode.USER) return;
+    var parent = limits.findById(parentRunId).orElse(null);
+    if (parent == null) return;
+    resolveChildModelPrices(parent, childMode);
+  }
+
+  /**
+   * 继承父运行剩余额度；显式切换到父运行未绑定的平台模型时，为子运行补齐该模型当前生效价格绑定。
+   */
+  @Override
+  @Transactional
+  public void inheritLimit(String parentRunId, String childRunId, ModelMode childMode) {
     if (parentRunId == null || childRunId == null || parentRunId.equals(childRunId)) return;
     var parent = limits.findById(parentRunId).orElse(null);
     if (parent == null || limits.existsById(childRunId)) return;
     long remaining =
         Math.max(
             0, parent.getMaxCostMicros() - parent.getSettledMicros() - parent.getReservedMicros());
+    String modelPricesJson = resolveChildModelPrices(parent, childMode);
     String time = Instant.now().toString();
     limits.save(
         new RunCostLimitEntity(
             childRunId,
             remaining,
             parent.getPriceVersionId(),
-            parent.getModelPriceVersionsJson(),
+            modelPricesJson,
             time,
             time));
+  }
+
+  private String resolveChildModelPrices(RunCostLimitEntity parent, ModelMode childMode) {
+    String existingJson = parent.getModelPriceVersionsJson();
+    if (childMode == null || childMode == ModelMode.USER) return existingJson;
+    var bindings = readModelPrices(existingJson);
+    if (bindings.isEmpty()) return existingJson;
+    String modelCode = ModelKind.forMode(childMode).code();
+    if (bindings.containsKey(modelCode)) return existingJson;
+    var active =
+        prices
+            .findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(PROVIDER, modelCode)
+            .orElseThrow(
+                () ->
+                    new IllegalStateException(
+                        "平台未配置模型 " + modelCode + " 的生效价格版本，无法继承预算并切换该模型。"));
+    var parentPrice =
+        parent.getPriceVersionId() == null
+            ? null
+            : prices.findById(parent.getPriceVersionId()).orElse(null);
+    if (parentPrice != null && !parentPrice.getCurrency().equals(active.getCurrency())) {
+      throw new IllegalStateException(
+          "目标模型价格币种（"
+              + active.getCurrency()
+              + "）与源运行预算币种（"
+              + parentPrice.getCurrency()
+              + "）不一致，无法直接继承预算。");
+    }
+    var updated = new java.util.LinkedHashMap<>(bindings);
+    updated.put(modelCode, active.getId());
+    return writeModelPrices(updated);
   }
 
   /** 任务级预算只绑定默认价格；每次实际调用仍按 modelId 查表计价。 */

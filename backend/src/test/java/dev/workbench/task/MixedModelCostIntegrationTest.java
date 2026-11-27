@@ -69,4 +69,41 @@ class MixedModelCostIntegrationTest {
             () -> costs.reserve(runId, ModelKind.DEEPSEEK_FLASH));
     assertEquals(dev.workbench.domain.StopCause.COST_LIMIT, error.stopCause());
   }
+
+  @Test
+  void crossPlatformForkInheritsRemainingBudgetAndBindsTargetPlatformModelPrice() {
+    var targetKind = ModelKind.forMode(ModelMode.DEEPSEEK);
+    costs.publish("default", "mock", "CNY", 0, 0, 100, 100, "test");
+    costs.publish("default", targetKind.code(), "CNY", 2_000_000, 4_000_000, 100, 100, "test");
+    String parentRunId = UUID.randomUUID().toString();
+    String childRunId = UUID.randomUUID().toString();
+    // 父运行只绑定了 mock 的价格版本，没有 deepseek。
+    costs.bindLimit(
+        parentRunId, costs.requireBudgetPricing(java.util.List.of(ModelKind.MOCK), 5_000L));
+
+    // 分叉显式切到 DEEPSEEK：前置校验应放行，继承后子运行可正常按目标模型预留结算。
+    assertDoesNotThrow(() -> costs.requireForkPricingReady(parentRunId, ModelMode.DEEPSEEK));
+    costs.inheritLimit(parentRunId, childRunId, ModelMode.DEEPSEEK);
+
+    var reservation = costs.reserve(childRunId, targetKind);
+    var settlement = costs.settle(reservation, Integer.valueOf(100), Integer.valueOf(100));
+    assertEquals(Long.valueOf(600L), settlement.actualMicros());
+    assertFalse(settlement.unknown());
+  }
+
+  @Test
+  void crossPlatformForkRejectsMismatchedCurrencyBeforePersisting() {
+    var targetKind = ModelKind.forMode(ModelMode.DEEPSEEK);
+    costs.publish("default", "mock", "CNY", 0, 0, 100, 100, "test");
+    costs.publish("default", targetKind.code(), "USD", 2_000_000, 4_000_000, 100, 100, "test");
+    String parentRunId = UUID.randomUUID().toString();
+    costs.bindLimit(
+        parentRunId, costs.requireBudgetPricing(java.util.List.of(ModelKind.MOCK), 5_000L));
+
+    var error =
+        assertThrows(
+            IllegalStateException.class,
+            () -> costs.requireForkPricingReady(parentRunId, ModelMode.DEEPSEEK));
+    assertTrue(error.getMessage().contains("币种"), error.getMessage());
+  }
 }

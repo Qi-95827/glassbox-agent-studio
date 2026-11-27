@@ -192,7 +192,7 @@ public interface PlanCandidateRepository extends JpaRepository<PlanCandidateEnti
         c.candidateSha256 = :sha256, c.agentBindingsJson = :bindingsJson
       where c.id = :id and c.ownerScopeKey = :ownerScopeKey
         and c.status = :ready and c.runId is null
-        and (:expectedSha256 is null or c.candidateSha256 = :expectedSha256)
+        and c.candidateSha256 = :expectedSha256
       """)
   int reviseDraft(
       @Param("id") String id,

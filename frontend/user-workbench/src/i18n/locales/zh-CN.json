@@ -1845,5 +1845,11 @@
   "monitoring.taskFilter.focusedTitle": "单任务监控聚焦",
   "monitoring.taskFilter.focusedMeta": "任务 #{id} · 最新状态 {status} · 共 {rounds} 轮 · 当前视图 {runs} 条运行",
   "monitoring.taskFilter.thisTask": "查看任务监控",
-  "monitoring.taskFilter.noTask": "当前运行还没有关联任务，无法打开任务监控。"
+  "monitoring.taskFilter.noTask": "当前运行还没有关联任务，无法打开任务监控。",
+  "evalLab.compare.notAppliedBadge": "未生效 · 不可归因",
+  "evalLab.compare.attributionWarningTitle": "存在未生效的实验开关，当前指标差值不可归因于该变量",
+  "evalLab.compare.appliedSummary": "请求 {baseline} → {candidate}；实际生效 A={baseApplied} / B={candApplied}",
+  "evalLab.compare.appliedYes": "已生效",
+  "evalLab.compare.appliedNo": "未生效",
+  "evalLab.compare.appliedUnknown": "未上报"
 }

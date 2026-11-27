@@ -1845,5 +1845,11 @@
   "monitoring.taskFilter.focusedTitle": "Single-task monitoring focus",
   "monitoring.taskFilter.focusedMeta": "Task #{id} · latest status {status} · {rounds} rounds · {runs} runs in view",
   "monitoring.taskFilter.thisTask": "View task monitoring",
-  "monitoring.taskFilter.noTask": "This run has no linked task yet, so task monitoring cannot be opened."
+  "monitoring.taskFilter.noTask": "This run has no linked task yet, so task monitoring cannot be opened.",
+  "evalLab.compare.notAppliedBadge": "Not applied · non-attributable",
+  "evalLab.compare.attributionWarningTitle": "Unapplied experiment switches detected — metric deltas cannot be attributed to them",
+  "evalLab.compare.appliedSummary": "Requested {baseline} → {candidate}; applied A={baseApplied} / B={candApplied}",
+  "evalLab.compare.appliedYes": "applied",
+  "evalLab.compare.appliedNo": "not applied",
+  "evalLab.compare.appliedUnknown": "unreported"
 }

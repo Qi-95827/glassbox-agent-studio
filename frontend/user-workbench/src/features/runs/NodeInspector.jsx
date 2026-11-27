@@ -212,7 +212,8 @@ export default function NodeInspector({
     t('glassbox.upstreamNode');
   const edgeToLabel = nodeTitle(node, t('glassbox.currentNode'), locale);
 
-  const latestAssembly = attempts.find(item => item.assembly)?.assembly;
+  // 与装配蓝图面板、后端 toolFunnel 取同一次（最新）尝试的装配快照，避免三处口径分叉。
+  const latestAssembly = [...(attempts ?? [])].reverse().find(item => item.assembly)?.assembly;
   const grantedToolCount = Object.keys(latestAssembly?.components?.tools ?? {}).length;
   const deniedToolCount = tools.filter(call => call.status === 'FAILED').length;
   const totalOutTokens = models.reduce((sum, call) => sum + (Number(call.outputTokens) || 0), 0);

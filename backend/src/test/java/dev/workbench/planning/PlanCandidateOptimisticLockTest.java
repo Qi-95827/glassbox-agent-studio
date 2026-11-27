@@ -87,11 +87,13 @@ class PlanCandidateOptimisticLockTest {
   }
 
   @Test
-  void omittedExpectationStillAllowsEditableRevision() {
+  void missingExpectationIsRejectedInsideTheDatabaseCondition() {
+    // 没有并发基线就不允许写入：JPQL 严格等值，null 永远不匹配，因此影响 0 行。
     int applied =
         tx.execute(status -> candidates.reviseDraft(id, OWNER, "{\"nodes\":[3]}", SHA_B, "[]", null, "READY"));
-    assertEquals(1, applied);
-    assertEquals(SHA_B, currentSha());
+    assertEquals(0, applied, "缺少 expectedCandidateSha256 必须被数据库条件拒绝");
+    assertEquals(SHA_A, currentSha(), "缺少基线的修订不得改写任何字节");
+    assertEquals("{\"nodes\":[]}", currentJson());
   }
 
   private String currentSha() {

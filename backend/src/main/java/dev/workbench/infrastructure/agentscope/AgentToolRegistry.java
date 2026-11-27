@@ -123,13 +123,14 @@ public final class AgentToolRegistry {
     return extensions.stream().anyMatch(lower::endsWith);
   }
 
-  private static <T> ToolSpecification<T> privateSpec(
+  static <T> ToolSpecification<T> privateSpec(
       ToolSpecification<T> original,
       PinnedTool tool,
       String locale) {
     boolean english =
         dev.workbench.framework.prompt.PromptResourceLoader.isEnglish(locale);
-    return new ToolSpecification<>(
+    var spec =
+        new ToolSpecification<>(
         tool.toolName(),
         english
             ? tool.name()
@@ -150,5 +151,7 @@ public final class AgentToolRegistry {
         original.action(),
         original.summarize(),
         original.resourceVersion());
+    // 私有工具同样必须保留路径白名单校验：否则私有多文件工具会记 PATH_WHITELIST: SKIP，越界直到执行期才报错。
+    return spec.withScopeValidate(original.scopeValidate());
   }
 }

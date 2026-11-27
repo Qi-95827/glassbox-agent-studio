@@ -212,9 +212,9 @@ public class ExternalTraceService {
 
   private static String text(String value, int limit, String fallback) {
     if (value == null || value.isBlank()) return fallback;
-    // 名称与来源同样是外发文本：统一先脱敏再按上限截断，避免把 Key/令牌写进元数据。
-    String masked = SensitiveDataMasker.maskAndTruncate(value.strip(), limit).text();
-    return masked.isBlank() ? fallback : masked;
+    // 名称与来源同样是外发文本：先脱敏，再严格按列宽截断（不能借用 maskAndTruncate 的 256 保底）。
+    String masked = SensitiveDataMasker.maskToMaxLength(value.strip(), limit);
+    return masked == null || masked.isBlank() ? fallback : masked;
   }
 
   /** 时间戳只接受可解析的 ISO-8601；非法输入直接拒绝，不落一个无法排序的字符串。 */

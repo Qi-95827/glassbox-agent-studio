@@ -87,6 +87,7 @@ public class ToolMcpRunner implements EvalCategoryRunner {
         String result =
             gateway.execute(
                 kind,
+                name,
                 version,
                 dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.sha256(
                     name + "|" + args),
@@ -94,10 +95,12 @@ public class ToolMcpRunner implements EvalCategoryRunner {
                 effect,
                 "评测重放工具 " + name,
                 value -> value == null ? "" : String.valueOf(value),
-                () -> validate(kind, target, scopes, args),
+                scopeValidate(kind, target, scopes),
+                () -> validateSchema(kind, target, args),
                 null,
                 null,
                 null,
+                scopes,
                 () -> "simulated:" + name);
         var node = JSON.readTree(result);
         status = node.path("status").asText("SUCCEEDED");
@@ -256,19 +259,26 @@ public class ToolMcpRunner implements EvalCategoryRunner {
         });
   }
 
-  private static void validate(
-      ToolKind kind, String path, List<String> authorized, String argsJson) {
+  /** 参数 Schema 门：只判断「是否是 JSON 对象」与文件工具是否有显式目标路径。 */
+  private static void validateSchema(ToolKind kind, String path, String argsJson) {
     requireObject(argsJson);
     if (kind == ToolKind.MCP) return;
     if (path == null || path.isBlank()) throw new IllegalArgumentException("文件工具缺少目标路径。");
-    String normalized;
-    try {
-      normalized = AuthorizedFileSet.normalize(path);
-    } catch (IllegalArgumentException e) {
-      throw new IllegalArgumentException("路径不在工作区内：" + e.getMessage());
-    }
-    if (!authorized.contains(normalized))
-      throw new IllegalArgumentException("目标文件不在授权范围：" + normalized);
+  }
+
+  /** 路径白名单门：MCP 没有工作区路径 → 返回 null，让网关记 SKIP；文件工具走标准归一化与授权集合比对。 */
+  private static Runnable scopeValidate(ToolKind kind, String path, List<String> authorized) {
+    if (kind == ToolKind.MCP) return null;
+    return () -> {
+      String normalized;
+      try {
+        normalized = AuthorizedFileSet.normalize(path);
+      } catch (IllegalArgumentException e) {
+        throw new IllegalArgumentException("路径不在工作区内：" + e.getMessage());
+      }
+      if (!authorized.contains(normalized))
+        throw new IllegalArgumentException("目标文件不在授权范围：" + normalized);
+    };
   }
 
   private static void requireObject(String argsJson) {

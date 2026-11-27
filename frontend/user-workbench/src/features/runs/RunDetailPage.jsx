@@ -173,6 +173,7 @@ export default function RunDetailPage() {
     const allowed = ['react', 'result', 'handoff', 'gateway', 'llm', 'assembly'];
     setSelectedId(target.id);
     setSelectedEdge(null);
+    setSelectedRevisionEdge(null);
     setInspectorOpen(true);
     setTab('flow');
     setGlassboxRequest({
@@ -640,6 +641,10 @@ export default function RunDetailPage() {
                 <ExecutionTimelinePanel
                   runId={runId}
                   onOpenNode={id => {
+                    // 时间轴是「换节点」入口：旧节点/旧回边的选中态必须一起清掉，
+                    // 否则上一节点的反思回边会串到新节点上，拼出从未发生过的评审关系。
+                    setSelectedEdge(null);
+                    setSelectedRevisionEdge(null);
                     setSelectedId(id);
                     setInspectorOpen(true);
                     setTab('flow');

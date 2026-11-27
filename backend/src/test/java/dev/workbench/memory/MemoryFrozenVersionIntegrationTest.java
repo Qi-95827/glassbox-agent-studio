@@ -36,6 +36,7 @@ class MemoryFrozenVersionIntegrationTest {
   @Autowired MemoryService memories;
   @Autowired MemoryRecordRepository records;
   @Autowired MemoryHistoryRepository versions;
+  @Autowired MemoryAssemblyAdapter assembly;
 
   @Test
   @org.springframework.transaction.annotation.Transactional
@@ -83,6 +84,12 @@ class MemoryFrozenVersionIntegrationTest {
     assertEquals("冻结时的正文", frozen.getFirst().content(), "必须取回冻结版本正文");
     assertEquals(1, frozen.getFirst().memoryVersion(), "不得把旧版本号配新正文");
     assertEquals(2, records.findById(memoryId).orElseThrow().getVersion(), "当前行确实已被改写");
+
+    // 装配快照必须与执行端同口径：显示 v1，而不是原始引用的字段或当前 v2。
+    var snapshot = assembly.matchesForRun(runId);
+    assertEquals(1, snapshot.size());
+    assertEquals(1, snapshot.getFirst().version(), "快照版本必须与实际注入的冻结版本一致");
+    assertEquals(memoryId, snapshot.getFirst().memoryId());
   }
 
   @Test
@@ -104,6 +111,35 @@ class MemoryFrozenVersionIntegrationTest {
     assertEquals(2, frozen.getFirst().memoryVersion(), "历史缺失时必须报告真实版本号");
     assertTrue(
         memories.loadForRun(runId).recorded(), "加载记录仍应存在，供下游区分「已加载」与「未加载」");
+    assertEquals(2, assembly.matchesForRun(runId).getFirst().version(), "快照也必须报告真实当前版本");
+  }
+
+  @Test
+  @org.springframework.transaction.annotation.Transactional
+  void archivedMemoryIsNeitherInjectedNorShownAsInjectedInTheSnapshot() {
+    String memoryId = UUID.randomUUID().toString();
+    String runId = UUID.randomUUID().toString();
+    String workspaceId = UUID.randomUUID().toString();
+    seedActive(memoryId, workspaceId, "归档前正文", 1);
+    memories.recordLoad(
+        runId,
+        workspaceId,
+        List.of(new MemoryMatch(memoryId, MemoryType.SEMANTIC, 0.7, "bm25=0.6", "归档前正文", 1)));
+    // 冻结后记忆被归档：执行端不会注入，装配快照也不能再声称「已注入」。
+    records.save(
+        new MemoryRecordEntity(
+            memoryId,
+            workspaceId,
+            MemoryCategory.PROJECT_CONVENTION,
+            "归档前正文",
+            MemorySource.USER_CONFIRMED,
+            MemoryStatus.ARCHIVED,
+            1,
+            "2026-01-01T00:00:00Z",
+            "2026-01-03T00:00:00Z"));
+
+    assertTrue(memories.frozenMatches(runId).isEmpty(), "归档记忆不得再注入");
+    assertTrue(assembly.matchesForRun(runId).isEmpty(), "装配快照不得把归档记忆装成已注入");
   }
 
   private void seedActive(String id, String workspaceId, String content, int version) {

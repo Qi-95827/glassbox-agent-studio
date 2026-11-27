@@ -79,7 +79,33 @@ public class RunForkService {
   private final RunEvidenceRecordService evidence;
   private final RunForkRepository forks;
   private final CostLimitPort costs;
+  private final dev.workbench.store.RunIterationRecordService iterations;
 
+  @org.springframework.beans.factory.annotation.Autowired
+  public RunForkService(
+      PlanningRunReader records,
+      PlanService plans,
+      WorkspaceAuthorizationService workspaceAuthorization,
+      CandidateRunPersister taskCreations,
+      CandidateRunDispatcher runs,
+      ModelConnectionService connections,
+      RunEvidenceRecordService evidence,
+      RunForkRepository forks,
+      CostLimitPort costs,
+      dev.workbench.store.RunIterationRecordService iterations) {
+    this.records = records;
+    this.plans = plans;
+    this.workspaceAuthorization = workspaceAuthorization;
+    this.taskCreations = taskCreations;
+    this.runs = runs;
+    this.connections = connections;
+    this.evidence = evidence;
+    this.forks = forks;
+    this.costs = costs;
+    this.iterations = iterations;
+  }
+
+  /** 兼容不涉及调改轮次覆盖的测试构造。 */
   public RunForkService(
       PlanningRunReader records,
       PlanService plans,
@@ -90,15 +116,17 @@ public class RunForkService {
       RunEvidenceRecordService evidence,
       RunForkRepository forks,
       CostLimitPort costs) {
-    this.records = records;
-    this.plans = plans;
-    this.workspaceAuthorization = workspaceAuthorization;
-    this.taskCreations = taskCreations;
-    this.runs = runs;
-    this.connections = connections;
-    this.evidence = evidence;
-    this.forks = forks;
-    this.costs = costs;
+    this(
+        records,
+        plans,
+        workspaceAuthorization,
+        taskCreations,
+        runs,
+        connections,
+        evidence,
+        forks,
+        costs,
+        null);
   }
 
   public Forked fork(String sourceRunId, Request request) {
@@ -106,7 +134,9 @@ public class RunForkService {
     if (!TERMINAL.contains(source.status().name()))
       throw new IllegalStateException(
           "只有已结束的运行才能分叉，当前状态为 " + source.status().name() + "。");
-    TaskDefinition task = records.taskDefinition(source.taskId().toString());
+    TaskDefinition rawTask = records.taskDefinition(source.taskId().toString());
+    // 若源运行属于同任务第 2+ 轮调改并覆盖了模型/连接，必须以该轮实际生效配置作为分叉基线。
+    TaskDefinition task = effectiveSource(sourceRunId, rawTask);
     if (task.workspaceId() == null) throw new IllegalStateException("该运行没有工作区，无法分叉。");
     if (task.fileScopes().isEmpty()) throw new IllegalStateException("源任务没有授权文件范围，无法分叉。");
 
@@ -116,6 +146,8 @@ public class RunForkService {
     var prepared = prepare(task);
     ModelMode mode = mode(task, request2);
     String connectionId = connection(task, mode, request2.modelConnectionId());
+    // 跨平台切换模型前同步核验价格版本：缺价格时在落库前拒绝，避免派发出首次预留必停的子运行。
+    if (mode != ModelMode.USER) costs.requireForkPricingReady(sourceRunId, mode);
     String nodeKey = nodeKey(sourceRunId, request2.sourceNodeKey());
     var plan = plan(sourceRunId, nodeKey, addendum);
 
@@ -143,11 +175,49 @@ public class RunForkService {
             connectionId,
             Instant.now().toString()));
     evidence.event(runId, EventType.FORK_STARTED, message);
-    // 费用上限与源运行一致（BYOK 除外：自带 Key 走用户自己的额度，不继承平台预算）。
-    if (mode != ModelMode.USER) costs.inheritLimit(sourceRunId, runId);
+    // 费用上限与源运行一致（BYOK 除外：自带 Key 走用户自己的额度，不继承平台预算）；显式切换平台模型时补齐目标价格绑定。
+    if (mode != ModelMode.USER) costs.inheritLimit(sourceRunId, runId, mode);
     // 提交后才派发；派发失败不会留下已派发却没有计划或授权的运行。
     runs.dispatchConfirmed(runId);
     return new Forked(runId, taskId, task.workspaceId(), sourceRunId);
+  }
+
+  /**
+   * 还原所选源运行实际生效的模型模式与连接（与调度器 {@code WorkflowScheduler.effectiveTask} 同口径）。
+   */
+  private TaskDefinition effectiveSource(String sourceRunId, TaskDefinition task) {
+    if (iterations == null || task == null) return task;
+    return iterations
+        .note(sourceRunId)
+        .map(
+            note -> {
+              if (note.modelMode() == null || note.modelMode().isBlank()) return task;
+              ModelMode overrideMode = ModelMode.fromCode(note.modelMode());
+              String overrideConnection =
+                  overrideMode == ModelMode.USER ? note.modelConnectionId() : null;
+              if (overrideMode == task.modelMode()
+                  && java.util.Objects.equals(overrideConnection, task.modelConnectionId()))
+                return task;
+              return new TaskDefinition(
+                  task.id(),
+                  task.goal(),
+                  task.scenario(),
+                  overrideMode,
+                  task.workspaceId(),
+                  task.fileScope(),
+                  task.writeEnabled(),
+                  task.bugId(),
+                  task.memoryEnabled(),
+                  task.constraints(),
+                  task.acceptanceCriteria(),
+                  task.entryKind(),
+                  task.fileScopes(),
+                  task.roleBudgets(),
+                  task.toolBudgets(),
+                  overrideConnection,
+                  task.locale());
+            })
+        .orElse(task);
   }
 
   public ForkList forks(String sourceRunId) {

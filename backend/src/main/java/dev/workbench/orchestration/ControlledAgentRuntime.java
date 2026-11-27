@@ -42,6 +42,12 @@ final class ControlledAgentRuntime implements AgentRuntime {
   private final ApplicationEventPublisher publisher;
   private AgentAssemblySnapshot.Components assembly;
   private CostService.Reservation costReservation = CostService.Reservation.NONE;
+  /** 正文与思考链各持独立的有状态脱敏器：跨帧敏感串不会从两帧缝隙里漏出去。 */
+  private dev.workbench.framework.trace.StreamingMasker contentMasker =
+      new dev.workbench.framework.trace.StreamingMasker();
+
+  private dev.workbench.framework.trace.StreamingMasker reasoningMasker =
+      new dev.workbench.framework.trace.StreamingMasker();
 
   ControlledAgentRuntime(
       String runId,
@@ -219,6 +225,9 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void beforeModel(ModelKind model) {
+    // 每次模型调用都是新的流：清空上一轮的滞留窗口，避免跨调用拼接出「拼错的」敏感串。
+    contentMasker = new dev.workbench.framework.trace.StreamingMasker();
+    reasoningMasker = new dev.workbench.framework.trace.StreamingMasker();
     if (assembly == null || ModelKind.forMode(assembly.model().mode()) != model)
       throw new IllegalStateException("模型来源与本次 Agent 装配记录不一致。");
     if (costs != null) costReservation = costs.reserve(runId, model);
@@ -236,6 +245,8 @@ final class ControlledAgentRuntime implements AgentRuntime {
   /** 失败/取消时释放预留；先在同一把锁内重查，避免与正常结算并发造成双扣或漏放。 */
   @Override
   public synchronized void modelFailed() {
+    // 失败/取消也要冲刷：已到达的尾部同样不能以半截敏感串的形式留在滞留窗口里。
+    flushStreamMaskers();
     if (costs != null && costReservation != CostService.Reservation.NONE) {
       costs.cancel(costReservation);
       costReservation = CostService.Reservation.NONE;
@@ -244,6 +255,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public synchronized void modelResult(Integer input, Integer output) {
+    flushStreamMaskers();
     control.finishModel(agentId, InvocationStatus.COMPLETED, input, output, null);
     CostService.Settlement settlement = CostService.Settlement.NONE;
     if (costs != null) {
@@ -369,12 +381,12 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void modelDelta(String text) {
-    publishTransient("MODEL_DELTA", text, java.util.Map.of());
+    publishTransient("MODEL_DELTA", contentMasker.accept(text), java.util.Map.of());
   }
 
   @Override
   public void modelReasoningDelta(String text) {
-    publishTransient("MODEL_REASONING_DELTA", text, java.util.Map.of());
+    publishTransient("MODEL_REASONING_DELTA", reasoningMasker.accept(text), java.util.Map.of());
   }
 
   @Override
@@ -395,6 +407,15 @@ final class ControlledAgentRuntime implements AgentRuntime {
    * <p>没有订阅者或未装配事件发布器时静默跳过：瞬态帧属于观感增强，绝不能因为推不出去
    * 就影响模型调用或安全检查本身。空的正文片段同样跳过，减少无意义帧。
    */
+  /** 冲刷正文与思考链的滞留窗口；重复调用安全。 */
+  private void flushStreamMaskers() {
+    String content = contentMasker.flush();
+    if (!content.isEmpty()) publishTransient("MODEL_DELTA", content, java.util.Map.of());
+    String reasoning = reasoningMasker.flush();
+    if (!reasoning.isEmpty())
+      publishTransient("MODEL_REASONING_DELTA", reasoning, java.util.Map.of());
+  }
+
   /** 实时帧外发前的统一清洗：SSE 与落库快照共用同一口径，避免「正文已脱敏、实时流却是原文」。 */
   static String maskTransientText(String text) {
     return dev.workbench.framework.trace.SensitiveDataMasker.mask(text);
