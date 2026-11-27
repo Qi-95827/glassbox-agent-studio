@@ -135,6 +135,20 @@ class StreamingSseMaskingTest {
     assertEquals(json, publisher.joined("MODEL_DELTA"));
   }
 
+  @Test
+  void finalFlushDoesNotCorruptOrdinaryWordsOrDoubleMaskSecrets() {
+    String text = "本次统计 token: 100，覆盖 East Asia 区域，核对 key=" + KEY + " 已完成。";
+    CapturingPublisher publisher = new CapturingPublisher();
+    ControlledAgentRuntime runtime = runtime(publisher);
+    for (char c : text.toCharArray()) runtime.modelDelta(String.valueOf(c));
+    runtime.modelResult(null, null);
+    String content = publisher.joined("MODEL_DELTA");
+    assertFalse(content.contains(KEY), content);
+    assertFalse(content.contains("***MASKED******MASKED***"), "不得对已脱敏前缀重复叠加掩码：" + content);
+    assertTrue(content.contains("East Asia"), "不得因 (?i) 误伤普通英文单词 Asia：" + content);
+    assertTrue(content.contains("token: 100"), "不得误伤非末尾普通数字统计：" + content);
+  }
+
   private void assertNoLeak(List<String> contentFrames, List<String> reasoningFrames) {
     CapturingPublisher publisher = new CapturingPublisher();
     ControlledAgentRuntime runtime = runtime(publisher);

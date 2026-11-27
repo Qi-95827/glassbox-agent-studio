@@ -3,7 +3,6 @@ package dev.workbench.orchestration;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
 
 import dev.workbench.app.WorkbenchApplication;
 import dev.workbench.domain.AgentRole;
@@ -15,10 +14,12 @@ import dev.workbench.domain.ModelMode;
 import dev.workbench.domain.Scenario;
 import dev.workbench.domain.TaskDefinition;
 import dev.workbench.domain.TaskEntryKind;
+import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
 import dev.workbench.framework.agent.execution.AgentExecutionRequest;
 import dev.workbench.framework.agent.execution.AgentRuntime;
 import dev.workbench.framework.memory.MemoryMatch;
 import dev.workbench.framework.memory.MemoryType;
+import dev.workbench.infrastructure.agentscope.AgentScopeExecutor;
 import dev.workbench.memory.MemoryAssemblyAdapter;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.persistence.entity.MemoryRecordEntity;
@@ -26,12 +27,13 @@ import dev.workbench.persistence.repository.MemoryRecordRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * 单次节点尝试只能解析一次记忆：面试 Prompt 与装配快照共享同一批证据。
+ * 单次节点尝试只能解析一次记忆：模型 Prompt 与装配快照共享同一批证据。
  *
  * <p>回归：调度器先查库拼 Prompt，执行器随后按 runId 再查一次；两次之间记忆被删除/归档时，
  * Prompt 已带正文、快照却消失，同一尝试出现两份互相矛盾的证据。
@@ -47,9 +49,10 @@ class MemorySingleResolutionIntegrationTest {
   @Autowired MemoryService memories;
   @Autowired MemoryRecordRepository records;
   @Autowired MemoryAssemblyAdapter assembly;
+  @Autowired AgentScopeExecutor executor;
 
   @Test
-  void resolvedEvidenceSurvivesAConcurrentDeleteBetweenPromptAndSnapshot() {
+  void resolvedEvidenceSurvivesAConcurrentDeleteBetweenPromptAndSnapshot() throws Exception {
     String memoryId = UUID.randomUUID().toString();
     String runId = UUID.randomUUID().toString();
     String workspaceId = UUID.randomUUID().toString();
@@ -103,12 +106,46 @@ class MemorySingleResolutionIntegrationTest {
         assembly.matchesForRun(runId).isEmpty(),
         "删除后再查库必然为空——这正说明执行器不能二次查库");
 
-    // 第三步：请求携带的同批证据仍然完整可落快照。
+    // 第三步：真正穿过生产 AgentScopeExecutor，验证写入装配快照的 memoryMatches 来自请求证据而非二次查库。
+    var captured = new AtomicReference<AgentAssemblySnapshot.Components>();
+    AgentRuntime runtime =
+        new AgentRuntime() {
+          @Override
+          public void beforeModel(dev.workbench.domain.ModelKind modelName) {}
+
+          @Override
+          public void modelResult(Integer inputTokens, Integer outputTokens) {}
+
+          @Override
+          public void assemblyResolved(AgentAssemblySnapshot.Components components) {
+            captured.set(components);
+          }
+
+          @Override
+          public UUID beforeTool(dev.workbench.domain.ToolKind tool, int version, String fingerprint) {
+            return UUID.randomUUID();
+          }
+
+          @Override
+          public void check() {}
+
+          @Override
+          public void event(dev.workbench.domain.EventType type, String message) {}
+
+          @Override
+          public void toolResult(String result) {}
+
+          @Override
+          public void toolRejected(String safeMessage) {}
+        };
+    var context =
+        new dev.workbench.framework.context.AgentInput(
+            runId, "节点输入" + loaded.promptSection(), List.of());
     var request =
         new AgentExecutionRequest(
                 AgentRole.ANALYST,
                 UUID.randomUUID().toString(),
-                "节点输入",
+                context,
                 null,
                 List.of(),
                 false,
@@ -116,13 +153,20 @@ class MemorySingleResolutionIntegrationTest {
                 ModelMode.MOCK,
                 CheckpointStage.BEFORE_TOOL,
                 null,
-                mock(AgentRuntime.class),
-                null)
+                runtime,
+                null,
+                null,
+                List.of(),
+                null,
+                "zh-CN")
             .withResolvedMemories(loaded.matches());
 
-    assertNotNull(request.resolvedMemories());
-    assertEquals(1, request.resolvedMemories().size());
-    assertEquals(memoryId, request.resolvedMemories().getFirst().memoryId());
-    assertEquals(1, request.resolvedMemories().getFirst().version());
+    executor.execute(request);
+
+    var components = captured.get();
+    assertNotNull(components, "执行器必须发出真实装配快照");
+    assertEquals(1, components.memoryMatches().size(), "装配快照必须保留同批记忆证据而非二次查库变空");
+    assertEquals(memoryId, components.memoryMatches().getFirst().memoryId());
+    assertEquals(1, components.memoryMatches().getFirst().version());
   }
 }

@@ -54,13 +54,17 @@ public final class SensitiveDataMasker {
 
   private static final Pattern UNCLOSED_PEM =
       Pattern.compile("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*");
+  /** 仅锚定流末尾的截断令牌；只对 Bearer 忽略大小写，绝不误伤普通英文单词（如 Asia），也不重复叠加已脱敏标记。 */
   private static final Pattern TRUNCATED_TOKEN =
       Pattern.compile(
-          "(?i)(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|Bearer[ \\t]+|eyJ))"
-              + "[A-Za-z0-9._~+/=-]*");
+          "(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|(?i:bearer)[ \\t]+|eyJ))"
+              + "(?!\\*\\*\\*MASKED)[A-Za-z0-9._~+/=-]*$");
+  /** 仅锚定流末尾尚未闭合的凭据键值，避免误伤正文中已结束的普通统计（如 token: 100。）。 */
   private static final Pattern TRUNCATED_KV =
       Pattern.compile(
-          "(?i)([\"']?" + KV_KEY + "[\"']?[ \\t]*[:=][ \\t]*[\"']?)" + KV_VALUE_CHARS + "*");
+          "(?i)([\"']?" + KV_KEY + "[\"']?[ \\t]*[:=][ \\t]*[\"']?)(?!\\*\\*\\*MASKED)"
+              + KV_VALUE_CHARS
+              + "+$");
   private static final Pattern TRUNCATED_URL_CREDENTIALS =
       Pattern.compile("://[^/\\s:@'\"]+:[^/\\s@'\"]*$");
 

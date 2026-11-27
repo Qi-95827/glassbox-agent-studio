@@ -30,6 +30,7 @@ export default function AssemblyBlueprintPanel({ node, attempts, toolFunnel = nu
   const grantedKeys = Object.keys(grantedMap);
   const funnelGranted = toolFunnel?.granted ?? null;
   const filteredTools = toolFunnel?.filtered ?? null;
+  const attemptNo = toolFunnel?.attemptNumber ?? latest?.number ?? null;
   const sources = components?.input?.sources ?? [];
   const memoryMatches = components?.memoryMatches ?? [];
 
@@ -90,9 +91,21 @@ export default function AssemblyBlueprintPanel({ node, attempts, toolFunnel = nu
           border: `1px solid ${googleTokens.outline}`
         }}
       >
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          {t('assembly.funnel')}
-        </Typography>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}
+        >
+          <Typography variant="subtitle2">{t('assembly.funnel')}</Typography>
+          {attemptNo != null && (
+            <Chip
+              size="small"
+              data-testid="assembly-funnel-attempt"
+              label={t('assembly.attempt', { number: attemptNo })}
+              sx={{ height: 20, fontSize: 11, bgcolor: '#F3E8FD', color: '#7627BB' }}
+            />
+          )}
+        </Stack>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
           {t('assembly.granted', {
             count: funnelGranted ? funnelGranted.length : grantedKeys.length

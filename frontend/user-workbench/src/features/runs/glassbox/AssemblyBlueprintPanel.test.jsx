@@ -40,6 +40,7 @@ describe('AssemblyBlueprintPanel 工具漏斗', () => {
         toolFunnel={{
           definitionId: 'workspace-edit',
           definitionVersion: 1,
+          attemptNumber: 1,
           granted: [
             { kind: 'SIMULATED_INSPECTION', version: 2 },
             { kind: 'WORKSPACE_SEARCH', version: 1 }
@@ -51,6 +52,8 @@ describe('AssemblyBlueprintPanel 工具漏斗', () => {
         }}
       />
     );
+
+    expect(screen.getByTestId('assembly-funnel-attempt')).toHaveTextContent('尝试 #1');
 
     expect(screen.getAllByText(/模拟检查工具/).length).toBeGreaterThan(0);
     // 服务端真实裁剪原因按编码翻译，而不是前端按节点字段瞎猜。
@@ -103,7 +106,7 @@ describe('AssemblyBlueprintPanel 工具漏斗', () => {
     render(<AssemblyBlueprintPanel node={node} attempts={multiAttempts} toolFunnel={null} />);
 
     expect(screen.getAllByText(/round-2/).length).toBeGreaterThan(0);
-    expect(screen.getByText('尝试 #2')).toBeInTheDocument();
+    expect(screen.getByTestId('assembly-funnel-attempt')).toHaveTextContent('尝试 #2');
     expect(screen.queryByText(/round-1/)).not.toBeInTheDocument();
   });
 });
