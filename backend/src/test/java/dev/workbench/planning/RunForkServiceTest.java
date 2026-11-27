@@ -37,6 +37,8 @@ class RunForkServiceTest {
   private final ModelConnectionService connections = mock(ModelConnectionService.class);
   private final RunEvidenceRecordService evidence = mock(RunEvidenceRecordService.class);
   private final RunForkRepository forks = mock(RunForkRepository.class);
+  private final dev.workbench.planning.CostLimitPort costs =
+      mock(dev.workbench.planning.CostLimitPort.class);
 
   private RunForkService service;
   private final UUID sourceId = UUID.randomUUID();
@@ -46,7 +48,7 @@ class RunForkServiceTest {
   void setUp() {
     service =
         new RunForkService(
-            records, plans, authorization, creations, runs, connections, evidence, forks);
+            records, plans, authorization, creations, runs, connections, evidence, forks, costs);
     when(records.taskDefinition(taskId.toString())).thenReturn(task());
     when(plans.find(sourceId.toString())).thenReturn(List.of());
     when(authorization.prepare(anyString(), any(), any(), any()))
@@ -155,6 +157,123 @@ class RunForkServiceTest {
     // 超过手工上限的范围必须走目录复验，而不是被 20 个文件的显式上限误杀。
     verify(authorization).reverifyDirectories(eq("ws-1"), eq(List.of(".")), any(), any());
     verify(authorization, never()).prepare(anyString(), any(), any(), any());
+  }
+
+  @Test
+  void forkInheritsMemoryBudgetsAndPlatformCostLimit() {
+    when(records.runSnapshot(sourceId.toString())).thenReturn(snapshot(RunStatus.COMPLETED));
+    when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.MOCK, true));
+    var node = planNode();
+    when(plans.find(sourceId.toString())).thenReturn(List.of(node));
+    when(plans.specsByNode(sourceId.toString())).thenReturn(Map.of(node.id(), spec(node.id())));
+    when(plans.revisionEdges(sourceId.toString())).thenReturn(List.of());
+
+    var forked =
+        service.fork(sourceId.toString(), new RunForkService.Request(null, null, null, null, null));
+
+    var captor = org.mockito.ArgumentCaptor.forClass(TaskDefinition.class);
+    verify(creations)
+        .persistFromCandidate(captor.capture(), any(), any(), anyString(), any(), any(), any());
+    var forkTask = captor.getValue();
+    assertTrue(forkTask.memoryEnabled(), "记忆开关必须继承，不能被默认关掉");
+    assertEquals(richTask(ModelMode.MOCK, true).roleBudgets(), forkTask.roleBudgets(), "角色预算不得被清空");
+    assertEquals(richTask(ModelMode.MOCK, true).toolBudgets(), forkTask.toolBudgets(), "工具预算不得被清空");
+    verify(costs).inheritLimit(sourceId.toString(), forked.runId());
+  }
+
+  @Test
+  void byokForkInheritsSourceConnectionAndDoesNotInheritPlatformCostLimit() {
+    when(records.runSnapshot(sourceId.toString())).thenReturn(snapshot(RunStatus.COMPLETED));
+    when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.USER, true));
+    var node = planNode();
+    when(plans.find(sourceId.toString())).thenReturn(List.of(node));
+    when(plans.specsByNode(sourceId.toString())).thenReturn(Map.of(node.id(), spec(node.id())));
+    when(plans.revisionEdges(sourceId.toString())).thenReturn(List.of());
+
+    service.fork(sourceId.toString(), new RunForkService.Request(null, null, null, null, null));
+    var captor = org.mockito.ArgumentCaptor.forClass(TaskDefinition.class);
+    verify(creations)
+        .persistFromCandidate(captor.capture(), any(), any(), anyString(), any(), any(), any());
+    // 未显式覆盖时必须沿用源连接，而不是悄悄换成当前默认连接。
+    assertEquals("conn-src", captor.getValue().modelConnectionId());
+    // BYOK 走用户自己的额度，不继承平台费用上限。
+    verify(costs, never()).inheritLimit(anyString(), anyString());
+
+    // 用户显式覆盖：只改变连接这一个变量。
+    when(connections.requireEnabledOwned("conn-new")).thenReturn("conn-new");
+    service.fork(
+        sourceId.toString(), new RunForkService.Request(null, null, null, "user", "conn-new"));
+    var overrideCaptor = org.mockito.ArgumentCaptor.forClass(TaskDefinition.class);
+    verify(creations, org.mockito.Mockito.times(2))
+        .persistFromCandidate(
+            overrideCaptor.capture(), any(), any(), anyString(), any(), any(), any());
+    var overrideTask = overrideCaptor.getAllValues().get(1);
+    assertEquals("conn-new", overrideTask.modelConnectionId());
+    assertEquals(captor.getValue().roleBudgets(), overrideTask.roleBudgets());
+    verify(costs, never()).inheritLimit(anyString(), anyString());
+  }
+
+  private TaskDefinition richTask(ModelMode mode, boolean withBudgets) {
+    return new TaskDefinition(
+        taskId,
+        "把排序网页做出来",
+        Scenario.NORMAL,
+        mode,
+        "ws-1",
+        "sort.js",
+        true,
+        null,
+        true,
+        List.of("不要引入新依赖"),
+        List.of("页面能排序"),
+        TaskEntryKind.CODE,
+        List.of("sort.js"),
+        withBudgets
+            ? Map.of(dev.workbench.domain.AgentRole.CODER, new dev.workbench.domain.RoleBudget(4, 2))
+            : Map.of(),
+        withBudgets ? Map.of(dev.workbench.domain.ToolKind.WORKSPACE_WRITE, 2) : Map.of(),
+        mode == ModelMode.USER ? "conn-src" : null,
+        "zh-CN");
+  }
+
+  private static dev.workbench.framework.workflow.plan.PlanNode planNode() {
+    return new dev.workbench.framework.workflow.plan.PlanNode(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        0,
+        dev.workbench.domain.AgentRole.CODER,
+        null,
+        dev.workbench.framework.workflow.plan.PlanNodeStatus.PENDING,
+        null,
+        null,
+        null,
+        java.time.Instant.parse("2026-01-01T00:00:00Z"),
+        List.of(),
+        new dev.workbench.framework.agent.definition.AgentDefinitionRef("workspace-edit", 1),
+        "c".repeat(64),
+        UUID.randomUUID(),
+        "edit",
+        "按授权修改",
+        "implementation",
+        true,
+        true,
+        new dev.workbench.framework.workflow.plan.WorkflowNodeBudget(4, 2),
+        dev.workbench.framework.workflow.plan.PlanNodeKind.AGENT,
+        null);
+  }
+
+  private static dev.workbench.framework.workflow.plan.PlanNodeSpec spec(UUID nodeId) {
+    return new dev.workbench.framework.workflow.plan.PlanNodeSpec(
+        nodeId,
+        "d".repeat(64),
+        "edit",
+        List.of("sort.js"),
+        List.of("sort.js"),
+        List.of(
+            new dev.workbench.framework.workflow.plan.PlanNodeSpec.Output(
+                dev.workbench.framework.workflow.plan.PlanNodeSpec.Kind.FILE, "sort.js", true)),
+        List.of("页面能排序"),
+        "e".repeat(64));
   }
 
   private RunSnapshot snapshot(RunStatus status) {

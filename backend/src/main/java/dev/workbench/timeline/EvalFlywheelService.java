@@ -95,12 +95,17 @@ public class EvalFlywheelService {
     String output = finalOutput(runId);
     var assertions = new ArrayList<Map<String, Object>>();
     assertions.add(new LinkedHashMap<>(Map.of("type", "RUN_STATUS_MATCH", "expected", status)));
-    if (output != null && !output.isBlank()) {
+    if (!snapshot.status().canCancel())
+      assertions.add(new LinkedHashMap<>(Map.of("type", "RUN_TERMINAL", "expected", true)));
+    // 只有「纯文本运行且最终输出就是产物本身」时，摘录式 OUTPUT_CONTAINS 才与评测口径一致。
+    // 含工作区写入的运行其产物是代码文件正文，上游 Agent 的叙述不是文件内容；硬塞进 OUTPUT_CONTAINS
+    // 会让重跑 100% 误判（代码文件里当然不含分析叙述），因此这里只保留可核对的终态断言，并如实说明原因。
+    boolean workspaceWrite = hasSuccessfulWorkspaceWrite(runId);
+    if (!workspaceWrite && output != null && !output.isBlank()) {
       String needle = output.strip();
       if (needle.length() > MAX_OUTPUT_NEEDLE) needle = needle.substring(0, MAX_OUTPUT_NEEDLE);
       assertions.add(
-          new LinkedHashMap<>(
-              Map.of("type", "OUTPUT_CONTAINS", "expected", mask(needle))));
+          new LinkedHashMap<>(Map.of("type", "OUTPUT_CONTAINS", "expected", mask(needle))));
     }
     var setup = new LinkedHashMap<String, Object>();
     setup.put("sourceRunId", runId);
@@ -108,9 +113,15 @@ public class EvalFlywheelService {
     setup.put("sourceStatus", status);
     setup.put("source", "RUN_DISTILLED");
     setup.put("completedNodes", completedNodes(runId));
+    setup.put("workspaceWrite", workspaceWrite);
     var limitations = new ArrayList<String>();
-    limitations.add("用例只沉淀提示词与两条既有断言的期望值；模型原始回复、工具返回值与工作区文件不会进入评测数据集。");
-    if (output == null) limitations.add("这次运行没有保存最终输出，因此只沉淀运行状态断言。");
+    limitations.add("用例只沉淀提示词与既有断言的期望值；模型原始回复、工具返回值与工作区文件不会进入评测数据集。");
+    if (workspaceWrite)
+      limitations.add(
+          "该运行含工作区写入：产物是授权文件正文，未落入本用例；因此只断言运行状态与终态，不用上游叙述文字去匹配代码文件。");
+    else if (output != null && !output.isBlank())
+      limitations.add("该运行没有工作区写入，最终输出本身就是产物，OUTPUT_CONTAINS 摘自该输出。");
+    if (output == null) limitations.add("这次运行没有保存最终输出，因此只沉淀运行终态断言。");
     return new CaseDraft(
         datasetId,
         datasetCode,
@@ -150,6 +161,21 @@ public class EvalFlywheelService {
       if (!text.isBlank()) return text;
     }
     return null;
+  }
+
+  /** 是否真的发生过成功的写工具调用；只有这时产物才是文件正文，不能拿叙述文字做包含断言。 */
+  private boolean hasSuccessfulWorkspaceWrite(String runId) {
+    var rows = agents.tools(runId);
+    if (rows == null) return false;
+    for (var row : rows) {
+      Object name = row.get("TOOL_NAME");
+      Object value = row.get("STATUS");
+      String tool = name == null ? "" : String.valueOf(name).toLowerCase(java.util.Locale.ROOT);
+      String status = value == null ? "" : String.valueOf(value);
+      if (tool.contains("write")
+          && ("COMPLETED".equals(status) || "SUCCEEDED".equals(status))) return true;
+    }
+    return false;
   }
 
   private int completedNodes(String runId) {

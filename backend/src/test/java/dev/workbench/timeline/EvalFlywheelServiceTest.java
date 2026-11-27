@@ -89,13 +89,56 @@ class EvalFlywheelServiceTest {
     assertEquals("把排序网页做出来", draft.prompt());
     assertEquals("RUN_STATUS_MATCH", draft.assertions().getFirst().get("type"));
     assertEquals("COMPLETED", draft.assertions().getFirst().get("expected"));
-    assertEquals("OUTPUT_CONTAINS", draft.assertions().get(1).get("type"));
+    // 终态断言优先于叙述式输出断言：重跑时状态与终态一定可核对。
+    assertEquals("RUN_TERMINAL", draft.assertions().get(1).get("type"));
+    assertEquals("OUTPUT_CONTAINS", draft.assertions().get(2).get("type"));
     assertEquals(runId, draft.setup().get("sourceRunId"));
     assertEquals("RUN_DISTILLED", draft.setup().get("source"));
+    assertEquals(false, draft.setup().get("workspaceWrite"));
     assertTrue(draft.limitations().stream().anyMatch(item -> item.contains("不会进入评测数据集")));
     org.mockito.Mockito.verify(datasets, org.mockito.Mockito.never()).create(any());
     org.mockito.Mockito.verify(datasets, org.mockito.Mockito.never())
         .upsertSample(anyString(), anyString(), any());
+  }
+
+  @Test
+  void workspaceWriteRunsNeverGetANarrativeOutputAssertion() {
+    // 真实写工具成功：产物是文件正文，不能用上游分析叙述去做 OUTPUT_CONTAINS（否则重跑必失败）。
+    when(agents.tools(runId))
+        .thenReturn(
+            List.of(
+                Map.of("ID", "t1", "TOOL_NAME", "write_authorized_file", "STATUS", "COMPLETED"),
+                Map.of("ID", "t2", "TOOL_NAME", "read_authorized_file", "STATUS", "COMPLETED")));
+
+    var draft = service.preview(runId);
+
+    assertEquals(2, draft.assertions().size());
+    assertEquals("RUN_STATUS_MATCH", draft.assertions().get(0).get("type"));
+    assertEquals("RUN_TERMINAL", draft.assertions().get(1).get("type"));
+    assertTrue(
+        draft.assertions().stream().noneMatch(row -> "OUTPUT_CONTAINS".equals(row.get("type"))),
+        "含文件写入的运行不得生成叙述式包含断言：" + draft.assertions());
+    assertEquals(true, draft.setup().get("workspaceWrite"));
+    assertTrue(draft.limitations().stream().anyMatch(item -> item.contains("产物是授权文件正文")));
+  }
+
+  @Test
+  void distilledAssertionsPassAgainstMatchingRealEvidence() {
+    var draft = service.preview(runId);
+    var grader = new dev.workbench.evaluation.grader.CodeAssertionGrader();
+    var evidence = new java.util.LinkedHashMap<String, Object>();
+    evidence.put("runStatus", "COMPLETED");
+    evidence.put("terminal", true);
+    evidence.put("rawOutput", "排序完成，包含 3 个闲等节点");
+
+    var graded =
+        grader.grade(
+            draft.assertions(),
+            new dev.workbench.framework.evaluation.EvalCaseExecution(
+                evidence, Map.of(), Map.of(), runId, "排序完成，包含 3 个闲等节点", 1, 0, 0, 0));
+
+    assertTrue(graded.passed(), graded.assertions().toString());
+    assertEquals(draft.assertions().size(), graded.assertions().size());
   }
 
   @Test
@@ -118,10 +161,10 @@ class EvalFlywheelServiceTest {
   }
 
   @Test
-  void withoutFinalOutputOnlyTheStatusAssertionIsDistilled() {
+  void withoutFinalOutputOnlyTheTerminalAssertionsAreDistilled() {
     when(agents.agents(runId)).thenReturn(List.of());
     var draft = service.preview(runId);
-    assertEquals(1, draft.assertions().size());
+    assertEquals(2, draft.assertions().size());
     assertTrue(draft.limitations().stream().anyMatch(item -> item.contains("没有保存最终输出")));
   }
 

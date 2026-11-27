@@ -178,6 +178,13 @@ public class CodingReflectionRunner implements EvalCategoryRunner {
       trace.put("compactionEnabled", config.enableCompaction());
       trace.put("longTermMemoryEnabled", config.enableLongTermMemory());
       trace.put("longTermMemoryApplied", false);
+      // 这两个开关当前没有映射到任务请求/执行器：workspace-change 模板不含反思回边，压缩按默认水位自动运行。
+      // 如实记录「未生效」，避免把配置意图当成 A/B 归因事实（与既有 longTermMemoryApplied=false 一致）。
+      trace.put("reflectionApplied", false);
+      trace.put("compactionApplied", false);
+      trace.put(
+          "switchApplication",
+          "NOT_WIRED: reflection/compaction 开关未下推到任务请求；本模板无反思回边，压缩若发生属于默认阈值行为，不能归因给实验开关。");
       trace.put("measurement", "run_service_and_workspace_file");
       if (!runError.isBlank()) trace.put("executionError", runError);
 

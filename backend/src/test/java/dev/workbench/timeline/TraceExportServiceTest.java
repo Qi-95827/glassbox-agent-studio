@@ -90,6 +90,28 @@ class TraceExportServiceTest {
     assertEquals(Map.of("code", 2), spans.getFirst().get("status"));
   }
 
+  @Test
+  void otelSpansNeverReferenceThemselvesAsParent() {
+    // 回归：NODE 根 Span 的 spanId 由 nodeId 派生，旧实现又把它写成 parentSpanId，导出的调用树自环。
+    var nodeSpan =
+        new RunObservationService.Span(
+            "node:n1", "NODE", "n1", "analyze", "analyze", "COMPLETED", null, null, 1000L, 2000L,
+            Map.of());
+    when(observations.timeline(runId)).thenReturn(timeline(List.of(nodeSpan, modelSpan())));
+
+    var spans = otelSpans(service.export(runId, "otel"));
+
+    assertEquals(2, spans.size());
+    for (var span : spans) {
+      String spanId = String.valueOf(span.get("spanId"));
+      Object parent = span.get("parentSpanId");
+      if (parent != null) assertNotEquals(spanId, String.valueOf(parent), "Span 不得自环：" + span);
+    }
+    // NODE 是根：没有 parentSpanId；其子 Span 仍挂在节点根下面。
+    assertFalse(spans.get(0).containsKey("parentSpanId"));
+    assertEquals(spans.get(0).get("spanId"), spans.get(1).get("parentSpanId"));
+  }
+
   @SuppressWarnings("unchecked")
   private static List<Map<String, Object>> otelSpans(Map<String, Object> document) {
     var resourceSpans = (List<Map<String, Object>>) document.get("resourceSpans");

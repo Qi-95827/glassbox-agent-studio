@@ -133,6 +133,11 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     }
 
     int total = estimate(working);
+    // 预览与锚点会被持久化到 model_call_payloads 并展示在玻璃盒里：落库前统一脱敏，
+    // 避免工具输出摘录或结构化锚点把模型 Key / Bearer 令牌原样带进快照。
+    summaryPreview = dev.workbench.framework.trace.SensitiveDataMasker.mask(summaryPreview);
+    retainedPreview = dev.workbench.framework.trace.SensitiveDataMasker.mask(retainedPreview);
+    structuredAnchors = dev.workbench.framework.trace.SensitiveDataMasker.mask(structuredAnchors);
     var breakdown =
         new ContextBreakdown(
             limit,

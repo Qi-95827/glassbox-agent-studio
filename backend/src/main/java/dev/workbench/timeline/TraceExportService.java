@@ -75,7 +75,10 @@ public class TraceExportService {
       var item = new LinkedHashMap<String, Object>();
       item.put("traceId", traceId);
       item.put("spanId", hash(span.id(), 16));
-      if (span.nodeId() != null) item.put("parentSpanId", hash("node:" + span.nodeId(), 16));
+      // NODE Span 是节点级根 Span：它的 spanId 本来就由 nodeId 派生，再把同一个值写成 parentSpanId 会自环，
+      // OTel 调用树直接坏掉。只有非 NODE 的子 Span 才挂到节点根下面。
+      if (!"NODE".equals(span.kind()) && span.nodeId() != null)
+        item.put("parentSpanId", hash("node:" + span.nodeId(), 16));
       item.put(
           "name",
           mask(

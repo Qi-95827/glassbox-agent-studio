@@ -78,6 +78,7 @@ public class RunForkService {
   private final ModelConnectionService connections;
   private final RunEvidenceRecordService evidence;
   private final RunForkRepository forks;
+  private final CostLimitPort costs;
 
   public RunForkService(
       PlanningRunReader records,
@@ -87,7 +88,8 @@ public class RunForkService {
       CandidateRunDispatcher runs,
       ModelConnectionService connections,
       RunEvidenceRecordService evidence,
-      RunForkRepository forks) {
+      RunForkRepository forks,
+      CostLimitPort costs) {
     this.records = records;
     this.plans = plans;
     this.workspaceAuthorization = workspaceAuthorization;
@@ -96,6 +98,7 @@ public class RunForkService {
     this.connections = connections;
     this.evidence = evidence;
     this.forks = forks;
+    this.costs = costs;
   }
 
   public Forked fork(String sourceRunId, Request request) {
@@ -112,7 +115,7 @@ public class RunForkService {
     // 先复验工作区授权与模型权限，再复制图：权限不满足时不必继续算一份跑不起来的计划。
     var prepared = prepare(task);
     ModelMode mode = mode(task, request2);
-    String connectionId = connection(mode, request2.modelConnectionId());
+    String connectionId = connection(task, mode, request2.modelConnectionId());
     String nodeKey = nodeKey(sourceRunId, request2.sourceNodeKey());
     var plan = plan(sourceRunId, nodeKey, addendum);
 
@@ -140,6 +143,8 @@ public class RunForkService {
             connectionId,
             Instant.now().toString()));
     evidence.event(runId, EventType.FORK_STARTED, message);
+    // 费用上限与源运行一致（BYOK 除外：自带 Key 走用户自己的额度，不继承平台预算）。
+    if (mode != ModelMode.USER) costs.inheritLimit(sourceRunId, runId);
     // 提交后才派发；派发失败不会留下已派发却没有计划或授权的运行。
     runs.dispatchConfirmed(runId);
     return new Forked(runId, taskId, task.workspaceId(), sourceRunId);
@@ -273,18 +278,21 @@ public class RunForkService {
    * <p>两种模式的特权完全不同：宿主机全局 DeepSeek 密钥是平台特权，只有 {@code DEEPSEEK} 才需要；自带 Key
    * 走的是用户自己的额度与已启用连接，普通用户即可，不能误加平台特权校验。
    */
-  private String connection(ModelMode mode, String requested) {
+  private String connection(TaskDefinition source, ModelMode mode, String requested) {
     if (mode == ModelMode.DEEPSEEK) {
       connections.requireLegacyKeyAccess();
       return null;
     }
     if (mode != ModelMode.USER) return null;
-    return requested == null || requested.isBlank()
-        ? connections
-            .defaultConnectionId()
-            .orElseThrow(
-                () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"))
-        : connections.requireEnabledOwned(requested);
+    if (requested != null && !requested.isBlank()) return connections.requireEnabledOwned(requested);
+    // 未显式覆盖时完整继承源任务的连接：否则 What-If 分叉会悄悄换成当前默认连接，实验条件就变了。
+    if (source.modelMode() == ModelMode.USER
+        && source.modelConnectionId() != null
+        && !source.modelConnectionId().isBlank()) return source.modelConnectionId();
+    return connections
+        .defaultConnectionId()
+        .orElseThrow(
+            () -> new IllegalArgumentException("请先在「设置 → 模型与 API Key」配置并启用模型连接。"));
   }
 
   private String nodeKey(String sourceRunId, String requested) {
@@ -320,13 +328,14 @@ public class RunForkService {
         source.fileScopes().getFirst(),
         source.writeEnabled(),
         null,
-        false,
+        // 记忆开关、角色/工具预算与模型连接都完整继承：What-If 前后只应有用户显式改动的变量不同。
+        source.memoryEnabled(),
         constraints,
         source.acceptanceCriteria(),
         TaskEntryKind.CODE,
         source.fileScopes(),
-        Map.of(),
-        Map.of(),
+        source.roleBudgets(),
+        source.toolBudgets(),
         connectionId,
         source.locale() == null
             ? dev.workbench.framework.prompt.PromptResourceLoader.ZH_CN

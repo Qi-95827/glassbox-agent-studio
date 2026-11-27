@@ -28,7 +28,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>派发模型调用前按价格版本的可计价上界预留；完成后按实际 Token 结算。未知用量不会按零处理，会保留预留并标记人工核对。并发调用通过运行费用行锁串行化。
  */
 @Service
-public class CostService implements dev.workbench.planning.CandidateBudgetValidator {
+public class CostService
+    implements dev.workbench.planning.CandidateBudgetValidator,
+        dev.workbench.planning.CostLimitPort {
   private static final String PROVIDER = "default";
   private final ProviderPriceVersionRepository prices;
   private final RunCostLimitRepository limits;
@@ -161,6 +163,7 @@ public class CostService implements dev.workbench.planning.CandidateBudgetValida
   }
 
   /** 恢复子运行沿用父运行价格版本，并把已结算和未结算预留从可用额度中扣除。 */
+  @Override
   @Transactional
   public void inheritLimit(String parentRunId, String childRunId) {
     if (parentRunId == null || childRunId == null || parentRunId.equals(childRunId)) return;

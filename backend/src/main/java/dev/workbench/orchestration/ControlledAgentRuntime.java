@@ -395,6 +395,11 @@ final class ControlledAgentRuntime implements AgentRuntime {
    * <p>没有订阅者或未装配事件发布器时静默跳过：瞬态帧属于观感增强，绝不能因为推不出去
    * 就影响模型调用或安全检查本身。空的正文片段同样跳过，减少无意义帧。
    */
+  /** 实时帧外发前的统一清洗：SSE 与落库快照共用同一口径，避免「正文已脱敏、实时流却是原文」。 */
+  static String maskTransientText(String text) {
+    return dev.workbench.framework.trace.SensitiveDataMasker.mask(text);
+  }
+
   private void publishTransient(
       String kind, String text, java.util.Map<String, Object> detail) {
     if (publisher == null || text == null || text.isEmpty()) return;
@@ -407,12 +412,20 @@ final class ControlledAgentRuntime implements AgentRuntime {
       return;
     }
     var safeDetail = new java.util.LinkedHashMap<String, Object>();
-    if (detail != null) detail.forEach((key, value) -> {
-      if (value != null) safeDetail.put(key, value);
-    });
+    if (detail != null)
+      detail.forEach(
+          (key, value) -> {
+            if (value == null) return;
+            // 实时帧同样是外发通道：字符串型附加信息里的密钥/令牌必须与落库快照一致地脱敏。
+            safeDetail.put(
+                key,
+                value instanceof String valueText ? maskTransientText(valueText) : value);
+          });
+    // 模型增量文本在进入 SSE 之前就脱敏；模型可能把 Key 原样吐进回答或思考链。
+    String safeText = maskTransientText(text);
     publisher.publishEvent(
         new dev.workbench.framework.event.RunStreamTransient(
-            run, kind, text, hitlNodeId, safeDetail, java.time.Instant.now()));
+            run, kind, safeText, hitlNodeId, safeDetail, java.time.Instant.now()));
   }
 
   @Override
