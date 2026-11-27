@@ -133,6 +133,28 @@ describe('PlanComposerCanvas', () => {
     expect(screen.getByTestId('composer-conflicts')).toHaveTextContent('src/app.jsx');
   });
 
+  it('服务端省略 byNodeKey 时仍按 conflicts 归组高亮，红框不会整体消失', async () => {
+    plansApi.validateDraft.mockResolvedValue({
+      valid: false,
+      errors: [],
+      conflicts: [
+        {
+          code: 'INVALID_SCOPE',
+          nodeKeys: ['implement'],
+          paths: ['../etc/passwd'],
+          detail: ''
+        }
+      ],
+      conflictingNodeKeys: ['implement']
+    });
+
+    renderComposer();
+
+    const node = await screen.findByTestId('composer-node-implement');
+    await waitFor(() => expect(node).toHaveAttribute('data-conflict', 'INVALID_SCOPE'));
+    expect(screen.getByTestId('composer-conflicts')).toHaveTextContent('../etc/passwd');
+  });
+
   it('成环时给出环上的节点键，而不是一句泛化错误', async () => {
     plansApi.validateDraft.mockResolvedValue({
       valid: false,

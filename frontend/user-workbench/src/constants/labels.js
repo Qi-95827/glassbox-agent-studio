@@ -140,7 +140,10 @@ export const TOOL_NAMES = {
   SIMULATED_INSPECTION: '模拟检查工具',
   WORKSPACE_READ: '读取授权文件',
   WORKSPACE_SEARCH: '搜索授权文件',
-  WORKSPACE_WRITE: '修改授权文件'
+  WORKSPACE_WRITE: '修改授权文件',
+  KNOWLEDGE_SEARCH: '检索知识库',
+  CONTEXT_ARTIFACT_READ: '回读上下文产物',
+  MCP: 'MCP 外部工具'
 };
 
 export const EVENT_NAMES = {

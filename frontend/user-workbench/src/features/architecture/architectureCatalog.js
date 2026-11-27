@@ -38,9 +38,9 @@ export const ARCHITECTURE_TOPICS = [
         title: { 'zh-CN': '单进程零运维', 'en-US': 'Zero-Ops Local Process' },
         body: {
           'zh-CN':
-            '前端静态产物内嵌 Spring Boot，嵌入式 H2 文件库 + Flyway V16 自动迁移，开箱即跑。',
+            '前端静态产物内嵌 Spring Boot，嵌入式 H2 文件库 + Flyway V18 自动迁移，开箱即跑。',
           'en-US':
-            'Frontend bundle served by Spring Boot with embedded H2 file DB and Flyway V16 migrations out of the box.'
+            'Frontend bundle served by Spring Boot with embedded H2 file DB and Flyway V18 migrations out of the box.'
         }
       },
       {
@@ -166,17 +166,17 @@ export const ARCHITECTURE_TOPICS = [
         drillTo: 'model-byok'
       },
       storage: {
-        label: { 'zh-CN': 'H2 (V12) + Git / Docker', 'en-US': 'H2 (V12) + Git / Docker' },
+        label: { 'zh-CN': 'H2 (V18) + Git / Docker', 'en-US': 'H2 (V18) + Git / Docker' },
         role: { 'zh-CN': '存储与沙箱', 'en-US': 'Storage & Sandboxes' },
         tone: 'green',
         intent: {
           'zh-CN':
-            'Flyway V1–V16 管理全量运行、审批单、三层长期记忆、上下文压缩产物、分支运行、MCP 注册表与评测实验室；代码变更在独立 Git worktree 隔离执行。',
+            'Flyway V1–V18 管理全量运行、审批单、三层长期记忆、上下文压缩产物、分支运行、MCP 注册表、评测实验室、外部 Trace 与同任务调改轮次；代码变更在独立 Git worktree 隔离执行。',
           'en-US':
-            'Flyway V1–V16 persists runs, approvals, layered long-term memory, compaction artifacts, forked branch runs, MCP registries, and the Eval Lab; code edits run in isolated Git worktrees.'
+            'Flyway V1–V18 persists runs, approvals, layered long-term memory, compaction artifacts, forked branch runs, MCP registries, the Eval Lab, external traces and per-task iteration rounds; code edits run in isolated Git worktrees.'
         },
         codeRefs: [
-          'V1__baseline.sql ~ V12__eval_hub_and_datasets.sql',
+          'V1__baseline.sql ~ V18__run_iterations.sql',
           'WorkspaceService.java',
           'BugService.java'
         ]
@@ -303,9 +303,9 @@ export const ARCHITECTURE_TOPICS = [
         tone: 'amber',
         intent: {
           'zh-CN':
-            'Spring Data JPA Repository + 细粒度 Store 封装，由 Flyway V1~V16 严格管理 95 张表结构演进。',
+            'Spring Data JPA Repository + 细粒度 Store 封装，由 Flyway V1~V18 严格管理 98 张表结构演进。',
           'en-US':
-            'Spring Data JPA repositories wrapped in fine-grained stores, with 95 tables strictly versioned via Flyway V1–V16.'
+            'Spring Data JPA repositories wrapped in fine-grained stores, with 98 tables strictly versioned via Flyway V1–V18.'
         },
         codeRefs: ['ArchitectureGuardTest.java', 'V6__task_locale.sql'],
         drillTo: 'security-persistence'

@@ -272,7 +272,7 @@ backend/src/main/resources/
   prompts/                      外置化中文 Agent / Skill / 规划 Prompt 与工具契约（默认）
   prompts/en/                   外置化英文镜像 Prompt 与工具契约（英文任务专用）
   i18n/                         Spring MessageSource 国际化资源（zh_CN / en_US）
-  db/migration/                 Flyway H2 版本化迁移脚本（V1 ~ V17，共 97 张表）
+  db/migration/                 Flyway H2 版本化迁移脚本（V1 ~ V18，共 98 张表，含同任务迭代 run_iterations）
   db/migration-pg/              Flyway PostgreSQL 16 + pgvector 迁移脚本（V1 ~ V7）
 ```
 

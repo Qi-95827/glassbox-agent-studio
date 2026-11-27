@@ -1,6 +1,6 @@
 # 后端源码说明
 
-后端是根目录 `pom.xml` 构建的单个 Maven 工程（Java 21 + Spring Boot 3.5.7）。生产 Java 源码统一放在 `src/main/java/dev/workbench`（684 个主文件），测试放在 `src/test/java`（189 个测试文件），外置 Prompt、国际化资源与双库 Flyway 脚本放在 `src/main/resources`（H2 `db/migration` `V1~V17`，PostgreSQL 16 + pgvector `db/migration-pg` `V1~V7`，共 97 张表）。目录与包按业务能力及分层守卫组织，由 `ArchitectureGuardTest`（ArchUnit）强制保证零循环依赖。
+后端是根目录 `pom.xml` 构建的单个 Maven 工程（Java 21 + Spring Boot 3.5.7）。生产 Java 源码统一放在 `src/main/java/dev/workbench`（684 个主文件），测试放在 `src/test/java`（189 个测试文件），外置 Prompt、国际化资源与双库 Flyway 脚本放在 `src/main/resources`（H2 `db/migration` `V1~V18`，PostgreSQL 16 + pgvector `db/migration-pg` `V1~V8`，共 98 张表，`V18`/`V8` 为同任务调改轮次表 `run_iterations`）。目录与包按业务能力及分层守卫组织，由 `ArchitectureGuardTest`（ArchUnit）强制保证零循环依赖。
 
 | 当前包 (`dev.workbench.*`) | 主要职责 |
 | --- | --- |

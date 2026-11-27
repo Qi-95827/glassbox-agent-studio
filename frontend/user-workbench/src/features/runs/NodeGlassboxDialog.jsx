@@ -427,7 +427,13 @@ export default function NodeGlassboxDialog({
           )}
           {current === 'gateway' && <ToolGatewayPanel tools={tools} />}
           {current === 'llm' && <LlmTracePanel models={models} />}
-          {current === 'assembly' && <AssemblyBlueprintPanel node={node} attempts={attempts} />}
+          {current === 'assembly' && (
+            <AssemblyBlueprintPanel
+              node={node}
+              attempts={attempts}
+              toolFunnel={detail?.toolFunnel ?? null}
+            />
+          )}
         </Box>
       </Box>
     </Dialog>

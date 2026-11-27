@@ -451,7 +451,7 @@ function SystemOverviewDiagram({ isEn, selectedId, onSelect }) {
         width={176}
         height={94}
         title={isEn ? 'H2 + Git + Docker' : 'H2 库 + Git / Docker'}
-        subtitle={isEn ? 'Flyway V12 · Worktree' : 'Flyway V12 · 沙箱验证'}
+        subtitle={isEn ? 'Flyway V18 · Worktree' : 'Flyway V18 · 沙箱验证'}
         tone="green"
         selected={selectedId === 'storage'}
         onSelect={onSelect}
@@ -627,7 +627,7 @@ function LayersStackDiagram({ isEn, subView, selectedId, onSelect }) {
         height={84}
         badge="04"
         title={isEn ? 'store & persistence' : 'store & persistence 层'}
-        subtitle={isEn ? 'Spring Data JPA · Flyway V1–V12' : 'JPA Repository · Flyway V1–V12'}
+        subtitle={isEn ? 'Spring Data JPA · Flyway V1–V18' : 'JPA Repository · Flyway V1–V18'}
         tone="amber"
         selected={selectedId === 'be-persistence'}
         onSelect={onSelect}

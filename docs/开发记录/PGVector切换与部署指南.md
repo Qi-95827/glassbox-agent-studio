@@ -1,6 +1,6 @@
 # PGVector 切换与部署指南
 
-> 适用版本：Flyway H2 **`V1~V17`** / PostgreSQL **`db/migration-pg` `V1~V7`**（已同步 2026-11-26 V0–V6 封板基线，共 97 张表）  
+> 适用版本：Flyway H2 **`V1~V18`** / PostgreSQL **`db/migration-pg` `V1~V8`**（已同步 2026-11-26 V0–V6 封板基线，共 98 张表；`V18`/`V8` 为同任务调改轮次表 `run_iterations`）  
 > 目标：一套 PostgreSQL 16 + `pgvector` 同时承载关系型业务与向量检索，同时保留 H2 默认单元测试的秒级全绿能力。
 
 ## 1. 双轨 Profile 策略
@@ -12,13 +12,13 @@
 
 两条链路各自独立、互不影响：
 
-- H2 链路：`V1~V17`。`V13` 新增向量列与知识库/上下文产物表；`V14` 补齐核心复合二级索引；`V15` 为 `model_call_payloads` 追加 `reasoning_content`/`streamed`；`V16` 新增 `run_forks`；`V17` 新增 `external_trace_runs` 与 `external_trace_spans`。
+- H2 链路：`V1~V18`。`V13` 新增向量列与知识库/上下文产物表；`V14` 补齐核心复合二级索引；`V15` 为 `model_call_payloads` 追加 `reasoning_content`/`streamed`；`V16` 新增 `run_forks`；`V17` 新增 `external_trace_runs` 与 `external_trace_spans`；`V18` 新增 `run_iterations`（同任务多轮调改轮次）。
 - PostgreSQL 链路：`V1__pg_baseline.sql` ~ `V7__external_traces.sql`。
   - `V1__pg_baseline.sql` 由 H2 `V1~V13` 等价转换为 PostgreSQL DDL（`CLOB -> TEXT`、标识符小写、约束/索引/外键完整保留）；
   - `V2` 启用 `CREATE EXTENSION vector`，为 `memory_records.embedding_vec` 与 `knowledge_chunks.embedding_vec` 增加 `vector(1536)` 列与 HNSW 余弦索引；
   - `V3__pg_legacy_migration_markers.sql` 幂等补齐与 H2 等价的历史迁移标记；
   - `V4__pg_core_query_indexes.sql` 同步补齐核心业务表复合二级索引；
-  - `V5__model_call_reasoning.sql`、`V6__run_forks.sql`、`V7__external_traces.sql` 与 H2 `V15~V17` 一一成对等价。
+  - `V5__model_call_reasoning.sql`、`V6__run_forks.sql`、`V7__external_traces.sql`、`V8__run_iterations.sql` 与 H2 `V15~V18` 一一成对等价。
 - Hibernate 6 长文本与自检兼容：全仓实体长文本字段统一采用 `@JdbcTypeCode(SqlTypes.LONGVARCHAR)` 映射为 PG `TEXT`（全仓 `@Lob` 为 0，不再被 pgjdbc 当作 OID 大对象）；`SystemCatalogRepository` 统一 `LOWER(table_schema) = 'public'`；`JdbcMemoryVectorIndex` / `JdbcKnowledgeVectorIndex` 写入前通过 `PgVectorSupport` 探测列声明维度，维度不匹配或数据库拒绝时记 WARN 并保留 `embedding_json`，安全降级为 BM25 绝不打断外层入库事务，召回支持只读事务内 `SET LOCAL hnsw.ef_search`。
 
 > 升级须知：如后续新增通用迁移，请同时在 `db/migration` 增加 H2 版本，并在 PostgreSQL 链路上追加等价迁移，避免两轨漂移。

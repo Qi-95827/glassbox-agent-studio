@@ -270,7 +270,7 @@ backend/src/main/resources/
   prompts/                      Externalized Chinese prompts & tool contracts (default)
   prompts/en/                   Mirrored English prompts & tool contracts (for EN tasks)
   i18n/                         Spring MessageSource bundles (messages_zh_CN / messages_en_US)
-  db/migration/                 Flyway H2 migrations (V1 ~ V17, 97 tables)
+  db/migration/                 Flyway H2 migrations (V1 ~ V18, 98 tables incl. run_iterations)
   db/migration-pg/              Flyway PostgreSQL 16 + pgvector migrations (V1 ~ V7)
 ```
 

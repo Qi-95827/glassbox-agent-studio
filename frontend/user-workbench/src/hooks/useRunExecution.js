@@ -133,8 +133,14 @@ export function useRunStream(runId, live) {
       invalidate();
       try {
         const event = JSON.parse(message.data);
-        if (event?.type === 'MODEL_STARTED' && event?.nodeId) clearNode(event.nodeId);
-        else if (RUN_TERMINAL_EVENTS.has(event?.type)) setStreamsByNode({});
+        // MODEL_FINISHED 表示该轮回答已经落库：不清空会让同一条回答既出现在历史轮次卡里，
+        // 又继续挂在底部「实时输出」区；节点终态事件同理。
+        if (
+          event?.nodeId &&
+          ['MODEL_STARTED', 'MODEL_FINISHED', 'HANDOFF', 'HANDOFF_ACCEPTED'].includes(event?.type)
+        ) {
+          clearNode(event.nodeId);
+        } else if (RUN_TERMINAL_EVENTS.has(event?.type)) setStreamsByNode({});
       } catch {
         // 事件正文异常不应影响缓存失效；实时缓冲由后续帧自行修正。
       }

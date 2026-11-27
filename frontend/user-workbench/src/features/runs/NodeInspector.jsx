@@ -134,6 +134,7 @@ export default function NodeInspector({
   generatedAt,
   runModelMode,
   selectedEdge,
+  revisionEdge,
   glassboxRequest,
   liveStream = null,
   hasBreakpoint = false,
@@ -353,6 +354,50 @@ export default function NodeInspector({
           />
         ) : (
           <Stack spacing={2}>
+            {/* 反思回边：展示真实已反思轮次与上限，并列出对应节点的尝试记录。 */}
+            {revisionEdge && (
+              <Box
+                data-testid="inspector-revision-edge"
+                sx={{
+                  p: 1.5,
+                  borderRadius: 2.5,
+                  bgcolor: '#FEF7E0',
+                  border: '1px solid #F9D9A2'
+                }}
+              >
+                <Stack
+                  direction="row"
+                  spacing={0.75}
+                  sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}
+                >
+                  <Typography variant="caption" sx={{ fontWeight: 600, color: '#B06000' }}>
+                    {t('inspector.revisionEdge')}
+                  </Typography>
+                  <Chip
+                    size="small"
+                    label={t('inspector.revisionCount', {
+                      count: revisionEdge.revisionCount ?? 0,
+                      max: revisionEdge.maxRevisions ?? 0
+                    })}
+                    sx={{ height: 20, fontSize: 11, bgcolor: '#FFF3E0', color: '#B06000' }}
+                  />
+                </Stack>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  {t('inspector.revisionPath', {
+                    reviewer: shortId(revisionEdge.reviewerNodeId),
+                    target: nodeTitle(node, t('glassbox.currentNode'), locale)
+                  })}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: 'block', mt: 0.5 }}
+                >
+                  {t('inspector.revisionAttempts', { count: attempts.length })}
+                </Typography>
+              </Box>
+            )}
+
             {/* 若当前选中了连线，高亮显示该条交接 */}
             {selectedEdge && (
               <Box

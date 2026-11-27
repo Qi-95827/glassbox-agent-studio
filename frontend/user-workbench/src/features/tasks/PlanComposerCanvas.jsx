@@ -167,6 +167,19 @@ function Canvas({ draft, analysis, selectedKey, onSelectNode, onSelectReflection
   const { t } = useI18n();
   const { fitView } = useReactFlow();
 
+  // 服务端已直接给出 byNodeKey；仍保留按 conflicts 归组的兜底，避免历史/代理响应缺字段时红框整体消失。
+  const conflictsByNode = useMemo(() => {
+    if (!analysis) return {};
+    if (analysis.byNodeKey && typeof analysis.byNodeKey === 'object') return analysis.byNodeKey;
+    const grouped = {};
+    for (const conflict of analysis.conflicts ?? []) {
+      for (const key of conflict.nodeKeys ?? []) {
+        (grouped[key] ??= []).push(conflict);
+      }
+    }
+    return grouped;
+  }, [analysis]);
+
   const dependencyEdges = useMemo(() => {
     const result = [];
     (draft.nodes ?? []).forEach(node => {
@@ -215,10 +228,10 @@ function Canvas({ draft, analysis, selectedKey, onSelectNode, onSelectReflection
         data: {
           node,
           selected: selectedKey === node.key,
-          conflicts: analysis?.byNodeKey?.[node.key] ?? []
+          conflicts: conflictsByNode[node.key] ?? []
         }
       })),
-    [draft.nodes, positions, selectedKey, analysis]
+    [draft.nodes, positions, selectedKey, conflictsByNode]
   );
 
   useEffect(() => {

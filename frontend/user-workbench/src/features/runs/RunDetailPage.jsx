@@ -55,6 +55,7 @@ export default function RunDetailPage() {
   const [tab, setTab] = useState('flow');
   const [selectedId, setSelectedId] = useState(null);
   const [selectedEdge, setSelectedEdge] = useState(null);
+  const [selectedRevisionEdge, setSelectedRevisionEdge] = useState(null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [busyAction, setBusyAction] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -62,7 +63,8 @@ export default function RunDetailPage() {
   const [compareTargetRunId, setCompareTargetRunId] = useState('');
   const consumedQueryRequest = useRef('');
   const inlineInspector = useMediaQuery('(min-width:1024px)');
-  const requestedNodeId = searchParams.get('nodeId');
+  // 新链接用 nodeId；历史外链可能仍是 node，读取端做一次兼容，写入端只输出 nodeId。
+  const requestedNodeId = searchParams.get('nodeId') ?? searchParams.get('node');
   const requestedGlassbox = searchParams.get('glassbox');
 
   const {
@@ -141,6 +143,7 @@ export default function RunDetailPage() {
   useEffect(() => {
     setSelectedId(null);
     setSelectedEdge(null);
+    setSelectedRevisionEdge(null);
     setInspectorOpen(false);
     setTab('flow');
     setGlassboxRequest(null);
@@ -372,6 +375,7 @@ export default function RunDetailPage() {
         generatedAt={view.generatedAt}
         runModelMode={detail?.task?.MODEL_MODE}
         selectedEdge={selectedEdge}
+        revisionEdge={selectedRevisionEdge}
         glassboxRequest={glassboxRequest}
         // 只把当前选中节点的实时缓冲传下去：并行节点的增量互不干扰。
         liveStream={selectedId ? (streamsByNode?.[selectedId] ?? null) : null}
@@ -456,11 +460,20 @@ export default function RunDetailPage() {
                   onSelectNode={id => {
                     setSelectedId(id);
                     setSelectedEdge(null);
+                    setSelectedRevisionEdge(null);
                     setInspectorOpen(true);
                   }}
                   onSelectEdge={edge => {
                     setSelectedId(edge.toNodeId);
                     setSelectedEdge(edge);
+                    setSelectedRevisionEdge(null);
+                    setInspectorOpen(true);
+                  }}
+                  onSelectRevisionEdge={revision => {
+                    // 反思回边没有 from/to 节点字段：定位到写节点（target）并单独展示这条回边的真实计数。
+                    setSelectedRevisionEdge(revision);
+                    setSelectedEdge(null);
+                    setSelectedId(revision?.targetNodeId ?? null);
                     setInspectorOpen(true);
                   }}
                 />

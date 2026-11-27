@@ -3,6 +3,7 @@ package dev.workbench.planning;
 import dev.workbench.ownership.OwnershipService;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -46,12 +47,14 @@ public class PlanDraftValidationController {
    * @param errors 业务规则错误原文（来自 {@link PlanCandidateValidator}）；未提供输入时为空。
    * @param conflicts 图形层面的结构化冲突，供画布高亮。
    * @param conflictingNodeKeys 出现过冲突的节点键，便于前端一次性取到高亮集合。
+   * @param byNodeKey 节点键到冲突明细的直接索引：画布据此给具体节点画红框与徽标，避免前端自行归组导致契约漂移。
    */
   public record Response(
       boolean valid,
       List<String> errors,
       List<PlanDraftConflictAnalyzer.Conflict> conflicts,
-      List<String> conflictingNodeKeys) {}
+      List<String> conflictingNodeKeys,
+      Map<String, List<PlanDraftConflictAnalyzer.Conflict>> byNodeKey) {}
 
   @PostMapping("/validate-draft")
   public Response validateDraft(
@@ -72,6 +75,7 @@ public class PlanDraftValidationController {
         analysis.clean() && errors.isEmpty(),
         List.copyOf(errors),
         analysis.conflicts(),
-        List.copyOf(analysis.byNodeKey().keySet()));
+        List.copyOf(analysis.byNodeKey().keySet()),
+        analysis.byNodeKey());
   }
 }

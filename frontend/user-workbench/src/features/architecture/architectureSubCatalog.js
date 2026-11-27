@@ -10,8 +10,8 @@ export const ARCHITECTURE_SUB_TOPICS = [
     group: 'overview',
     badge: '02.1',
     title: {
-      'zh-CN': '安全边界、归属隔离与 Flyway V1–V12 演进',
-      'en-US': 'Security Boundary, Ownership & Flyway V1–V12'
+      'zh-CN': '安全边界、归属隔离与 Flyway V1–V18 演进',
+      'en-US': 'Security Boundary, Ownership & Flyway V1–V18'
     },
     shortTitle: { 'zh-CN': '安全与持久化', 'en-US': 'Security & Flyway' },
     tagline: {
@@ -33,9 +33,9 @@ export const ARCHITECTURE_SUB_TOPICS = [
       {
         title: { 'zh-CN': '不可变迁移历史', 'en-US': 'Immutable Migrations' },
         body: {
-          'zh-CN': 'Hibernate 自动建表永久关闭，只增不改 V1–V12 迁移脚本，保证老库平滑升级。',
+          'zh-CN': 'Hibernate 自动建表永久关闭，只增不改 V1–V18 迁移脚本，保证老库平滑升级。',
           'en-US':
-            'Hibernate auto-DDL is disabled; append-only V1–V12 migrations guarantee clean upgrades.'
+            'Hibernate auto-DDL is disabled; append-only V1–V18 migrations guarantee clean upgrades.'
         }
       },
       {
@@ -85,20 +85,23 @@ export const ARCHITECTURE_SUB_TOPICS = [
         codeRefs: ['ArchitectureGuardTest.java', 'RunEvidenceRecordService.java']
       },
       flyway: {
-        label: { 'zh-CN': 'Flyway V1–V12 + H2 文件库', 'en-US': 'Flyway V1–V12 + H2 DB' },
+        label: { 'zh-CN': 'Flyway V1–V18 + H2 文件库', 'en-US': 'Flyway V1–V18 + H2 DB' },
         role: { 'zh-CN': '版本演进', 'en-US': 'Schema Versioning' },
         tone: 'purple',
         intent: {
           'zh-CN':
-            'V1–V6 奠定玻璃盒与双语基线；V7 并行反思与上下文、V8 审批单、V9 三层记忆、V10 MCP 注册表、V11 评测批次、V12 Hub 与自定义集。',
+            'V1–V6 奠定玻璃盒与双语基线；V7 并行反思与上下文、V8 审批单、V9 三层记忆、V10 MCP 注册表、V11 评测批次、V12 Hub 与自定义集、V13 知识库与向量、V14 查询索引、V15 思考链、V16 分支运行、V17 外部 Trace、V18 同任务迭代轮次。',
           'en-US':
-            'V1–V6 establish glass-box & i18n; V7 parallel/reflection/context, V8 approvals, V9 layered memory, V10 MCP registry, V11 Eval Lab runs, V12 Hub & custom datasets.'
+            'V1–V6 establish glass-box & i18n; V7 parallel/reflection/context, V8 approvals, V9 layered memory, V10 MCP registry, V11 Eval Lab runs, V12 Hub & custom datasets, V13 knowledge/vector, V14 query indexes, V15 reasoning chains, V16 forked runs, V17 external traces, V18 per-task iteration rounds.'
         },
         codeRefs: [
           'V7__parallel_reflection_and_context.sql',
           'V10__mcp_server_registry.sql',
           'V11__eval_lab_v2.sql',
-          'V12__eval_hub_and_datasets.sql'
+          'V12__eval_hub_and_datasets.sql',
+          'V16__run_forks.sql',
+          'V17__external_traces.sql',
+          'V18__run_iterations.sql'
         ]
       }
     }

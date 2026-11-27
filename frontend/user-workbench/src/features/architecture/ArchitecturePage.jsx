@@ -20,6 +20,20 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePageChrome } from '../../layout/pageChrome';
 import ArchitectureCanvas from './ArchitectureCanvas';
 import ArchitectureXrayPanel from './ArchitectureXrayPanel';
+
+/**
+ * X 光锚点跳到运行详情的深链。
+ *
+ * <p>运行详情读取的参数名是 {@code nodeId}，这里必须与之一致；历史上的 {@code node} 只在读取端做兼容，
+ * 新链接一律输出 {@code nodeId}，避免「点进去却没有打开指定节点」。
+ */
+export function architectureRunLink(runId, nodeId, tab) {
+  const params = new URLSearchParams();
+  if (nodeId) params.set('nodeId', nodeId);
+  if (tab) params.set('glassbox', tab);
+  const query = params.toString();
+  return `/runs/${encodeURIComponent(runId)}${query ? `?${query}` : ''}`;
+}
 import {
   ALL_ARCHITECTURE_TOPICS,
   ARCHITECTURE_GROUPS,
@@ -110,11 +124,7 @@ export default function ArchitecturePage() {
         </Stack>
         <ArchitectureXrayPanel
           initialRunId={params.get('run') ?? ''}
-          onOpenRun={(runId, nodeId, tab) =>
-            navigate(
-              `/runs/${runId}?node=${encodeURIComponent(nodeId)}&glassbox=${encodeURIComponent(tab)}`
-            )
-          }
+          onOpenRun={(runId, nodeId, tab) => navigate(architectureRunLink(runId, nodeId, tab))}
         />
       </Box>
     );

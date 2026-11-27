@@ -45,6 +45,7 @@ final class ExecutionNodeDetailProjector {
   private final ExecutionGraphProjector graph;
   private final dev.workbench.ownership.OwnershipService ownership;
   private final dev.workbench.store.GlassboxTraceStore traces;
+  private final dev.workbench.framework.agent.definition.AgentDefinitionCatalog definitions;
 
   ExecutionNodeDetailProjector(
       RunStateStore runs,
@@ -54,7 +55,8 @@ final class ExecutionNodeDetailProjector {
       EventRepository events,
       ExecutionGraphProjector graph,
       dev.workbench.ownership.OwnershipService ownership,
-      dev.workbench.store.GlassboxTraceStore traces) {
+      dev.workbench.store.GlassboxTraceStore traces,
+      dev.workbench.framework.agent.definition.AgentDefinitionCatalog definitions) {
     this.runs = runs;
     this.agents = agents;
     this.plans = plans;
@@ -63,6 +65,7 @@ final class ExecutionNodeDetailProjector {
     this.graph = graph;
     this.ownership = ownership;
     this.traces = traces;
+    this.definitions = definitions;
   }
 
   NodeDetail detail(String runId, String nodeIdText) {
@@ -127,7 +130,31 @@ final class ExecutionNodeDetailProjector {
                         receipt.evidence()))
             .toList(),
         nodeEvents(runId, nodeId),
-        nodeResult(node, attempts, checks, agentRows));
+        nodeResult(node, attempts, checks, agentRows),
+        toolFunnel(node, attempts, assemblies));
+  }
+
+  /**
+   * 由最近一次尝试的装配快照计算真实工具漏斗；没有装配记录时返回 null，前端只展示「无装配证据」而不是猜裁剪。
+   */
+  private ExecutionViewService.ToolFunnelView toolFunnel(
+      PlanNode node,
+      List<WorkflowAttempt> attempts,
+      List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded> assemblies) {
+    var latest =
+        attempts.stream()
+            .max(java.util.Comparator.comparingInt(WorkflowAttempt::number))
+            .orElse(null);
+    if (latest == null) return null;
+    var snapshot =
+        assemblies.stream()
+            .filter(recorded -> recorded.agentId().equals(latest.agentId()))
+            .map(dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Recorded::snapshot)
+            .findFirst()
+            .orElse(null);
+    if (snapshot == null) return null;
+    var definition = definitions.resolve(snapshot.components().definition());
+    return ToolFunnelProjector.project(node, snapshot, definition);
   }
 
   private AttemptView attemptView(

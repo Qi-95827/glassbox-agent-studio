@@ -297,7 +297,23 @@ public class ExecutionViewService {
       List<HandoffView> outboundHandoffs,
       List<CheckReceiptView> checkReceipts,
       List<NodeEventView> nodeEvents,
-      String result) {}
+      String result,
+      ToolFunnelView toolFunnel) {}
+
+  /**
+   * 节点工具权限漏斗：{@code granted} 是装配时真正授予的工具，{@code filtered} 是被平台裁剪掉的真实工具与原因编码。
+   *
+   * <p>两者都使用真实 {@link dev.workbench.domain.ToolKind} 枚举名，前端只做翻译，不再用硬编码清单反推。
+   */
+  public record ToolFunnelView(
+      String definitionId,
+      Integer definitionVersion,
+      List<ToolGrantView> granted,
+      List<ToolFilterView> filtered) {}
+
+  public record ToolGrantView(String kind, Integer version) {}
+
+  public record ToolFilterView(String kind, String reason) {}
 
   public record DependencyView(
       String nodeId, String label, String role, String status, String kind) {}

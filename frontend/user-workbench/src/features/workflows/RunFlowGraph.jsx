@@ -255,7 +255,8 @@ function FlowCanvas({
   activityByNode,
   streamingNodeId,
   onSelectNode,
-  onSelectEdge
+  onSelectEdge,
+  onSelectRevisionEdge
 }) {
   const { t } = useI18n();
   const theme = useTheme();
@@ -268,6 +269,10 @@ function FlowCanvas({
   // 回调引用稳定：父组件每次渲染都会传入新的内联函数，直接放进 data 会让 memo 完全失效。
   const handleSelect = useCallback(id => onSelectNode?.(id), [onSelectNode]);
   const handleEdgeSelect = useCallback(edge => onSelectEdge?.(edge), [onSelectEdge]);
+  const handleRevisionEdgeSelect = useCallback(
+    revisionEdge => onSelectRevisionEdge?.(revisionEdge),
+    [onSelectRevisionEdge]
+  );
 
   const positions = useMemo(
     () => layout(nodes, edges, width, height, gap),
@@ -386,7 +391,13 @@ function FlowCanvas({
         edges={graphEdges}
         nodeTypes={nodeTypes}
         onNodeClick={(_, node) => handleSelect(node.id)}
-        onEdgeClick={(_, edge) => handleEdgeSelect(edge.data?.edge)}
+        onEdgeClick={(_, edge) => {
+          // 依赖边与反思回边是两种语义：反思回边没有 fromNodeId/toNodeId，
+          // 若沿用依赖边的 data.edge 约定会把 undefined 传给页面并直接抛 TypeError。
+          const picked = edgeSelection(edge);
+          if (picked.revisionEdge) handleRevisionEdgeSelect(picked.revisionEdge);
+          else handleEdgeSelect(picked.edge);
+        }}
         nodesDraggable={false}
         nodesConnectable={false}
         nodesFocusable={false}
@@ -407,6 +418,18 @@ function FlowCanvas({
  * 运行流程图：服务端节点与依赖为准，前端只负责布局。
  * 节点卡采用 M3 白底 + 左侧语义色条；运行节点高亮为 Google Blue。
  */
+
+/**
+ * 统一边点击载荷：反思回边携带结构化 revisionEdge，依赖边携带依赖投影。
+ *
+ * <p>导出该函数是为了让「图 → 页面」的契约被单测直接覆盖，而不是只在点击时才暴露未定义字段。
+ */
+export function edgeSelection(edge) {
+  const revisionEdge = edge?.data?.revisionEdge;
+  if (revisionEdge) return { revisionEdge, edge: null };
+  return { revisionEdge: null, edge: edge?.data?.edge ?? null };
+}
+
 export default function RunFlowGraph(props) {
   return (
     <ReactFlowProvider>

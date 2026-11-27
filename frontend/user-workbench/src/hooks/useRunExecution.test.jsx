@@ -311,6 +311,26 @@ describe('useRunExecution 的流与轮询协同', () => {
     await waitFor(() => expect(result.current.streamsByNode.a).toBeUndefined());
   });
 
+  it('MODEL_FINISHED 落库后立即清空该节点实时缓冲，避免同一条回答出现两次', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useRunStream('run-finish', true), {
+      wrapper: makeWrapper(client)
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => source.onopen());
+    act(() =>
+      source.listeners.MODEL_REASONING_DELTA({ data: '{"nodeId":"a","text":"先核对证据"}' })
+    );
+    act(() => source.listeners.MODEL_DELTA({ data: '{"nodeId":"a","text":"最终回答"}' }));
+    await waitFor(() => expect(result.current.streamsByNode.a?.content).toBe('最终回答'));
+    expect(result.current.streamsByNode.a?.reasoning).toBe('先核对证据');
+
+    act(() => source.listeners.RUN_EVENT({ data: '{"type":"MODEL_FINISHED","nodeId":"a"}' }));
+    await waitFor(() => expect(result.current.streamsByNode.a).toBeUndefined());
+    expect(result.current.streamText).toBe('');
+    expect(result.current.reasoningText).toBe('');
+  });
+
   it('安检门进度按节点记录，并汇总出当前关卡', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { result } = renderHook(() => useRunStream('run-gate', true), {
