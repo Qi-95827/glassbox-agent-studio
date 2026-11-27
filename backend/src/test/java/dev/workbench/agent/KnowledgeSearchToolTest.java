@@ -68,25 +68,32 @@ class KnowledgeSearchToolTest {
   }
 
   @Test
-  void returnsStructuredEvidenceForTheXRayPanel() throws Exception {
+  void modelVisiblePayloadOnlyCarriesSelectedPassages() throws Exception {
     when(rag.retrieveWithEvidence("ws-1", "排序", 5)).thenReturn(evidence());
     var spec = KnowledgeSearchTool.specification(rag, "ws-1", "zh-CN");
 
     var result = spec.action().execute(Map.of("query", " 排序 "), () -> {});
 
     verify(rag).retrieveWithEvidence("ws-1", "排序", 5);
-    assertEquals(2, result.items().size());
-    // 服务端固定上限，模型不能通过参数放大注入量。
-    verify(rag).retrieveWithEvidence("ws-1", "排序", 5);
-    var dropped = result.items().get(1);
-    assertFalse(dropped.selected());
-    assertEquals("BELOW_THRESHOLD", dropped.droppedReason());
+    // 入选的正文必须给到模型。
+    assertEquals(1, result.passages().size());
+    assertEquals("数组越界需要先校验长度。", result.passages().getFirst().content());
+    // 未入选候选的正文、标题与裁剪原因都不得出现在模型可见载荷里。
+    String serialized = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(result);
+    assertFalse(serialized.contains("大数据量下使用归并排序。"), serialized);
+    assertFalse(serialized.contains("BELOW_THRESHOLD"), serialized);
+    assertFalse(serialized.contains("性能"), serialized);
+    assertEquals(2, result.totalCandidates());
+    assertEquals(1, result.selectedCount());
+    assertEquals(42, result.injectedTokens());
   }
 
   @Test
-  void modelFacingSummaryCarriesCountsAndNoPassageBodies() {
+  void modelFacingSummaryCarriesCountsAndNoPassageBodies() throws Exception {
+    when(rag.retrieveWithEvidence("ws-1", "排序", 5)).thenReturn(evidence());
     var spec = KnowledgeSearchTool.specification(rag, "ws-1", "zh-CN");
-    var summary = spec.summarize().apply(Map.of("query", "排序"), evidence());
+    var visible = spec.action().execute(Map.of("query", "排序"), () -> {});
+    var summary = spec.summarize().apply(Map.of("query", "排序"), visible);
 
     assertTrue(summary.contains("1"), summary);
     // 摘要里不能出现检索正文，否则证据等同于再注入一次。
@@ -95,9 +102,11 @@ class KnowledgeSearchToolTest {
   }
 
   @Test
-  void englishSummariesStayEnglish() {
+  void englishSummariesStayEnglish() throws Exception {
+    when(rag.retrieveWithEvidence("ws-1", "sort", 5)).thenReturn(evidence());
     var spec = KnowledgeSearchTool.specification(rag, "ws-1", "en-US");
-    var summary = spec.summarize().apply(Map.of("query", "sort"), evidence());
+    var visible = spec.action().execute(Map.of("query", "sort"), () -> {});
+    var summary = spec.summarize().apply(Map.of("query", "sort"), visible);
     assertTrue(summary.startsWith("Knowledge base searched"), summary);
   }
 

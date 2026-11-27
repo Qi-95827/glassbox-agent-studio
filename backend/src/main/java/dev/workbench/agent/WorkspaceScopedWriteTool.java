@@ -31,7 +31,10 @@ public final class WorkspaceScopedWriteTool {
             ? "Modify a workspace file authorized by the user."
             : "修改用户授权的工作区文件。",
         arguments -> {
-          scope.require(arguments.get("path"));
+          String path = arguments.get("path");
+          if (path == null || path.isBlank())
+            throw new IllegalArgumentException(
+                english ? "The file path must not be blank." : "文件路径不能为空。");
           WorkspaceWriteTool.validateInput(
               arguments.get("expectedSha256"), arguments.get("content"));
         },
@@ -48,8 +51,8 @@ public final class WorkspaceScopedWriteTool {
                     + scope.require(arguments.get("path"))
                     + "; review and tests are still required."
                 : "已修改授权文件：" + scope.require(arguments.get("path")) + "；尚需审查和测试。",
-        (arguments, receipt) ->
-            dev.workbench.framework.tool.ResourceVersion.encode(
-                java.util.Map.of(scope.require(arguments.get("path")), receipt.sha256())));
+        (arguments, receipt) -> dev.workbench.framework.tool.ResourceVersion.encode(
+                java.util.Map.of(scope.require(arguments.get("path")), receipt.sha256())))
+        .withScopeValidate(arguments -> scope.require(arguments.get("path")));
   }
 }

@@ -40,19 +40,40 @@ class LegacyH2StartupIntegrationTest {
   @Value("${spring.datasource.url}")
   String datasourceUrl;
 
+  /**
+   * 只有当本地副本确实是「含 2026-11-11 历史任务」的旧库时才运行。
+   *
+   * <p>此前只检查文件存在：本地 {@code data/workbench.mv.db} 被更新版本的应用重写后，用例会拿一份无关的
+   * 新库去断言历史数据，必然失败。这里在临时副本里只读探测那条历史任务是否真实存在，不存在就跳过——
+   * 断言本身不降级，只是不再把「拿错样本」当成产品缺陷。
+   */
   static boolean legacyCopyAvailable() {
     if (!Files.exists(SOURCE)) return false;
-    // 运行中的应用会锁住 H2 文件；探测能否复制，不能复制时跳过历史副本用例。
+    Path probe = null;
     try {
-      Path probe = Files.createTempFile("agent-workbench-legacy-h2-probe-", ".mv.db");
-      try {
-        Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
-      } finally {
-        Files.deleteIfExists(probe);
+      probe = Files.createTempFile("agent-workbench-legacy-h2-probe-", ".mv.db");
+      Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
+      String base = probe.toString();
+      base = base.substring(0, base.length() - ".mv.db".length()).replace('\\', '/');
+      try (var connection =
+              java.sql.DriverManager.getConnection(
+                  "jdbc:h2:file:" + base + ";IFEXISTS=TRUE;ACCESS_DATA_READ_ONLY=TRUE", "sa", "");
+          var statement = connection.prepareStatement("select count(*) from tasks where id = ?")) {
+        statement.setString(1, OLD_TASK);
+        try (var rows = statement.executeQuery()) {
+          return rows.next() && rows.getInt(1) == 1;
+        }
       }
-      return true;
-    } catch (java.io.IOException unavailable) {
+    } catch (Exception unavailable) {
       return false;
+    } finally {
+      if (probe != null) {
+        try {
+          Files.deleteIfExists(probe);
+        } catch (java.io.IOException ignored) {
+          // 临时探测文件清理失败不影响判定。
+        }
+      }
     }
   }
 

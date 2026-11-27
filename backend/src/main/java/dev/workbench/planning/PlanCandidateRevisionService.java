@@ -47,8 +47,10 @@ class PlanCandidateRevisionService {
             scope.ownerScopeKey(),
             store.write(result.normalized()),
             result.candidateSha256(),
-            store.write(PlanCandidateBindings.of(result.nodes())));
-    if (changed != 1) throw new IllegalStateException("候选已被确认或过期，请刷新后重新修改。");
+            store.write(PlanCandidateBindings.of(result.nodes())),
+            expectedCandidateSha256);
+    if (changed != 1)
+      throw new IllegalStateException("候选已被确认、过期或被并发修订，请刷新后重新修改。");
     return new PlanCandidateService.Revised(
         true, List.of(), store.view(store.reload(row)));
   }

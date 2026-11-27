@@ -26,19 +26,36 @@ class LegacyH2DoubleStartupIntegrationTest {
   private static final String OLD_TASK = "44e0466a-1263-4eca-9a5d-06a382fbbc4d";
   private static final String OLD_RUN = "75869944-3c0a-493a-9f1e-7d87a65df69f";
 
+  /**
+   * 只有当本地副本确实是「含 2026-11-11 历史任务」的旧库时才运行；样本被替换时跳过而不是误报。
+   */
   static boolean legacyCopyAvailable() {
     if (!Files.exists(SOURCE)) return false;
-    // 运行中的应用会锁住 H2 文件；探测能否复制，不能复制时跳过历史副本用例。
+    Path probe = null;
     try {
-      Path probe = Files.createTempFile("agent-workbench-legacy-double-probe-", ".mv.db");
-      try {
-        Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
-      } finally {
-        Files.deleteIfExists(probe);
+      probe = Files.createTempFile("agent-workbench-legacy-double-probe-", ".mv.db");
+      Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
+      String base = probe.toString();
+      base = base.substring(0, base.length() - ".mv.db".length()).replace('\\', '/');
+      try (var connection =
+              java.sql.DriverManager.getConnection(
+                  "jdbc:h2:file:" + base + ";IFEXISTS=TRUE;ACCESS_DATA_READ_ONLY=TRUE", "sa", "");
+          var statement = connection.prepareStatement("select count(*) from tasks where id = ?")) {
+        statement.setString(1, OLD_TASK);
+        try (var rows = statement.executeQuery()) {
+          return rows.next() && rows.getInt(1) == 1;
+        }
       }
-      return true;
-    } catch (java.io.IOException unavailable) {
+    } catch (Exception unavailable) {
       return false;
+    } finally {
+      if (probe != null) {
+        try {
+          Files.deleteIfExists(probe);
+        } catch (java.io.IOException ignored) {
+          // 临时探测文件清理失败不影响判定。
+        }
+      }
     }
   }
 

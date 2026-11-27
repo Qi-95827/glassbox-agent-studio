@@ -235,6 +235,8 @@ public class RunObservationService {
     }
     for (var payload : payloads.findByRunId(runId)) {
       if (payload.getCompactionTier() == null || payload.getCompactionTier().isBlank()) continue;
+      // 只有真的发生 L1/L2/L3 压缩才是 COMPACTION 事件；L0 只是「观察水位」，把它投成压缩 Span 会虚报压缩。
+      if ("L0_OBSERVE_ONLY".equals(payload.getCompactionTier())) continue;
       // 压缩只有「发生时刻」而没有单独耗时，因此是零宽标记，而不是编造一段区间。
       spans.add(
           span(

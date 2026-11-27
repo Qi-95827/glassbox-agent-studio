@@ -29,7 +29,21 @@ public class ReflectionCoordinator {
     if (reviewer == null || reviewer.role() == null) return Decision.notReview();
     var edge = plans.revisionEdgeForReviewer(runId, reviewer.id());
     if (edge == null) return Decision.notReview();
-    ReviewVerdict verdict = ReviewVerdictParser.parse(result);
+    var structured = ReviewVerdictParser.parseStructured(result);
+    if (structured.isEmpty()) {
+      // 配了反思回边却完全没有结构化裁决标记：旧实现默认 APPROVED，等于把「没说通过」当成「通过」。
+      // 这里按保守策略进入修订；额度用尽则转 EXHAUSTED 由人工审核收口，绝不静默放行。
+      var conservative =
+          new ReviewVerdict(
+              ReviewVerdict.REVISE_REQUIRED,
+              java.util.List.of(),
+              "审查输出缺少结构化裁决标记（DECISION/JSON/显式 CONCLUSION），按保守策略不判定为通过。");
+      if (edge.revisionCount() >= edge.maxRevisions())
+        return Decision.exhausted(conservative, edge.maxRevisions());
+      return Decision.revise(
+          conservative, edge.targetNodeId(), edge.revisionCount() + 1, edge.maxRevisions());
+    }
+    ReviewVerdict verdict = structured.get();
     if (!verdict.reviseRequired()) return Decision.approved(verdict);
     if (edge.revisionCount() >= edge.maxRevisions())
       return Decision.exhausted(verdict, edge.maxRevisions());

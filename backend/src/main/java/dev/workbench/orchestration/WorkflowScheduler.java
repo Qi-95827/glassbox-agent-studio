@@ -17,6 +17,7 @@ import dev.workbench.framework.workflow.check.StaleEvidenceException;
 import dev.workbench.framework.workflow.check.SystemCheckRegistry;
 import dev.workbench.framework.workflow.check.SystemCheckRequest;
 import dev.workbench.framework.workflow.check.SystemCheckResult;
+import dev.workbench.framework.workflow.plan.PlanNode;
 import dev.workbench.framework.workflow.plan.WorkflowPlan;
 import dev.workbench.framework.workflow.plan.WorkflowTemplate;
 import dev.workbench.planning.PlanService;
@@ -248,14 +249,15 @@ class WorkflowScheduler {
           if (!checkInFlight) {
             for (var node : plans.readyNodes(nodes)) {
               if (inFlight.containsKey(node.id())) continue;
+              boolean breakpoint = breakpointHit(runId, node, releasedBreakpoints);
+              // 断点必须在认领之前判定：同批已有在途节点时先等它们排空，随后落 PAUSED；
+              // 绝不能因为「在途非空」就跳过断点判断，把设了断点的节点偷偷跑完并产生副作用。
+              if (breakpoint && !inFlight.isEmpty()) break;
               if (node.systemCheck() && !inFlight.isEmpty()) break;
               if (!node.systemCheck() && inFlight.size() >= effectiveMax) break;
               if (!inFlight.isEmpty() && (effectiveMax <= 1 || !fanOut)) continue;
               if (!inFlight.isEmpty() && !parallelSafe(runId, node, inFlight.keySet())) continue;
-              if (inFlight.isEmpty()
-                  && traces != null
-                  && !releasedBreakpoints.contains(node.id().toString())
-                  && traces.planControl(runId).breakpoints().contains(node.id().toString())) {
+              if (breakpoint) {
                 releasedBreakpoints.add(node.id().toString());
                 control.pauseAtBreakpoint(
                     stateLock, "命中节点断点：" + node.label() + "；请检查上游交接与上下文后点击「继续」放行。");
@@ -369,7 +371,11 @@ class WorkflowScheduler {
         }
 
         String verdictJson = null;
-        var decision = reflection.decide(runId, outcome.claimed().node(), outcome.result());
+        var decision =
+            reflection.decide(
+                runId,
+                outcome.claimed().node(),
+                verdictSource(outcome.result(), outcome.fullResult()));
         // 达到修订上限（EXHAUSTED）同样携带裁决：结算时据此转入 BLOCKED/HUMAN_REVIEW_REQUIRED，
         // 绝不因为「不再重试」而把运行错结为 COMPLETED。
         if (carriesCriticVerdict(decision))
@@ -465,6 +471,18 @@ class WorkflowScheduler {
     inFlight.clear();
   }
 
+  /**
+   * 节点是否命中「尚未放行」的用户断点。
+   *
+   * <p>只对 Agent 节点生效；系统检查节点不产生副作用，也不接受断点。
+   */
+  private boolean breakpointHit(String runId, PlanNode node, Set<String> released) {
+    return !node.systemCheck()
+        && traces != null
+        && !released.contains(node.id().toString())
+        && traces.planControl(runId).breakpoints().contains(node.id().toString());
+  }
+
   private NodeOutcome runAgent(
       String runId,
       TaskDefinition task,
@@ -472,11 +490,22 @@ class WorkflowScheduler {
       RunControl control,
       Object stateLock) {
     try {
-      String result = executeAttempt(runId, task, attempt, control, stateLock);
-      return NodeOutcome.agent(attempt, result, null);
+      // executeAttempt 返回未截断正文：审查裁决必须基于完整输出，展示与落库再用 1900 字摘要。
+      String full = executeAttempt(runId, task, attempt, control, stateLock);
+      return NodeOutcome.agent(attempt, limited(full, 1900), full, null);
     } catch (Throwable error) {
-      return NodeOutcome.agent(attempt, null, error);
+      return NodeOutcome.agent(attempt, null, null, error);
     }
+  }
+
+  /**
+   * 审查裁决的输入：必须取未截断正文。
+   *
+   * <p>旧实现把 1900 字截断结果交给解析器，末尾的 `REVISE_REQUIRED` 一旦被截掉就会被默认判成 `APPROVED`，
+   * 等于静默放行了需要返工的交付。
+   */
+  static String verdictSource(String displayResult, String fullResult) {
+    return fullResult == null || fullResult.isBlank() ? displayResult : fullResult;
   }
 
   private NodeOutcome runCheck(
@@ -515,10 +544,14 @@ class WorkflowScheduler {
       String checkId,
       SystemCheckResult checkResult,
       String result,
+      String fullResult,
       Throwable error,
       RunControl.NodePolicy nodePolicy) {
     static NodeOutcome agent(
-        WorkflowExecutionService.ClaimedNode claimed, String result, Throwable error) {
+        WorkflowExecutionService.ClaimedNode claimed,
+        String result,
+        String fullResult,
+        Throwable error) {
       var node = claimed.node();
       var policy =
           node.budget() == null ? null : new RunControl.NodePolicy(node.id(), node.budget());
@@ -529,6 +562,7 @@ class WorkflowScheduler {
           null,
           null,
           result,
+          fullResult,
           error,
           policy);
     }
@@ -536,7 +570,7 @@ class WorkflowScheduler {
     static NodeOutcome check(
         WorkflowExecutionService.ClaimedCheck claimed, SystemCheckResult result, Throwable error) {
       return new NodeOutcome(
-          claimed.node().id(), null, null, claimed.checkId(), result, null, error, null);
+          claimed.node().id(), null, null, claimed.checkId(), result, null, null, error, null);
     }
 
     boolean systemCheck() {
@@ -617,9 +651,9 @@ class WorkflowScheduler {
                 writeFiles)
             .withModelConnection(task.modelConnectionId())
             .withLocale(task.locale());
-    return limited(agent.execute(request), 1900);
+    // 交给执行器的是完整正文；摘要与截断只发生在落库与页面展示层。
+    return agent.execute(request);
   }
-
   private void stop(
       String runId, Set<UUID> agentIds, RunControl control, StopCause cause, String reason) {
     // 检查阻塞等运行状态没有对应的调用终态；此时只结算运行与节点，不伪造调用状态。

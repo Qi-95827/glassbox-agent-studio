@@ -36,6 +36,38 @@ class ReviewVerdictParserTest {
   void defaultsToApprovedWhenNoStructuredMarkerExists() {
     assertEquals(ReviewVerdict.APPROVED, ReviewVerdictParser.parse("普通审查意见").decision());
     assertEquals(ReviewVerdict.APPROVED, ReviewVerdictParser.parse("").decision());
+    // 宽松默认只服务非反思场景；反思节点必须用 parseStructured 的空结果走保守策略。
+    assertTrue(ReviewVerdictParser.parseStructured("普通审查意见").isEmpty());
+    assertTrue(ReviewVerdictParser.parseStructured("").isEmpty());
+    assertTrue(ReviewVerdictParser.parseStructured("the change was approved by tests").isEmpty());
+  }
+
+  @Test
+  void structuredParserRecognisesExplicitMarkersOnly() {
+    assertEquals(
+        ReviewVerdict.APPROVED,
+        ReviewVerdictParser.parseStructured("DECISION: APPROVED\nLooks good").orElseThrow().decision());
+    assertEquals(
+        ReviewVerdict.REVISE_REQUIRED,
+        ReviewVerdictParser.parseStructured("结论：REVISE_REQUIRED\n需要修改").orElseThrow().decision());
+    assertEquals(
+        ReviewVerdict.REVISE_REQUIRED,
+        ReviewVerdictParser.parseStructured("结论 APPROVED 与 REVISE_REQUIRED 同时出现时以返工为准")
+            .orElseThrow()
+            .decision());
+  }
+
+  @Test
+  void longReviewOutputWithTrailingRevisionMarkerIsNotSilentlyApproved() {
+    // 回归：>2500 字正文里，REVISE_REQUIRED 只出现在末尾。旧实现先截断到 1900 字再解析，标记被切掉后默认 APPROVED。
+    String detailed = "逐条核对：" + "证据不足需要补充。".repeat(320);
+    String full = detailed + "\nDECISION: REVISE_REQUIRED\n请先补齐回归测试。";
+    assertTrue(full.length() > 2500, "用例必须真的超过旧截断阈值");
+
+    assertEquals(ReviewVerdict.REVISE_REQUIRED, ReviewVerdictParser.parse(full).decision());
+    assertEquals(
+        ReviewVerdict.REVISE_REQUIRED,
+        ReviewVerdictParser.parseStructured(full).orElseThrow().decision());
   }
 
   @Test

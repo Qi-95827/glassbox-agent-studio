@@ -82,6 +82,7 @@ final class GatewayAgentTool<T> extends ToolBase {
           try {
             var edited = toBound.apply(context.json().readValue(editedJson, Map.class));
             spec.validate().accept(edited);
+            if (spec.scopeValidate() != null) spec.scopeValidate().accept(edited);
             boundRef.set(edited);
           } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalArgumentException("修改后的参数不是有效 JSON。", e);
@@ -101,19 +102,26 @@ final class GatewayAgentTool<T> extends ToolBase {
             throw new IllegalStateException("改参工具执行失败。", e);
           }
         };
+    // 参数 Schema 与路径白名单是两道独立的门：合成一个闭包会让「参数类型错误」同时错报「路径越界」。
+    Runnable schemaValidate =
+        () -> {
+          if (!input.keySet().equals(arguments.keySet()) || arguments.containsValue(null))
+            throw new IllegalArgumentException("工具参数与声明不符。");
+          spec.validate().accept(bound);
+        };
+    Runnable scopeValidate =
+        spec.scopeValidate() == null ? null : () -> spec.scopeValidate().accept(bound);
     return gateway.execute(
         kind,
+        kind.name(),
         version,
         ToolFingerprint.of(kind, fingerprintParts.toArray(String[]::new)),
         context.json().writeValueAsString(input),
         effect,
         spec.startMessage(),
         summaryFn,
-        () -> {
-          if (!input.keySet().equals(arguments.keySet()) || arguments.containsValue(null))
-            throw new IllegalArgumentException("工具参数与声明不符。");
-          spec.validate().accept(bound);
-        },
+        scopeValidate,
+        schemaValidate,
         resourceVersionFn,
         editedValidate,
         editedAction,

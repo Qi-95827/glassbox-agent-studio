@@ -15,9 +15,34 @@ public record ToolSpecification<T>(
     List<String> fingerprintPrefix,
     String startMessage,
     Consumer<Map<String, String>> validate,
+    Consumer<Map<String, String>> scopeValidate,
     Action<T> action,
     BiFunction<Map<String, String>, T, String> summarize,
     BiFunction<Map<String, String>, T, String> resourceVersion) {
+  /** 兼容只声明参数校验的工具；路径白名单校验另行通过 {@code scopeValidate} 声明。 */
+  public ToolSpecification(
+      String name,
+      String description,
+      List<Parameter> parameters,
+      List<String> fingerprintPrefix,
+      String startMessage,
+      Consumer<Map<String, String>> validate,
+      Action<T> action,
+      BiFunction<Map<String, String>, T, String> summarize,
+      BiFunction<Map<String, String>, T, String> resourceVersion) {
+    this(
+        name,
+        description,
+        parameters,
+        fingerprintPrefix,
+        startMessage,
+        validate,
+        null,
+        action,
+        summarize,
+        resourceVersion);
+  }
+
   public ToolSpecification(
       String name,
       String description,
@@ -34,9 +59,25 @@ public record ToolSpecification<T>(
         fingerprintPrefix,
         startMessage,
         validate,
+        null,
         action,
         summarize,
         null);
+  }
+
+  /** 同时声明参数 Schema 与路径白名单两道校验；二者失败必须分别归因，不能互相冒充。 */
+  public ToolSpecification<T> withScopeValidate(Consumer<Map<String, String>> scopeValidate) {
+    return new ToolSpecification<>(
+        name,
+        description,
+        parameters,
+        fingerprintPrefix,
+        startMessage,
+        validate,
+        scopeValidate,
+        action,
+        summarize,
+        resourceVersion);
   }
 
   public ToolSpecification {

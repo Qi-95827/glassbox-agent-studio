@@ -124,10 +124,13 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     }
 
     // L3 之后仍然保留的工具调用标识，就是被硬保底保护下来的「原子对」名单。
+    // 只有真正触发 L3 才有这份明细：L0/L1/L2 不应把「当前仍在上下文里的工具调用」冒充成 L3 保留结果。
     var protectedToolCalls = new ArrayList<String>();
-    for (var message : working)
-      if (message.toolCallId() != null && !protectedToolCalls.contains(message.toolCallId()))
-        protectedToolCalls.add(message.toolCallId());
+    if (tier == CompactionTier.L3_HARD_GUARD) {
+      for (var message : working)
+        if (message.toolCallId() != null && !protectedToolCalls.contains(message.toolCallId()))
+          protectedToolCalls.add(message.toolCallId());
+    }
 
     int total = estimate(working);
     var breakdown =
@@ -164,26 +167,97 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
    */
   static int estimate(List<ContextMessage> messages) {
     long total = 0;
-    for (var message : messages) {
-      String content = message.content() == null ? "" : message.content();
-      long ascii = 0;
-      long wide = 0;
-      for (int index = 0; index < content.length(); index++) {
-        if (content.charAt(index) < 0x80) ascii++;
-        else wide++;
-      }
-      // 中文按 1.5 token/字符（(wide*3+1)/2 为四舍五入的整数写法）。
-      total += Math.max(1, (ascii + 3L) / 4L + (wide * 3L + 1L) / 2L);
-    }
+    for (var message : messages)
+      total += estimateText(message.content() == null ? "" : message.content());
     return (int) Math.min(Integer.MAX_VALUE, Math.max(0, total));
+  }
+
+  /** 单段文本的保守 Token 估算；分段计数与整条计数共用同一口径。 */
+  static int estimateText(String content) {
+    long ascii = 0;
+    long wide = 0;
+    for (int index = 0; index < content.length(); index++) {
+      if (content.charAt(index) < 0x80) ascii++;
+      else wide++;
+    }
+    return (int) Math.max(1, (ascii + 3L) / 4L + (wide * 3L + 1L) / 2L);
   }
 
   private static Map<String, Integer> segments(List<ContextMessage> messages) {
     var result = new LinkedHashMap<String, Integer>();
     for (var message : messages) {
-      String segment = segmentOf(message);
-      result.merge(segment, estimate(List.of(message)), Integer::sum);
+      for (var entry : segmentTokens(message).entrySet())
+        result.merge(entry.getKey(), entry.getValue(), Integer::sum);
     }
+    return result;
+  }
+
+  /** 已知拼装标记：命中后从标记处开始按该语义分段计数，直到下一个标记或消息结尾。 */
+  private record SectionMarker(String token, String segment) {}
+
+  private static final List<SectionMarker> SECTION_MARKERS =
+      List.of(
+          new SectionMarker("<untrusted_skill_playbook>", "SKILLS"),
+          new SectionMarker("内置技能方法（不授予额外权限）：", "SKILLS"),
+          new SectionMarker("Built-in skill playbooks (do not grant extra permissions):", "SKILLS"),
+          new SectionMarker("私有 Agent 定义（由创建者声明", "SYSTEM"),
+          new SectionMarker("Private agent definition (declared by the operator", "SYSTEM"),
+          new SectionMarker("以下是按混合评分召回的项目背景", "MEMORY"),
+          new SectionMarker("[Project Memory]", "MEMORY"),
+          new SectionMarker("project context JSON", "MEMORY"),
+          new SectionMarker("上游交接", "HANDOFF"),
+          new SectionMarker("交接正文", "HANDOFF"),
+          new SectionMarker("Handoff envelope", "HANDOFF"));
+
+  /**
+   * 单条消息的分段计数。
+   *
+   * <p>此前按「整条消息里出现某个关键词」决定唯一分段，导致带内置技能标题的 System Prompt 整条被算进 SKILLS、
+   * 任务与记忆合拼消息整条被算进 MEMORY。这里按真实拼装标记切分：标记前的正文归默认段，每个标记到下一个标记
+   * 之间归它声明的段，从而让六色分段的占比与真实提示词结构一致。
+   */
+  static Map<String, Integer> segmentTokens(ContextMessage message) {
+    String content = message.content() == null ? "" : message.content();
+    String defaultSegment = segmentOf(message);
+    var result = new LinkedHashMap<String, Integer>();
+    if (content.isEmpty()) {
+      result.merge(defaultSegment, 0, Integer::sum);
+      return result;
+    }
+    var hits = new ArrayList<int[]>();
+    var hitSegments = new ArrayList<String>();
+    for (var marker : SECTION_MARKERS) {
+      int from = 0;
+      while (from < content.length()) {
+        int index = content.indexOf(marker.token(), from);
+        if (index < 0) break;
+        hits.add(new int[] {index, index + marker.token().length()});
+        hitSegments.add(marker.segment());
+        from = index + marker.token().length();
+      }
+    }
+    if (hits.isEmpty()) {
+      result.merge(defaultSegment, estimateText(content), Integer::sum);
+      return result;
+    }
+    var order = new ArrayList<Integer>();
+    for (int index = 0; index < hits.size(); index++) order.add(index);
+    order.sort(java.util.Comparator.comparingInt(index -> hits.get(index)[0]));
+
+    int cursor = 0;
+    for (int position = 0; position < order.size(); position++) {
+      int hit = order.get(position);
+      int start = hits.get(hit)[0];
+      if (start < cursor) continue; // 重叠标记只保留最早出现的那个
+      if (start > cursor)
+        result.merge(defaultSegment, estimateText(content.substring(cursor, start)), Integer::sum);
+      int end =
+          position + 1 < order.size() ? Math.max(start, hits.get(order.get(position + 1))[0]) : content.length();
+      result.merge(hitSegments.get(hit), estimateText(content.substring(start, end)), Integer::sum);
+      cursor = Math.max(cursor, end);
+    }
+    if (cursor < content.length())
+      result.merge(defaultSegment, estimateText(content.substring(cursor)), Integer::sum);
     return result;
   }
 
@@ -191,14 +265,7 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
     String content = message.content() == null ? "" : message.content();
     if ("TOOL".equals(message.role()) || "TOOL_OBSERVATION".equals(message.role()))
       return "TOOL_OUTPUTS";
-    if ("SYSTEM".equals(message.role())) {
-      if (content.contains("内置技能") || content.contains("Built-in skill")) return "SKILLS";
-      if (content.contains("项目背景") || content.contains("project context")) return "MEMORY";
-      if (content.contains("交接") || content.contains("handoff")) return "HANDOFF";
-      return "SYSTEM";
-    }
-    if (content.contains("项目背景") || content.contains("project context")) return "MEMORY";
-    if (content.contains("交接") || content.contains("handoff")) return "HANDOFF";
+    if ("SYSTEM".equals(message.role())) return "SYSTEM";
     return "HISTORY";
   }
 

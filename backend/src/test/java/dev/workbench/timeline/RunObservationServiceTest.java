@@ -106,6 +106,42 @@ class RunObservationServiceTest {
     assertTrue(diff.limitations().stream().anyMatch(item -> item.contains("代码逐行 diff")));
   }
 
+  @Test
+  void onlyRealCompactionTiersBecomeCompactionSpans() {
+    when(payloads.findByRunId(runId.toString()))
+        .thenReturn(
+            List.of(
+                payload("call-observe", "L0_OBSERVE_ONLY"),
+                payload("call-offload", "L1_TOOL_OFFLOAD")));
+
+    var timeline = service.timeline(runId.toString());
+
+    var compactions =
+        timeline.spans().stream().filter(span -> "COMPACTION".equals(span.kind())).toList();
+    // L0 只是观察水位，不是压缩事实；把它投影成 COMPACTION 会让时间轴虚报「压缩过」。
+    assertEquals(1, compactions.size(), timeline.spans().toString());
+    assertEquals("compaction:call-offload", compactions.getFirst().id());
+    assertTrue(
+        timeline.spans().stream()
+            .noneMatch(span -> "compaction:call-observe".equals(span.id())),
+        "L0 不得出现在时间轴");
+  }
+
+  private static dev.workbench.persistence.entity.ModelCallPayloadEntity payload(
+      String callId, String tier) {
+    return new dev.workbench.persistence.entity.ModelCallPayloadEntity(
+        callId,
+        UUID.randomUUID().toString(),
+        "{}",
+        "{}",
+        "ok",
+        "[]",
+        false,
+        "{}",
+        tier,
+        "2026-11-26T09:00:00Z");
+  }
+
   private static dev.workbench.persistence.entity.ToolApprovalRequestEntity approval() {
     return new dev.workbench.persistence.entity.ToolApprovalRequestEntity(
         "approval-1",

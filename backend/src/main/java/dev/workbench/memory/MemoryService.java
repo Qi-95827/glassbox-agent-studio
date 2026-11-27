@@ -141,14 +141,26 @@ public class MemoryService {
     for (var reference : references.findByRunId(runId)) {
       var row = records.findById(reference.getMemoryId().toString()).orElse(null);
       if (row == null || row.getStatus() != MemoryStatus.ACTIVE) continue;
+      int frozenVersion = reference.getMemoryVersion();
+      String content = row.getContent();
+      int actualVersion = row.getVersion();
+      if (actualVersion != frozenVersion) {
+        // 冻结之后记忆被改写：必须回到 memory_history 取当时的正文，绝不能「旧版本号 + 新正文」。
+        var historical = versions.findById(new MemoryHistoryEntity.Id(row.getId(), frozenVersion));
+        if (historical.isPresent()) {
+          content = historical.get().getContent();
+          actualVersion = frozenVersion;
+        }
+        // 找不到历史版本时保留当前正文，但如实使用当前真实版本号，避免伪造冻结版本。
+      }
       result.add(
           new MemoryMatch(
               row.getId(),
               reference.getMemoryType(),
               reference.getScore(),
               reference.getMatchedReason(),
-              row.getContent(),
-              reference.getMemoryVersion()));
+              content,
+              actualVersion));
     }
     return List.copyOf(result);
   }

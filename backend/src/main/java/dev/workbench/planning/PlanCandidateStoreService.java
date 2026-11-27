@@ -133,13 +133,14 @@ class PlanCandidateStoreService {
     return changed == null ? 0 : changed;
   }
 
-  /** 条件改写候选的图与摘要；返回 0 表示候选已被确认、过期或被并发修订。 */
+  /** 条件改写候选的图与摘要；返回 0 表示候选已被确认、过期、摘要不匹配或被并发修订。 */
   int reviseDraft(
       String id,
       String ownerScopeKey,
       String candidateJson,
       String sha256,
-      String bindingsJson) {
+      String bindingsJson,
+      String expectedSha256) {
     Integer changed =
         tx.execute(
             status ->
@@ -149,6 +150,7 @@ class PlanCandidateStoreService {
                     candidateJson,
                     sha256,
                     bindingsJson,
+                    expectedSha256 == null || expectedSha256.isBlank() ? null : expectedSha256,
                     PlanCandidateStatus.READY.name()));
     return changed == null ? 0 : changed;
   }

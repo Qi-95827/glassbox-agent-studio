@@ -9,9 +9,8 @@ import java.util.Map;
 /**
  * 受控只读工具：检索当前工作区知识库。
  *
- * <p>返回给模型的是压缩后的命中摘要；完整的 BM25 / 向量 / RRF 得分与被裁剪原因放在
- * 同一结果的 {@code evidence} 字段里——它随工具轨迹落库，供「召回透视」面板读取，
- * 但不会进入模型上下文（模型只看到 {@code summarize} 生成的摘要）。
+ * <p>返回给模型的是「真正注入的片段」本身，而不是整包 {@code RetrievalEvidence}：未入选候选的正文与裁剪原因
+ * 只留在透明召回接口/轨迹里，绝不借工具结果再进一次模型上下文。模型只看得到入选片段与必要统计元数据。
  */
 public final class KnowledgeSearchTool {
   private KnowledgeSearchTool() {}
@@ -19,7 +18,33 @@ public final class KnowledgeSearchTool {
   /** 单次检索返回给模型的命中上限；由服务端固定，模型不能自己放大。 */
   private static final int SERVER_SIDE_LIMIT = 5;
 
-  public static ToolSpecification<KnowledgeRagService.RetrievalEvidence> specification(
+  /** 真正注入模型的片段；字段与透明召回接口的入选语义一一对应。 */
+  public record SelectedPassage(
+      String chunkId,
+      String documentId,
+      String title,
+      String sourcePath,
+      String sectionTitle,
+      String content,
+      double score) {}
+
+  /**
+   * 模型可见载荷：只含入选片段与统计元数据。
+   *
+   * <p>没有未入选候选的标题、正文或裁剪原因——这些仍可通过知识库透明召回接口与工具轨迹查看。
+   */
+  public record ModelVisible(
+      String query,
+      int totalCandidates,
+      int selectedCount,
+      int injectedTokens,
+      List<SelectedPassage> passages) {
+    public ModelVisible {
+      passages = passages == null ? List.of() : List.copyOf(passages);
+    }
+  }
+
+  public static ToolSpecification<ModelVisible> specification(
       KnowledgeRagService rag, String workspaceId, String locale) {
     boolean english = PromptResourceLoader.isEnglish(locale);
     return new ToolSpecification<>(
@@ -46,10 +71,10 @@ public final class KnowledgeSearchTool {
           var evidence =
               rag.retrieveWithEvidence(workspaceId, arguments.get("query").strip(), SERVER_SIDE_LIMIT);
           check.run();
-          return evidence;
+          return modelVisible(evidence);
         },
-        (arguments, evidence) -> {
-          long selected = evidence == null ? 0 : evidence.selectedCount();
+        (arguments, visible) -> {
+          long selected = visible == null ? 0 : visible.selectedCount();
           return english
               ? "Knowledge base searched; injected passages: "
                   + selected
@@ -57,6 +82,31 @@ public final class KnowledgeSearchTool {
               : "已检索知识库，注入片段数：" + selected + "；内容按不可信数据处理。";
         },
         null);
+  }
+
+  /** 只保留 {@code selected == true} 的候选正文；未入选项连标题与原因都不进模型可见载荷。 */
+  static ModelVisible modelVisible(KnowledgeRagService.RetrievalEvidence evidence) {
+    if (evidence == null) return new ModelVisible("", 0, 0, 0, List.of());
+    var passages =
+        evidence.items().stream()
+            .filter(KnowledgeRagService.EvidenceItem::selected)
+            .map(
+                item ->
+                    new SelectedPassage(
+                        item.chunkId(),
+                        item.documentId(),
+                        item.title(),
+                        item.sourcePath(),
+                        item.sectionTitle(),
+                        item.content(),
+                        item.score()))
+            .toList();
+    return new ModelVisible(
+        evidence.query(),
+        evidence.items().size(),
+        evidence.selectedCount(),
+        evidence.injectedTokens(),
+        passages);
   }
 
   /** 供测试与文档使用的参数说明。 */

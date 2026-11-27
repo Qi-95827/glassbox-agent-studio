@@ -65,6 +65,9 @@ class WorkflowMemoryContext {
     // 多节点动态工作流共享同一份召回：已有冻结结果时直接复用，不再重复落库、计数或发事件。
     var frozen = memories.frozenMatches(runId);
     if (!frozen.isEmpty()) return render(frozen);
+    // 0 命中同样是「已执行过加载」：用 run_memory_loads 区分「已加载但为空」与「尚未加载」，
+    // 否则每个下游节点都会重复检索、重复发事件。
+    if (memories.loadForRun(runId).recorded()) return "";
     String query =
         task.goal()
             + "\n"

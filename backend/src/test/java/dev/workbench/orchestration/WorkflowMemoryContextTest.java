@@ -15,6 +15,7 @@ import dev.workbench.memory.MemoryRetrievalService;
 import dev.workbench.memory.MemoryService;
 import dev.workbench.store.RunEvidenceRecordService;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -28,6 +29,21 @@ class WorkflowMemoryContextTest {
   private final MemoryService memories = mock(MemoryService.class);
   private final RunEvidenceRecordService evidence = mock(RunEvidenceRecordService.class);
   private final ObjectMapper json = new ObjectMapper();
+
+  @org.junit.jupiter.api.BeforeEach
+  void defaultToNotLoaded() {
+    // 生产实现永远返回非 null 的 MemoryLoad；这里给出「尚未加载」的默认桩，避免旧用例因 null 误报。
+    org.mockito.Mockito.lenient()
+        .when(memories.loadForRun(org.mockito.ArgumentMatchers.anyString()))
+        .thenReturn(
+            new dev.workbench.memory.MemoryLoad(
+                false,
+                null,
+                null,
+                null,
+                dev.workbench.memory.MemoryLoadIntegrity.NOT_RECORDED,
+                List.of()));
+  }
 
   private WorkflowMemoryContext context(int maxChars) {
     return new WorkflowMemoryContext(retrieval, memories, evidence, json, maxChars);
@@ -55,6 +71,28 @@ class WorkflowMemoryContextTest {
     var section = context(60_000).load(task(true, "ws-1"), "run-1");
 
     assertTrue(section.contains("排序必须稳定"), section);
+    verifyNoInteractions(retrieval);
+    verify(memories, never()).recordLoad(anyString(), anyString(), any());
+    verify(evidence, never()).event(anyString(), any(), anyString());
+  }
+
+  @Test
+  void zeroHitLoadRunsOnlyOnceAcrossDownstreamNodes() {
+    when(memories.frozenMatches("run-1")).thenReturn(List.of());
+    when(memories.loadForRun("run-1"))
+        .thenReturn(
+            new dev.workbench.memory.MemoryLoad(
+                true,
+                UUID.randomUUID(),
+                java.time.Instant.now(),
+                0,
+                dev.workbench.memory.MemoryLoadIntegrity.CONSISTENT,
+                List.of()));
+
+    var section = context(60_000).load(task(true, "ws-1"), "run-1");
+
+    // 0 命中同样是「已加载」：下游节点不得重复检索、重复计数或重复发事件。
+    assertEquals("", section);
     verifyNoInteractions(retrieval);
     verify(memories, never()).recordLoad(anyString(), anyString(), any());
     verify(evidence, never()).event(anyString(), any(), anyString());

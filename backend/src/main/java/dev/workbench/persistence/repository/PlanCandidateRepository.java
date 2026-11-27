@@ -180,6 +180,9 @@ public interface PlanCandidateRepository extends JpaRepository<PlanCandidateEnti
    * 用人工修订后的图覆盖候选内容。
    *
    * <p>只有仍处于 READY 且尚未绑定运行的候选才会被改写：条件更新让并发确认、过期与重复修订 都退化为影响 0 行，调用方据此拒绝而不是静默覆盖。
+   *
+   * <p>提供 {@code expectedSha256} 时，摘要匹配必须在同一条 SQL 里原子完成：只在 Java 层比较会留下
+   * 「检查后、写入前被别人改掉」的竞态窗口，并发编辑就会互相覆盖。
    */
   @Transactional(propagation = Propagation.MANDATORY)
   @Modifying(clearAutomatically = true)
@@ -189,6 +192,7 @@ public interface PlanCandidateRepository extends JpaRepository<PlanCandidateEnti
         c.candidateSha256 = :sha256, c.agentBindingsJson = :bindingsJson
       where c.id = :id and c.ownerScopeKey = :ownerScopeKey
         and c.status = :ready and c.runId is null
+        and (:expectedSha256 is null or c.candidateSha256 = :expectedSha256)
       """)
   int reviseDraft(
       @Param("id") String id,
@@ -196,5 +200,6 @@ public interface PlanCandidateRepository extends JpaRepository<PlanCandidateEnti
       @Param("candidateJson") String candidateJson,
       @Param("sha256") String sha256,
       @Param("bindingsJson") String bindingsJson,
+      @Param("expectedSha256") String expectedSha256,
       @Param("ready") String ready);
 }

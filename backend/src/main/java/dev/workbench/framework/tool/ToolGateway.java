@@ -216,6 +216,46 @@ public final class ToolGateway {
       java.util.function.Function<String, T> editedAction,
       java.util.List<String> targetPaths,
       Callable<T> action) {
+    return execute(
+        kind,
+        toolName,
+        toolVersion,
+        fingerprint,
+        argsJson,
+        effect,
+        start,
+        summary,
+        null,
+        validate,
+        resourceVersion,
+        editedValidate,
+        editedAction,
+        targetPaths,
+        action);
+  }
+
+  /**
+   * 参数 Schema 与路径白名单分离的完整入口。
+   *
+   * <p>{@code scopeValidate} 为 null 表示该工具没有路径参数：此时 PATH_WHITELIST 记为 SKIP，而不是伪造 PASS。
+   * 两道校验各自归因：路径越界只记 PATH_WHITELIST DENY，参数类型错误只记 ARGUMENT_SCHEMA DENY。
+   */
+  public <T> String execute(
+      ToolKind kind,
+      String toolName,
+      int toolVersion,
+      String fingerprint,
+      String argsJson,
+      ToolEffect effect,
+      String start,
+      Function<T, String> summary,
+      Runnable scopeValidate,
+      Runnable validate,
+      Function<T, String> resourceVersion,
+      java.util.function.Consumer<String> editedValidate,
+      java.util.function.Function<String, T> editedAction,
+      java.util.List<String> targetPaths,
+      Callable<T> action) {
     if (toolVersion < 1) throw new IllegalArgumentException("工具版本无效。");
     synchronized (runtime) {
       // 同一轮中的后续工具也不能越过此前的受控停止或结果未知状态。
@@ -239,24 +279,55 @@ public final class ToolGateway {
         long nanos = System.nanoTime();
         runtime.event(EventType.TOOL_STARTED, start);
         T data;
+        if (scopeValidate == null) {
+          addCheck(toolName, checks,
+              new GatewayCheck(
+                  "PATH_WHITELIST",
+                  "路径白名单与读写隔离",
+                  "SKIP",
+                  "该工具没有工作区路径参数，路径白名单不适用"));
+        } else {
+          try {
+            scopeValidate.run();
+            addCheck(toolName, checks,
+                new GatewayCheck(
+                    "PATH_WHITELIST",
+                    "路径白名单与读写隔离",
+                    "PASS",
+                    effect == ToolEffect.WRITE ? "目标路径命中写授权白名单" : "目标路径命中只读授权范围"));
+          } catch (IllegalArgumentException scopeError) {
+            addCheck(toolName, checks,
+                new GatewayCheck(
+                    "PATH_WHITELIST",
+                    "路径白名单与读写隔离",
+                    "DENY",
+                    scopeError.getMessage() == null ? "路径不在授权范围内" : scopeError.getMessage()));
+            addCheck(toolName, checks,
+                new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "SKIP", "路径校验未通过，未进入参数校验"));
+            addCheck(toolName, checks, new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "SKIP", "前置校验未通过"));
+            return rejected(
+                callId,
+                kind,
+                toolVersion,
+                effect,
+                started,
+                nanos,
+                ToolResult.ErrorCode.INVALID_ARGUMENT,
+                "工具路径不在任务授权范围内，未执行动作；请改用已授权文件。",
+                fingerprint,
+                checks);
+          }
+        }
         try {
           validate.run();
-          addCheck(toolName, checks, 
-              new GatewayCheck(
-                  "PATH_WHITELIST",
-                  "路径白名单与读写隔离",
-                  "PASS",
-                  effect == ToolEffect.WRITE ? "目标路径命中写授权白名单" : "目标路径命中只读授权范围"));
           addCheck(toolName, checks, new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "PASS", "入参格式与约束校验通过"));
         } catch (IllegalArgumentException e) {
-          addCheck(toolName, checks, 
+          addCheck(toolName, checks,
               new GatewayCheck(
-                  "PATH_WHITELIST",
-                  "路径白名单与读写隔离",
+                  "ARGUMENT_SCHEMA",
+                  "参数 Schema 校验",
                   "DENY",
-                  e.getMessage() == null ? "输入参数或路径不在授权范围内" : e.getMessage()));
-          addCheck(toolName, checks, 
-              new GatewayCheck("ARGUMENT_SCHEMA", "参数 Schema 校验", "DENY", "被工具网关前置校验拦截，未执行动作"));
+                  e.getMessage() == null ? "入参不符合工具声明" : e.getMessage()));
           addCheck(toolName, checks, new GatewayCheck("CANCEL_STATE", "取消与暂停检查", "SKIP", "前置校验未通过"));
           return rejected(
               callId,
@@ -266,7 +337,7 @@ public final class ToolGateway {
               started,
               nanos,
               ToolResult.ErrorCode.INVALID_ARGUMENT,
-              "工具输入不符合约束，请检查参数和授权范围后再决定是否重试。",
+              "工具输入不符合参数约束，请检查参数后再决定是否重试。",
               fingerprint,
               checks);
         }
