@@ -22,7 +22,8 @@ const FILTER_REASON_KEY = {
  */
 export default function AssemblyBlueprintPanel({ node, attempts, toolFunnel = null }) {
   const { t, locale } = useI18n();
-  const latest = attempts.find(item => item.assembly) ?? null;
+  // attempts 按 attemptNo 升序返回；与后端 toolFunnel 口径保持一致，取最新一次带装配快照的尝试。
+  const latest = [...(attempts ?? [])].reverse().find(item => item.assembly) ?? null;
   const components = latest?.assembly?.components ?? null;
   const grantedMap = components?.tools ?? {};
   const grantedKeys = Object.keys(grantedMap);

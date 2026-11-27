@@ -69,19 +69,18 @@ public final class ReviewVerdictParser {
     return false;
   }
 
-  /** 标记必须作为独立词出现，避免 "approved by tests" 这类叙述被误当成正式裁决。 */
+  /** 标记必须作为独立词出现（左右均不能紧接字母、数字或下划线），避免 NO_REVISE_REQUIRED 被误判。 */
   private static boolean containsMarker(String upper, String marker) {
     int index = upper.indexOf(marker);
     while (index >= 0) {
       boolean leftOk =
           index == 0
-              || !Character.isLetterOrDigit(upper.charAt(index - 1))
-              || upper.charAt(index - 1) == '_';
+              || (!Character.isLetterOrDigit(upper.charAt(index - 1))
+                  && upper.charAt(index - 1) != '_');
       int end = index + marker.length();
       boolean rightOk =
           end >= upper.length()
-              || !Character.isLetterOrDigit(upper.charAt(end))
-              || upper.charAt(end) == '_';
+              || (!Character.isLetterOrDigit(upper.charAt(end)) && upper.charAt(end) != '_');
       if (leftOk && rightOk) return true;
       index = upper.indexOf(marker, index + 1);
     }

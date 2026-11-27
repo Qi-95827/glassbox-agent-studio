@@ -55,6 +55,9 @@ class ReviewVerdictParserTest {
         ReviewVerdictParser.parseStructured("结论 APPROVED 与 REVISE_REQUIRED 同时出现时以返工为准")
             .orElseThrow()
             .decision());
+    // 下划线相连的标识符（如 NO_REVISE_REQUIRED）不是独立裁决标记，不得误触发返工。
+    assertTrue(ReviewVerdictParser.parseStructured("状态：NO_REVISE_REQUIRED").isEmpty());
+    assertTrue(ReviewVerdictParser.parseStructured("NOT_REVISE_REQUIRED / REVISE_REQUIRED_FALSE").isEmpty());
   }
 
   @Test

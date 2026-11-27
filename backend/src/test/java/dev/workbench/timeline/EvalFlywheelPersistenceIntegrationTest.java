@@ -82,7 +82,7 @@ class EvalFlywheelPersistenceIntegrationTest {
   }
 
   @Test
-  void textRunAssertionsArePersistedAndPassAgainstMatchingEvidence() {
+  void textRunAssertionsArePersistedAndPassAgainstCodingReflectionEvidence() {
     when(agents.agents(runId))
         .thenReturn(List.of(Map.of("ID", "a1", "RESULT", "排序完成，包含 3 个闲等节点")));
     var flywheel = new EvalFlywheelService(records, tasks, agents, datasets);
@@ -92,36 +92,47 @@ class EvalFlywheelPersistenceIntegrationTest {
 
     assertEquals(1, samples.size());
     var persisted = samples.getFirst().assertions();
-    assertEquals(3, persisted.size(), persisted.toString());
+    assertEquals(2, persisted.size(), persisted.toString());
     assertEquals("RUN_STATUS_MATCH", persisted.get(0).get("type"));
     assertEquals("RUN_TERMINAL", persisted.get(1).get("type"));
-    assertEquals("OUTPUT_CONTAINS", persisted.get(2).get("type"));
+    assertTrue(persisted.stream().noneMatch(row -> "OUTPUT_CONTAINS".equals(row.get("type"))));
 
+    // 真实 CodingReflectionRunner 会把目标文件内容（如默认夹具 src/calc.py）放进 rawOutput。
+    String runnerFileOutput = "def add(a,b):\n    return a-b\n";
     var evidence = new java.util.LinkedHashMap<String, Object>();
     evidence.put("runStatus", "COMPLETED");
     evidence.put("terminal", true);
-    evidence.put("rawOutput", "排序完成，包含 3 个闲等节点");
+    evidence.put("rawOutput", runnerFileOutput);
     var graded =
         new CodeAssertionGrader()
             .grade(
                 persisted,
                 new EvalCaseExecution(
-                    evidence, Map.of(), Map.of(), runId, "排序完成，包含 3 个闲等节点", 1, 0, 0, 0));
+                    evidence, Map.of(), Map.of(), runId, runnerFileOutput, 1, 0, 0, 0));
     assertTrue(graded.passed(), graded.assertions().toString());
   }
 
   @Test
-  void workspaceWriteRunPersistsOnlyTerminalAssertionsAndStillPasses() {
+  void workspaceWriteRunRecognizesRealChineseRecordNameAndPasses() {
     when(agents.agents(runId))
         .thenReturn(List.of(Map.of("ID", "a1", "RESULT", "已修改授权文件并补充说明")));
     when(agents.tools(runId))
         .thenReturn(
-            List.of(Map.of("ID", "t1", "TOOL_NAME", "write_authorized_file", "STATUS", "COMPLETED")));
+            List.of(
+                Map.of(
+                    "ID",
+                    "t1",
+                    "TOOL_NAME",
+                    dev.workbench.domain.ToolKind.WORKSPACE_WRITE.recordName(),
+                    "STATUS",
+                    "COMPLETED")));
     var flywheel = new EvalFlywheelService(records, tasks, agents, datasets);
 
     var exported = flywheel.export(runId);
-    var persisted = datasets.samples(exported.datasetId()).getFirst().assertions();
+    var sample = datasets.samples(exported.datasetId()).getFirst();
+    var persisted = sample.assertions();
 
+    assertEquals(true, sample.setup().get("workspaceWrite"));
     assertEquals(2, persisted.size(), persisted.toString());
     assertTrue(persisted.stream().noneMatch(row -> "OUTPUT_CONTAINS".equals(row.get("type"))));
 

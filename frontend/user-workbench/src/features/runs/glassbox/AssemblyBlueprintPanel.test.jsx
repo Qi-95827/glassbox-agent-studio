@@ -74,4 +74,36 @@ describe('AssemblyBlueprintPanel 工具漏斗', () => {
     expect(screen.queryByTestId('assembly-filtered-WORKSPACE_WRITE')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('SIMULATED_ISSUE');
   });
+
+  it('多轮尝试按 attemptNo 升序传入时取最新一次装配快照而非第 1 次', () => {
+    const multiAttempts = [
+      {
+        number: 1,
+        assembly: {
+          components: {
+            model: { mode: 'MOCK', name: 'mock' },
+            tools: { WORKSPACE_READ: 1 },
+            input: { sources: [{ kind: 'TASK_GOAL', reference: 'round-1' }] },
+            memoryMatches: []
+          }
+        }
+      },
+      {
+        number: 2,
+        assembly: {
+          components: {
+            model: { mode: 'DEEPSEEK', name: 'deepseek-chat' },
+            tools: { WORKSPACE_READ: 1, WORKSPACE_WRITE: 2 },
+            input: { sources: [{ kind: 'REVISION_FEEDBACK', reference: 'round-2' }] },
+            memoryMatches: []
+          }
+        }
+      }
+    ];
+    render(<AssemblyBlueprintPanel node={node} attempts={multiAttempts} toolFunnel={null} />);
+
+    expect(screen.getAllByText(/round-2/).length).toBeGreaterThan(0);
+    expect(screen.getByText('尝试 #2')).toBeInTheDocument();
+    expect(screen.queryByText(/round-1/)).not.toBeInTheDocument();
+  });
 });

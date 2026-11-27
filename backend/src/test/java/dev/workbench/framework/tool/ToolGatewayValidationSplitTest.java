@@ -29,9 +29,10 @@ class ToolGatewayValidationSplitTest {
   private final ObjectMapper json = new ObjectMapper().findAndRegisterModules();
 
   @Test
-  void schemaFailureOnlyBlamesArgumentSchema() {
+  void schemaFailureOnlyBlamesArgumentSchemaAndSkipsPathWhitelist() {
     var runtime = new RecordingRuntime();
     var gateway = new ToolGateway(json, runtime, new AtomicReference<>());
+    var scopeRan = new AtomicBoolean();
 
     String output =
         gateway.execute(
@@ -43,7 +44,7 @@ class ToolGatewayValidationSplitTest {
             ToolEffect.WRITE,
             "开始",
             value -> "摘要",
-            () -> {},
+            () -> scopeRan.set(true),
             () -> {
               throw new IllegalArgumentException("缺少 content 参数");
             },
@@ -54,16 +55,17 @@ class ToolGatewayValidationSplitTest {
             () -> "不应执行");
 
     assertEquals("REJECTED", read(output).path("status").asText());
-    assertEquals("PASS", status(runtime, "PATH_WHITELIST"));
     assertEquals("DENY", status(runtime, "ARGUMENT_SCHEMA"));
+    assertEquals("SKIP", status(runtime, "PATH_WHITELIST"));
     assertEquals("SKIP", status(runtime, "CANCEL_STATE"));
+    assertFalse(scopeRan.get(), "参数 Schema 未通过时不应先跑路径白名单");
     assertFalse(
         detail(runtime, "PATH_WHITELIST").contains("缺少 content"),
         "参数错误不得写进路径门：" + detail(runtime, "PATH_WHITELIST"));
   }
 
   @Test
-  void pathFailureOnlyBlamesPathWhitelistAndNeverRunsSchemaCheck() {
+  void pathFailureOnlyBlamesPathWhitelistAfterSchemaPasses() {
     var runtime = new RecordingRuntime();
     var gateway = new ToolGateway(json, runtime, new AtomicReference<>());
     var schemaRan = new AtomicBoolean();
@@ -89,9 +91,10 @@ class ToolGatewayValidationSplitTest {
             () -> "不应执行");
 
     assertEquals("REJECTED", read(output).path("status").asText());
+    assertTrue(schemaRan.get(), "参数格式合法时应先通过 Schema 校验再进入路径门");
+    assertEquals("PASS", status(runtime, "ARGUMENT_SCHEMA"));
     assertEquals("DENY", status(runtime, "PATH_WHITELIST"));
-    assertEquals("SKIP", status(runtime, "ARGUMENT_SCHEMA"));
-    assertFalse(schemaRan.get(), "路径门已经拒绝时不应再声称跑过 Schema 校验");
+    assertEquals("SKIP", status(runtime, "CANCEL_STATE"));
     assertFalse(read(output).toString().contains("不应执行"));
   }
 

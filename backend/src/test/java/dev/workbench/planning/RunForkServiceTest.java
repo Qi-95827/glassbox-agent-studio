@@ -185,6 +185,7 @@ class RunForkServiceTest {
   void byokForkInheritsSourceConnectionAndDoesNotInheritPlatformCostLimit() {
     when(records.runSnapshot(sourceId.toString())).thenReturn(snapshot(RunStatus.COMPLETED));
     when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.USER, true));
+    when(connections.requireEnabledOwned("conn-src")).thenReturn("conn-src");
     var node = planNode();
     when(plans.find(sourceId.toString())).thenReturn(List.of(node));
     when(plans.specsByNode(sourceId.toString())).thenReturn(Map.of(node.id(), spec(node.id())));
@@ -194,8 +195,9 @@ class RunForkServiceTest {
     var captor = org.mockito.ArgumentCaptor.forClass(TaskDefinition.class);
     verify(creations)
         .persistFromCandidate(captor.capture(), any(), any(), anyString(), any(), any(), any());
-    // 未显式覆盖时必须沿用源连接，而不是悄悄换成当前默认连接。
+    // 未显式覆盖时必须沿用源连接且复验启用归属，而不是悄悄换成当前默认连接或放行已禁用连接。
     assertEquals("conn-src", captor.getValue().modelConnectionId());
+    verify(connections).requireEnabledOwned("conn-src");
     // BYOK 走用户自己的额度，不继承平台费用上限。
     verify(costs, never()).inheritLimit(anyString(), anyString());
 
@@ -211,6 +213,24 @@ class RunForkServiceTest {
     assertEquals("conn-new", overrideTask.modelConnectionId());
     assertEquals(captor.getValue().roleBudgets(), overrideTask.roleBudgets());
     verify(costs, never()).inheritLimit(anyString(), anyString());
+  }
+
+  @Test
+  void byokForkRejectsDisabledOrDeletedSourceConnectionBeforePersisting() {
+    when(records.runSnapshot(sourceId.toString())).thenReturn(snapshot(RunStatus.COMPLETED));
+    when(records.taskDefinition(taskId.toString())).thenReturn(richTask(ModelMode.USER, true));
+    when(connections.requireEnabledOwned("conn-src"))
+        .thenThrow(new IllegalArgumentException("模型连接不存在或未启用。"));
+
+    var error =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                service.fork(
+                    sourceId.toString(), new RunForkService.Request(null, null, null, null, null)));
+    assertTrue(error.getMessage().contains("未启用"));
+    verify(creations, never())
+        .persistFromCandidate(any(), any(), any(), anyString(), any(), any(), any());
   }
 
   private TaskDefinition richTask(ModelMode mode, boolean withBudgets) {

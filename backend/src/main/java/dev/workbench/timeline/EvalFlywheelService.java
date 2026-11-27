@@ -2,6 +2,7 @@ package dev.workbench.timeline;
 
 import dev.workbench.domain.RunSnapshot;
 import dev.workbench.domain.TaskDefinition;
+import dev.workbench.domain.ToolKind;
 import dev.workbench.evaluation.EvalCustomDatasetService;
 import dev.workbench.framework.trace.SensitiveDataMasker;
 import dev.workbench.store.AgentAssemblyRecordService;
@@ -97,16 +98,10 @@ public class EvalFlywheelService {
     assertions.add(new LinkedHashMap<>(Map.of("type", "RUN_STATUS_MATCH", "expected", status)));
     if (!snapshot.status().canCancel())
       assertions.add(new LinkedHashMap<>(Map.of("type", "RUN_TERMINAL", "expected", true)));
-    // 只有「纯文本运行且最终输出就是产物本身」时，摘录式 OUTPUT_CONTAINS 才与评测口径一致。
-    // 含工作区写入的运行其产物是代码文件正文，上游 Agent 的叙述不是文件内容；硬塞进 OUTPUT_CONTAINS
-    // 会让重跑 100% 误判（代码文件里当然不含分析叙述），因此这里只保留可核对的终态断言，并如实说明原因。
+    // 默认沉淀集属于 CODING_REFLECTION，由 CodingReflectionRunner 执行，其 rawOutput 始终是工作区目标文件正文，
+    // 而不是上游 Agent 的对话叙述；无论是否发生写文件，把对话正文塞进 OUTPUT_CONTAINS 都会在重跑时与文件内容错配。
+    // 因此此处只沉淀可稳定核对的运行状态与终态断言，并将脱敏输出摘要写入 setup 供人工对照。
     boolean workspaceWrite = hasSuccessfulWorkspaceWrite(runId);
-    if (!workspaceWrite && output != null && !output.isBlank()) {
-      String needle = output.strip();
-      if (needle.length() > MAX_OUTPUT_NEEDLE) needle = needle.substring(0, MAX_OUTPUT_NEEDLE);
-      assertions.add(
-          new LinkedHashMap<>(Map.of("type", "OUTPUT_CONTAINS", "expected", mask(needle))));
-    }
     var setup = new LinkedHashMap<String, Object>();
     setup.put("sourceRunId", runId);
     setup.put("sourceTaskId", snapshot.taskId().toString());
@@ -114,13 +109,19 @@ public class EvalFlywheelService {
     setup.put("source", "RUN_DISTILLED");
     setup.put("completedNodes", completedNodes(runId));
     setup.put("workspaceWrite", workspaceWrite);
+    if (output != null && !output.isBlank()) {
+      String needle = output.strip();
+      if (needle.length() > MAX_OUTPUT_NEEDLE) needle = needle.substring(0, MAX_OUTPUT_NEEDLE);
+      setup.put("sourceOutputPreview", mask(needle));
+    }
     var limitations = new ArrayList<String>();
     limitations.add("用例只沉淀提示词与既有断言的期望值；模型原始回复、工具返回值与工作区文件不会进入评测数据集。");
     if (workspaceWrite)
       limitations.add(
           "该运行含工作区写入：产物是授权文件正文，未落入本用例；因此只断言运行状态与终态，不用上游叙述文字去匹配代码文件。");
     else if (output != null && !output.isBlank())
-      limitations.add("该运行没有工作区写入，最终输出本身就是产物，OUTPUT_CONTAINS 摘自该输出。");
+      limitations.add(
+          "默认沉淀数据集属于 CODING_REFLECTION，重跑时以工作区目标文件正文为 rawOutput；因此只断言运行状态与终态，不将上游 Agent 叙述作为 OUTPUT_CONTAINS（脱敏摘要已保存在 setup.sourceOutputPreview）。");
     if (output == null) limitations.add("这次运行没有保存最终输出，因此只沉淀运行终态断言。");
     return new CaseDraft(
         datasetId,
@@ -163,17 +164,18 @@ public class EvalFlywheelService {
     return null;
   }
 
-  /** 是否真的发生过成功的写工具调用；只有这时产物才是文件正文，不能拿叙述文字做包含断言。 */
+  /** 是否真的发生过成功的写工具调用；匹配真实落库名（ToolKind.WORKSPACE_WRITE.recordName()）及英文工具名。 */
   private boolean hasSuccessfulWorkspaceWrite(String runId) {
     var rows = agents.tools(runId);
     if (rows == null) return false;
     for (var row : rows) {
-      Object name = row.get("TOOL_NAME");
-      Object value = row.get("STATUS");
-      String tool = name == null ? "" : String.valueOf(name).toLowerCase(java.util.Locale.ROOT);
-      String status = value == null ? "" : String.valueOf(value);
-      if (tool.contains("write")
-          && ("COMPLETED".equals(status) || "SUCCEEDED".equals(status))) return true;
+      String rawName =
+          row.get("TOOL_NAME") == null ? "" : String.valueOf(row.get("TOOL_NAME")).strip();
+      String status = row.get("STATUS") == null ? "" : String.valueOf(row.get("STATUS"));
+      if (!("COMPLETED".equals(status) || "SUCCEEDED".equals(status))) continue;
+      if (ToolKind.WORKSPACE_WRITE.recordName().equals(rawName)
+          || ToolKind.WORKSPACE_WRITE.name().equalsIgnoreCase(rawName)
+          || rawName.toLowerCase(java.util.Locale.ROOT).contains("write")) return true;
     }
     return false;
   }

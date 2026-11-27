@@ -396,7 +396,7 @@ function FlowCanvas({
           // 若沿用依赖边的 data.edge 约定会把 undefined 传给页面并直接抛 TypeError。
           const picked = edgeSelection(edge);
           if (picked.revisionEdge) handleRevisionEdgeSelect(picked.revisionEdge);
-          else handleEdgeSelect(picked.edge);
+          else if (picked.edge) handleEdgeSelect(picked.edge);
         }}
         nodesDraggable={false}
         nodesConnectable={false}

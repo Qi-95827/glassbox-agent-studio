@@ -285,10 +285,11 @@ public class RunForkService {
     }
     if (mode != ModelMode.USER) return null;
     if (requested != null && !requested.isBlank()) return connections.requireEnabledOwned(requested);
-    // 未显式覆盖时完整继承源任务的连接：否则 What-If 分叉会悄悄换成当前默认连接，实验条件就变了。
+    // 未显式覆盖时完整继承源任务的连接，并复验其归属权与启用状态，避免分叉出必然失败的死任务。
     if (source.modelMode() == ModelMode.USER
         && source.modelConnectionId() != null
-        && !source.modelConnectionId().isBlank()) return source.modelConnectionId();
+        && !source.modelConnectionId().isBlank())
+      return connections.requireEnabledOwned(source.modelConnectionId());
     return connections
         .defaultConnectionId()
         .orElseThrow(
