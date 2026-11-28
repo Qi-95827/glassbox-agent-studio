@@ -708,20 +708,32 @@ class WorkflowScheduler {
     } catch (IllegalArgumentException unavailable) {
       return null;
     }
-    String agentId = agentIds.iterator().next().toString();
-    // 发送方由「该实例实际所在的计划节点角色」决定，不能按提交顺序猜测。
-    var sender =
-        plans.find(runId).stream()
-            .filter(node -> agentId.equals(node.agentId() == null ? null : node.agentId().toString()))
-            .findFirst()
-            .map(
-                node ->
-                    switch (node.role()) {
-                      case ANALYST -> dev.workbench.domain.HandoffParty.ANALYSIS_AGENT;
-                      case CODER -> dev.workbench.domain.HandoffParty.CODING_AGENT;
-                      case REVIEWER -> dev.workbench.domain.HandoffParty.REVIEW_AGENT;
-                    })
-            .orElse(null);
+    var nodes = plans.find(runId);
+    String agentId = null;
+    dev.workbench.domain.HandoffParty sender = null;
+    // 遍历全部在途实例找到对应节点角色，避免并行停机时首个实例未绑定节点角色导致漏记系统交接。
+    for (UUID candidateId : agentIds) {
+      String candidateText = candidateId.toString();
+      var found =
+          nodes.stream()
+              .filter(
+                  node ->
+                      candidateText.equals(node.agentId() == null ? null : node.agentId().toString()))
+              .findFirst()
+              .map(
+                  node ->
+                      switch (node.role()) {
+                        case ANALYST -> dev.workbench.domain.HandoffParty.ANALYSIS_AGENT;
+                        case CODER -> dev.workbench.domain.HandoffParty.CODING_AGENT;
+                        case REVIEWER -> dev.workbench.domain.HandoffParty.REVIEW_AGENT;
+                      })
+              .orElse(null);
+      if (found != null) {
+        agentId = candidateText;
+        sender = found;
+        break;
+      }
+    }
     if (sender == null) return null;
     return new dev.workbench.domain.Handoff(
         task.id().toString(),

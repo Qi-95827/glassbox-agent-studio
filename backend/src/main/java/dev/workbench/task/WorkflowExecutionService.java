@@ -1054,7 +1054,7 @@ public class WorkflowExecutionService {
         && (!runId.equals(systemHandoff.runId())
             || systemHandoff.source() != HandoffSource.SYSTEM
             || systemHandoff.status() != HandoffStatus.valueOf(cause.status().name())
-            || !reason.equals(systemHandoff.summary())))
+            || !java.util.Objects.equals(reason, systemHandoff.summary())))
       throw new IllegalArgumentException("系统停机交接与停止事实不匹配。");
     tx.executeWithoutResult(
         ignored -> {
