@@ -200,8 +200,20 @@ public class GlassboxTraceStore {
     return false;
   }
 
-  private static boolean maskedPlaceholder(String value) {
-    return value != null && MASKED_PLACEHOLDERS.contains(value);
+  private static boolean fullyMaskedValue(String value) {
+    if (value == null) return false;
+    if (MASKED_PLACEHOLDERS.contains(value) || "sk-***MASKED***".equals(value)) return true;
+    return value.matches("(?i)Bearer\\s+\\*\\*\\*MASKED(?:-(?:PRIVATE-KEY|TOKEN|KEY))?\\*\\*\\*");
+  }
+
+  /**
+   * 仅执行长度截断，不再对已完成叶子脱敏并重新序列化的 JSON 字符串做第二次整段正则替换。
+   */
+  private static SensitiveDataMasker.TruncatedText truncateMasked(String masked) {
+    if (masked == null) return new SensitiveDataMasker.TruncatedText(null, false);
+    int limit = SensitiveDataMasker.DEFAULT_MAX_CHARS;
+    if (masked.length() <= limit) return new SensitiveDataMasker.TruncatedText(masked, false);
+    return new SensitiveDataMasker.TruncatedText(masked.substring(0, limit) + "\n...[已截断]", true);
   }
 
   /**
@@ -264,21 +276,21 @@ public class GlassboxTraceStore {
   }
 
   /**
-   * 敏感键名下的叶子值：先按既有规则脱敏；若整值未变化（例如无已知前缀的口令），
-   * 再整体替换为统一占位符，避免因叶子拆分而漏网。
+   * 敏感键名下的叶子值：先按既有规则脱敏；只有整值已彻底化为完整掩码占位符（或短于 6 字符）时才保留专项占位符，
+   * 否则（含无前缀口令、以及「专项掩码/占位符前缀 + 明文后缀」的混合值）一律整体替换为统一占位符，防止旁路泄露。
    */
   private static String maskLeafText(String fieldName, String raw) {
     String masked = SensitiveDataMasker.mask(raw);
     if (!sensitiveKey(fieldName)) return masked;
-    if (!masked.equals(raw) || raw.length() < 6 || maskedPlaceholder(raw)) return masked;
+    if (raw.length() < 6 || fullyMaskedValue(masked)) return masked;
     return "***MASKED***";
   }
 
   @Transactional
   public void recordToolTrace(String runId, String toolCallId, ToolCallTrace trace) {
     if (runId == null || toolCallId == null || trace == null) return;
-    // 工具入参常常是 JSON 字符串：先在叶子层脱敏，保证脱敏后仍是合法 JSON，再做体积截断。
-    var args = SensitiveDataMasker.maskAndTruncate(maskJsonOrText(trace.inputArgs()));
+    // 工具入参常常是 JSON 字符串：先在叶子层脱敏再做体积截断，不再对合法 JSON 重复跑整段正则。
+    var args = truncateMasked(maskJsonOrText(trace.inputArgs()));
     var checksJson = writeListWithinLimit(maskGatewayChecks(trace.gatewayChecks()), null);
     var full = SensitiveDataMasker.maskAndTruncate(trace.fullResult());
     boolean truncated = trace.resultTruncated() || args.truncated() || full.truncated();

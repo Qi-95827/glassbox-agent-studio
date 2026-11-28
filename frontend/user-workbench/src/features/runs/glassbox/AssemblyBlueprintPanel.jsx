@@ -205,9 +205,9 @@ export default function AssemblyBlueprintPanel({ node, attempts, toolFunnel = nu
               {t('assembly.mcpDecisions', { count: mcpDecisions.length })}
             </Typography>
             <Stack spacing={0.6} data-testid="assembly-mcp-decisions">
-              {mcpDecisions.map(decision => (
+              {mcpDecisions.map((decision, index) => (
                 <Stack
-                  key={decision.exposedName}
+                  key={`${decision.exposedName}:${index}`}
                   data-testid={`assembly-mcp-${decision.exposedName}`}
                   direction="row"
                   spacing={0.75}

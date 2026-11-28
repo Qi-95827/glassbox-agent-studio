@@ -257,8 +257,11 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
       result.merge(defaultSegment, 0, Integer::sum);
       return result;
     }
-    var structured = segmentStructuredJson(content, defaultSegment);
-    if (structured != null) return structured;
+    // StepInput 结构化 JSON 仅出现在 USER 输入消息中；绝不误拆 TOOL/SYSTEM/ASSISTANT 里的任意业务 JSON。
+    if ("USER".equals(message.role())) {
+      var structured = segmentStructuredJson(content, defaultSegment);
+      if (structured != null) return structured;
+    }
     var hits = new ArrayList<int[]>();
     var hitSegments = new ArrayList<String>();
     for (var marker : SECTION_MARKERS) {

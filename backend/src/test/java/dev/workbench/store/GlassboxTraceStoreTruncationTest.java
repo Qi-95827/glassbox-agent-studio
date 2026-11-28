@@ -273,6 +273,48 @@ class GlassboxTraceStoreTruncationTest {
     assertEquals("a.js", toolNode.get("path").asText());
   }
 
+  /** 反例：敏感键名下「专项密钥/占位符前缀 + 明文后缀」混合值不得因部分命中专项正则而放行明文尾部。 */
+  @Test
+  void sensitiveKeysWithMixedTokenAndPlainSuffixAreFullyMasked() throws Exception {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    String toolCallId = UUID.randomUUID().toString();
+    String payload =
+        "{\"secret\":\"AKIAIOSFODNN7EXAMPLE:plain_tail_secret\","
+            + "\"password\":\"***MASKED***_plain_suffix\","
+            + "\"apiKey\":\"sk-123456789012\","
+            + "\"path\":\"safe.js\"}";
+
+    traces.recordModelPayload(
+        runId,
+        modelCallId,
+        new GlassboxModels.ModelCallPayload(
+            List.of(),
+            List.of(),
+            "ok",
+            List.of(new GlassboxModels.ToolCallDecision("c1", "write_file", payload)),
+            false,
+            null));
+    traces.recordToolTrace(
+        runId, toolCallId, new GlassboxModels.ToolCallTrace(payload, List.of(), "ok", false));
+
+    var json = new ObjectMapper();
+    var callNode =
+        json.readTree(
+            traces.modelPayloadsByRun(runId).get(modelCallId).responseToolCalls().getFirst().argumentsJson());
+    assertEquals("***MASKED***", callNode.get("secret").asText());
+    assertEquals("***MASKED***", callNode.get("password").asText());
+    assertEquals("sk-***MASKED***", callNode.get("apiKey").asText());
+    assertEquals("safe.js", callNode.get("path").asText());
+
+    var toolArgs = traces.toolTracesByRun(runId).get(toolCallId).inputArgs();
+    var toolNode = json.readTree(toolArgs);
+    assertEquals("***MASKED***", toolNode.get("secret").asText());
+    assertEquals("***MASKED***", toolNode.get("password").asText());
+    assertFalse(toolArgs.contains("plain_tail_secret"));
+    assertFalse(toolArgs.contains("plain_suffix"));
+  }
+
   /** 反例：非法 JSON 文本 + 未闭合 PEM 时不得抛异常，敏感片段仍被脱敏，外层列表依然可反序列化。 */
   @Test
   void invalidJsonArgumentsFallBackToWholeTextMaskingAndKeepOuterListReadable() {

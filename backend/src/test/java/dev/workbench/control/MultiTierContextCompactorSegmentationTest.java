@@ -197,6 +197,19 @@ class MultiTierContextCompactorSegmentationTest {
         "六色分桶之和必须与整条消息估算守恒：" + big);
   }
 
+  /** 反例：TOOL 返回的业务 JSON 碰巧含 goal + dependencies 字段时，仍须整条留在 TOOL_OUTPUTS，不得误拆为 HANDOFF。 */
+  @Test
+  void toolJsonContainingGoalAndDependenciesStaysInToolOutputs() {
+    String toolJson =
+        "{\"goal\":\"build\",\"dependencies\":{\"react\":\"^19.1.0\",\"vite\":\"^6.3.0\"}}";
+
+    var result = segments("TOOL", toolJson);
+
+    assertTrue(result.getOrDefault("TOOL_OUTPUTS", 0) > 0, "TOOL 输出必须留在 TOOL_OUTPUTS：" + result);
+    assertEquals(0, result.getOrDefault("HANDOFF", 0), "TOOL JSON 不得误拆成 HANDOFF：" + result);
+    assertEquals(0, result.getOrDefault("MEMORY", 0), "TOOL JSON 不得误拆成 MEMORY：" + result);
+  }
+
   private Map<String, Integer> segments(String role, String content) {
     var breakdown =
         compactor
