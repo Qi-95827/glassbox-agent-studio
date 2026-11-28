@@ -17,5 +17,12 @@ public interface MemoryVectorIndex {
   /** 按工作区与向量模型召回最近的 Top-K；cosine 范围为 [0,1]。 */
   List<VectorHit> nearest(String workspaceId, String modelName, float[] query, int limit);
 
+  /**
+   * 清除单条记忆的持久化向量列；记忆正文变化或删除后必须调用，避免旧向量继续参与召回。
+   *
+   * <p>默认空实现：H2 或未启用向量索引的环境没有独立向量列，清理是幂等的无操作。
+   */
+  default void clear(String workspaceId, String memoryId) {}
+
   record VectorHit(String memoryId, double cosine) {}
 }

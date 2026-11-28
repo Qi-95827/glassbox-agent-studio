@@ -35,6 +35,7 @@ public class MemoryService {
   private final TransactionTemplate tx;
   private final WorkspaceService workspaces;
   private final ObjectMapper json;
+  private final dev.workbench.framework.memory.MemoryVectorIndex vectorIndex;
 
   public MemoryService(
       MemoryRecordRepository records,
@@ -43,7 +44,8 @@ public class MemoryService {
       RunMemoryReferenceRepository references,
       TransactionTemplate tx,
       WorkspaceService workspaces,
-      ObjectMapper json) {
+      ObjectMapper json,
+      dev.workbench.framework.memory.MemoryVectorIndex vectorIndex) {
     this.records = records;
     this.versions = versions;
     this.loads = loads;
@@ -51,6 +53,7 @@ public class MemoryService {
     this.tx = tx;
     this.workspaces = workspaces;
     this.json = json;
+    this.vectorIndex = vectorIndex;
   }
 
   public List<MemoryRecord> list(String workspaceId) {
@@ -58,7 +61,7 @@ public class MemoryService {
     return records
         .findByWorkspaceIdAndStatusOrderByUpdatedAtDescIdAsc(workspaceId, MemoryStatus.ACTIVE)
         .stream()
-        .map(MemoryService::toRecord)
+        .map(this::toRecord)
         .toList();
   }
 
@@ -70,7 +73,7 @@ public class MemoryService {
         .stream()
         .filter(row -> status == null || row.getStatus() == status)
         .filter(row -> type == null || row.getMemoryType() == type)
-        .map(MemoryService::toRecord)
+        .map(this::toRecord)
         .toList();
   }
 
@@ -299,7 +302,7 @@ public class MemoryService {
                   time,
                   time));
           saveHistory(id);
-          return records.findById(id).map(MemoryService::toRecord).orElseThrow();
+          return records.findById(id).map(this::toRecord).orElseThrow();
         });
   }
 
@@ -307,9 +310,29 @@ public class MemoryService {
     return runId != null && records.existsBySourceRunId(runId);
   }
 
-  /** 用户采纳候选；只有 ACTIVE 记忆会进入混合召回。 */
-  public MemoryRecord accept(String workspaceId, String id, int version) {
-    return moveStatus(workspaceId, id, version, MemoryStatus.CANDIDATE, MemoryStatus.ACTIVE);
+  /**
+   * 用户采纳候选；只有 ACTIVE 记忆会进入混合召回。
+   *
+   * <p>与 {@link #create} 共用同一把进程内串行门控，并在事务内复核每工作区最多 20 条 ACTIVE 的上限；
+   * 否则采纳会绕过上限，把候选静默扩容进召回集合。
+   */
+  public synchronized MemoryRecord accept(String workspaceId, String id, int version) {
+    return tx.execute(
+        s -> {
+          if (records.countByWorkspaceIdAndStatus(workspaceId, MemoryStatus.ACTIVE) >= 20)
+            throw new IllegalStateException("每个工作区最多保存 20 条有效记忆，请先归档或删除后再采纳。");
+          int changed =
+              records.moveStatus(
+                  id,
+                  workspaceId,
+                  dev.workbench.domain.WorkbenchTime.now(),
+                  MemoryStatus.ACTIVE,
+                  MemoryStatus.CANDIDATE,
+                  version);
+          if (changed != 1) throw new IllegalStateException("记忆不存在、状态或版本已变化。");
+          saveHistory(id);
+          return records.findById(id).map(this::toRecord).orElseThrow();
+        });
   }
 
   /** 用户忽略候选；保留记录以便审计，但不再召回。 */
@@ -331,7 +354,7 @@ public class MemoryService {
                   version);
           if (changed != 1) throw new IllegalStateException("记忆不存在、状态或版本已变化。");
           saveHistory(id);
-          return records.findById(id).map(MemoryService::toRecord).orElseThrow();
+          return records.findById(id).map(this::toRecord).orElseThrow();
         });
   }
 
@@ -351,8 +374,36 @@ public class MemoryService {
                   version);
           if (changed != 1) throw new IllegalStateException("记忆不存在、已删除或版本已变化。");
           saveHistory(id);
+          // 正文已变化：旧语义向量必然过期，必须在同一事务边界内同步清空持久化向量列。
+          clearVector(workspaceId, id);
           return getActive(workspaceId, id);
         });
+  }
+
+  /** 清理向量列；H2 或未启用向量索引时是幂等无操作，绝不影响正文更新。 */
+  private void clearVector(String workspaceId, String id) {
+    if (vectorIndex == null) return;
+    vectorIndex.clear(workspaceId, id);
+  }
+
+  /**
+   * 晋升为 Skill 草稿前的唯一门禁：只允许 ACTIVE 记忆。
+   *
+   * <p>候选与已归档记忆尚未被用户确认，直接晋升会把未经确认的内容固化成可复用的技能草稿。
+   */
+  public MemoryRecord requireActiveForPromote(String workspaceId, String id, int version) {
+    workspaces.get(workspaceId);
+    var record =
+        records
+            .findById(id)
+            .filter(row -> workspaceId.equals(row.getWorkspaceId()))
+            .map(this::toRecord)
+            .orElseThrow(() -> new IllegalArgumentException("记忆不存在。"));
+    if (record.status() != MemoryStatus.ACTIVE)
+      throw new IllegalStateException(
+          "只有已确认（ACTIVE）的记忆可以晋升为 Skill 草稿，当前状态为 " + record.status() + "。");
+    if (record.version() != version) throw new IllegalStateException("记忆版本已变化，请刷新后重试。");
+    return record;
   }
 
   public void delete(String workspaceId, String id, int version) {
@@ -374,7 +425,7 @@ public class MemoryService {
   private MemoryRecord getActive(String workspaceId, String id) {
     return records
         .findByIdAndWorkspaceIdAndStatus(id, workspaceId, MemoryStatus.ACTIVE)
-        .map(MemoryService::toRecord)
+        .map(this::toRecord)
         .orElseThrow();
   }
 
@@ -390,7 +441,7 @@ public class MemoryService {
             row.getUpdatedAt()));
   }
 
-  private static MemoryRecord toRecord(MemoryRecordEntity row) {
+  private MemoryRecord toRecord(MemoryRecordEntity row) {
     return new MemoryRecord(
         UUID.fromString(row.getId()),
         UUID.fromString(row.getWorkspaceId()),
@@ -417,10 +468,10 @@ public class MemoryService {
     }
   }
 
-  private static List<String> readPaths(String value) {
+  private List<String> readPaths(String value) {
     if (value == null || value.isBlank()) return List.of();
     try {
-      return java.util.Arrays.asList(new ObjectMapper().readValue(value, String[].class));
+      return java.util.Arrays.asList(json.readValue(value, String[].class));
     } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
       return List.of();
     }

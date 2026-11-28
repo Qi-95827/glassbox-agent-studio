@@ -98,13 +98,8 @@ public class MemoryController {
       @RequestParam int version,
       @RequestBody(required = false) PromoteRequest request) {
     if (version < 1) throw new IllegalArgumentException("请提供有效记忆版本。");
-    var record =
-        memories.list(workspaceId, null, null).stream()
-            .filter(item -> item.id().toString().equals(id))
-            .findFirst()
-            .orElseThrow(() -> new IllegalArgumentException("记忆不存在。"));
-    if (record.version() != version)
-      throw new IllegalStateException("记忆版本已变化，请刷新后重试。");
+    // 晋升门禁下沉到服务层：候选与已归档记忆必须先被用户采纳为 ACTIVE 才能固化成 Skill 草稿。
+    var record = memories.requireActiveForPromote(workspaceId, id, version);
     String name =
         request == null || request.name() == null || request.name().isBlank()
             ? "经验卡：" + record.content().substring(0, Math.min(20, record.content().length()))

@@ -45,10 +45,18 @@ public interface MemoryRecordRepository extends JpaRepository<MemoryRecordEntity
   List<dev.workbench.persistence.view.MemoryRecordSummary> summarizeByWorkspaceAndStatus(
       @Param("workspaceId") String workspaceId, @Param("status") MemoryStatus status);
 
+  /**
+   * 修改正文时同步作废旧语义向量。
+   *
+   * <p>正文变化后旧向量必然与新内容不一致：如果只改 {@code content}，该记忆会永久沿用旧向量参与语义召回。
+   * 因此这里在同一语句内清空 {@code embedding_json} 与 {@code embedding_model}，由下一次回填重新生成；
+   * PG 的 {@code embedding_vec} 列由向量索引端口另行清理（H2 无该列，平滑跳过）。
+   */
   @Transactional(propagation = Propagation.MANDATORY)
   @Modifying(flushAutomatically = true, clearAutomatically = true)
   @Query(
       "update MemoryRecordEntity m set m.category = :category, m.content = :content,"
+          + " m.embeddingJson = null, m.embeddingModel = null,"
           + " m.version = m.version + 1, m.updatedAt = :updatedAt"
           + " where m.id = :id and m.workspaceId = :workspaceId and m.status = :active"
           + " and m.version = :version")

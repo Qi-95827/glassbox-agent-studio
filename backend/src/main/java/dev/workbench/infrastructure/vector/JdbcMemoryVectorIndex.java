@@ -79,6 +79,26 @@ public class JdbcMemoryVectorIndex implements MemoryVectorIndex {
     }
   }
 
+  /**
+   * 清空单条记忆的向量列与向量模型名。
+   *
+   * <p>正文被修改后旧向量必然过期，必须显式置空；否则 PG 会继续用旧向量命中该记忆。失败只记 WARN：
+   * 清理失败不应回滚用户已经成功的正文修改，下一次回填会覆盖该列。
+   */
+  @Override
+  public void clear(String workspaceId, String memoryId) {
+    if (!available()) return;
+    try {
+      jdbc.update(
+          "UPDATE memory_records SET embedding_vec = NULL, embedding_model = NULL"
+              + " WHERE id = ? AND workspace_id = ?",
+          memoryId,
+          workspaceId);
+    } catch (RuntimeException e) {
+      LOG.warn("记忆向量列清理失败，旧向量可能短期残留：{}", e.getMessage());
+    }
+  }
+
   private int columnDimension() {
     int cached = declaredDimension;
     if (cached > 0) return cached;

@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -55,14 +54,20 @@ public final class HybridRanker {
       for (var input : corpus) empty.put(input.id(), new Ranked(input.id(), 0, input.vectorScore(), 0));
       return Map.copyOf(empty);
     }
-    var docTokens = new HashMap<String, List<String>>();
+    var termFrequency = new HashMap<String, Map<String, Integer>>();
+    var documentLength = new HashMap<String, Integer>();
     var documentFrequency = new HashMap<String, Integer>();
     double totalLength = 0;
     for (var input : corpus) {
-      var unique = new ArrayList<>(new LinkedHashSet<>(tokens(input.text())));
-      docTokens.put(input.id(), unique);
-      totalLength += unique.size();
-      for (String token : unique) documentFrequency.merge(token, 1, Integer::sum);
+      // 文档词项保留重复次数：BM25 的 TF 必须来自真实词频，去重后 TF 恒为 1，排序会退化为二值匹配。
+      var frequencies = new HashMap<String, Integer>();
+      for (String token : tokens(input.text())) frequencies.merge(token, 1, Integer::sum);
+      int length = frequencies.values().stream().mapToInt(Integer::intValue).sum();
+      termFrequency.put(input.id(), frequencies);
+      documentLength.put(input.id(), length);
+      totalLength += length;
+      // 文档频率仍按唯一词项累加，保证 df <= documents。
+      for (String token : frequencies.keySet()) documentFrequency.merge(token, 1, Integer::sum);
     }
     int documents = corpus.size();
     double averageLength = Math.max(1, totalLength / documents);
@@ -70,16 +75,15 @@ public final class HybridRanker {
     var raw = new LinkedHashMap<String, Double>();
     double max = 0;
     for (var input : corpus) {
-      var tokens = docTokens.get(input.id());
+      var frequencies = termFrequency.get(input.id());
+      int length = documentLength.getOrDefault(input.id(), 0);
       double score = 0;
       for (String token : queryTokens) {
-        int frequency = 0;
-        for (String candidate : tokens) if (candidate.equals(token)) frequency++;
+        int frequency = frequencies.getOrDefault(token, 0);
         if (frequency == 0) continue;
         int df = documentFrequency.getOrDefault(token, 0);
         double idf = Math.log(1 + (documents - df + 0.5) / (df + 0.5));
-        double denominator =
-            frequency + K1 * (1 - B + B * tokens.size() / averageLength);
+        double denominator = frequency + K1 * (1 - B + B * length / averageLength);
         score += idf * frequency * (K1 + 1) / denominator;
       }
       raw.put(input.id(), score);
@@ -153,26 +157,55 @@ public final class HybridRanker {
     return List.copyOf(result);
   }
 
+  /**
+   * 按字符脚本拆分单个连续词段后再分别发射。
+   *
+   * <p>中文与英文混排（如 {@code "SpringBoot项目"}）必须拆成 ASCII 词段与 CJK 词段：ASCII 段走轻量词干与停用词，
+   * CJK 段走单字/双字切分。此前整段一旦含汉字就按 2-gram 全切，导致 {@code "springboot"} 被切碎成
+   * {@code "sp"}/{@code "pr"} 等垃圾碎片而彻底失配。
+   */
   private static void emit(String run, List<String> output) {
-    if (containsCjk(run)) {
-      var characters = run.codePoints().toArray();
-      if (characters.length == 1) {
-        String single = new String(characters, 0, 1);
-        if (!STOPWORDS.contains(single)) output.add(single);
-        return;
+    var ascii = new StringBuilder();
+    var cjk = new ArrayList<Integer>();
+    for (int offset = 0; offset < run.length(); ) {
+      int codePoint = run.codePointAt(offset);
+      offset += Character.charCount(codePoint);
+      if (isHan(codePoint)) {
+        flushAscii(ascii, output);
+        cjk.add(codePoint);
+      } else {
+        flushCjk(cjk, output);
+        ascii.appendCodePoint(codePoint);
       }
+    }
+    flushAscii(ascii, output);
+    flushCjk(cjk, output);
+  }
+
+  private static void flushAscii(StringBuilder buffer, List<String> output) {
+    if (buffer.length() == 0) return;
+    String stem = stem(buffer.toString());
+    buffer.setLength(0);
+    if (stem.length() >= 2 && !STOPWORDS.contains(stem)) output.add(stem);
+  }
+
+  private static void flushCjk(List<Integer> buffer, List<String> output) {
+    if (buffer.isEmpty()) return;
+    if (buffer.size() == 1) {
+      String single = new String(new int[] {buffer.getFirst()}, 0, 1);
+      if (!STOPWORDS.contains(single)) output.add(single);
+    } else {
+      int[] characters = buffer.stream().mapToInt(Integer::intValue).toArray();
       for (int index = 0; index + 1 < characters.length; index++) {
         String bigram = new String(characters, index, 2);
         if (!STOPWORDS.contains(bigram)) output.add(bigram);
       }
-      return;
     }
-    String stem = stem(run);
-    if (stem.length() >= 2 && !STOPWORDS.contains(stem)) output.add(stem);
+    buffer.clear();
   }
 
-  private static boolean containsCjk(String value) {
-    return value.codePoints().anyMatch(code -> Character.UnicodeScript.of(code) == Character.UnicodeScript.HAN);
+  private static boolean isHan(int codePoint) {
+    return Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN;
   }
 
   /** 仅处理高频后缀，避免过度词干化伤害专有名词与报错码。 */
