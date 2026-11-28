@@ -323,9 +323,14 @@ class ToolGatewayTest {
             new AtomicReference<RuntimeException>());
     String structuredArgs =
         "{\"credentials\":[\"opaque-secret-a\",{\"sub\":\"opaque-secret-b\",\"pin\":987654},123456],"
+            + "\"access_tokens\":[\"opaque-access-1\",{\"nested\":\"opaque-access-2\"}],"
+            + "\"refresh_tokens\":[\"opaque-refresh-1\",889900],"
+            + "\"tokens\":[\"opaque-bare-token-1\"],"
             + "\"apiKey\":{\"value\":\"plain_key_xyz\",\"code\":654321},"
             + "\"password\":556677,"
             + "\"max_tokens\":4096,"
+            + "\"inputTokens\":512,"
+            + "\"total_tokens\":4608,"
             + "\"path\":\"src/App.jsx\"}";
     gateway.execute(
         ToolKind.MCP,
@@ -346,6 +351,11 @@ class ToolGatewayTest {
     String raw = runtime.lastTrace.inputArgs();
     assertFalse(raw.contains("opaque-secret-a"), "敏感数组内的文本值不得泄露：" + raw);
     assertFalse(raw.contains("opaque-secret-b"), "敏感嵌套对象内的文本值不得泄露：" + raw);
+    assertFalse(raw.contains("opaque-access-1"), "access_tokens 复数凭据集合不得泄露：" + raw);
+    assertFalse(raw.contains("opaque-access-2"), "access_tokens 嵌套对象不得泄露：" + raw);
+    assertFalse(raw.contains("opaque-refresh-1"), "refresh_tokens 复数凭据集合不得泄露：" + raw);
+    assertFalse(raw.contains("889900"), "refresh_tokens 数组内数字凭据不得泄露：" + raw);
+    assertFalse(raw.contains("opaque-bare-token-1"), "裸 tokens 复数凭据集合不得泄露：" + raw);
     assertFalse(raw.contains("plain_key_xyz"), "敏感对象内的子字段不得泄露：" + raw);
     assertFalse(raw.contains("987654"), "敏感子树内的数字凭据不得泄露：" + raw);
     assertFalse(raw.contains("123456"), "敏感数组内的数字凭据不得泄露：" + raw);
@@ -357,10 +367,17 @@ class ToolGatewayTest {
     assertEquals("***MASKED***", node.at("/credentials/1/sub").asText());
     assertEquals("***MASKED***", node.at("/credentials/1/pin").asText());
     assertEquals("***MASKED***", node.at("/credentials/2").asText());
+    assertEquals("***MASKED***", node.at("/access_tokens/0").asText());
+    assertEquals("***MASKED***", node.at("/access_tokens/1/nested").asText());
+    assertEquals("***MASKED***", node.at("/refresh_tokens/0").asText());
+    assertEquals("***MASKED***", node.at("/refresh_tokens/1").asText());
+    assertEquals("***MASKED***", node.at("/tokens/0").asText());
     assertEquals("***MASKED***", node.at("/apiKey/value").asText());
     assertEquals("***MASKED***", node.at("/apiKey/code").asText());
     assertEquals("***MASKED***", node.get("password").asText());
-    assertEquals(4096, node.get("max_tokens").asInt(), "普通 Token 计数上限不得被误脱敏");
+    assertEquals(4096, node.get("max_tokens").asInt(), "明确已知的 Token 用量上限不得被误脱敏");
+    assertEquals(512, node.get("inputTokens").asInt(), "明确已知的输入 Token 计数不得被误脱敏");
+    assertEquals(4608, node.get("total_tokens").asInt(), "明确已知的总 Token 计数不得被误脱敏");
     assertEquals("src/App.jsx", node.get("path").asText());
   }
 

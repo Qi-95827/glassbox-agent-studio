@@ -616,4 +616,117 @@ class GlassboxTraceStoreTruncationTest {
         "宽参数截断后必须严格 <= 8,192，实际：" + storedArgs.length());
     assertTrue(mapper.readTree(storedArgs).isObject(), "宽参数从 H2 读回后仍必须是合法 JSON");
   }
+
+  /**
+   * 超大字段名（60,000 字符，触发 Jackson 默认 50,000 字段名读约束 StreamConstraintsException）的 H2 闭环：
+   * 必须直接落成预算内合法摘要信封，绝不能退回 8,201 字符的非法截断文本。
+   */
+  @Test
+  void oversizedJsonKeyExceedingJacksonConstraintProducesValidEnvelopeAfterH2RoundTrip()
+      throws Exception {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    var captured = new java.util.concurrent.atomic.AtomicReference<GlassboxModels.ModelCallPayload>();
+    dev.workbench.framework.agent.execution.AgentRuntime runtime =
+        new dev.workbench.framework.agent.execution.AgentRuntime() {
+          @Override
+          public void beforeModel(dev.workbench.domain.ModelKind modelName) {}
+
+          @Override
+          public void modelResult(Integer input, Integer output) {}
+
+          @Override
+          public void modelTrace(GlassboxModels.ModelCallPayload value) {
+            captured.set(value);
+          }
+
+          @Override
+          public void assemblyResolved(
+              dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Components components) {}
+
+          @Override
+          public UUID beforeTool(
+              dev.workbench.domain.ToolKind tool, int version, String fingerprint) {
+            return UUID.randomUUID();
+          }
+
+          @Override
+          public void check() {}
+
+          @Override
+          public void event(dev.workbench.domain.EventType type, String message) {}
+
+          @Override
+          public void toolResult(String result) {}
+
+          @Override
+          public void toolRejected(String safeMessage) {}
+        };
+
+    String giantKey = "k".repeat(60_000);
+    var toolSchema =
+        io.agentscope.core.model.ToolSchema.builder()
+            .name("giant_key_tool")
+            .description("超长键名测试")
+            .parameters(java.util.Map.of(giantKey, "secret-value"))
+            .build();
+    var responseChunk =
+        io.agentscope.core.model.ChatResponse.builder()
+            .content(
+                List.of(
+                    io.agentscope.core.message.ToolUseBlock.builder()
+                        .id("call-giant-1")
+                        .name("giant_key_tool")
+                        .input(java.util.Map.of(giantKey, "secret-value"))
+                        .build()))
+            .build();
+    io.agentscope.core.model.Model stubDelegate =
+        new io.agentscope.core.model.Model() {
+          @Override
+          public reactor.core.publisher.Flux<io.agentscope.core.model.ChatResponse> stream(
+              List<io.agentscope.core.message.Msg> messages,
+              List<io.agentscope.core.model.ToolSchema> tools,
+              io.agentscope.core.model.GenerateOptions options) {
+            return reactor.core.publisher.Flux.just(responseChunk);
+          }
+
+          @Override
+          public String getModelName() {
+            return "giant-key-stub";
+          }
+
+          @Override
+          public int getContextWindowSize() {
+            return 0;
+          }
+        };
+
+    var controlled =
+        new dev.workbench.infrastructure.agentscope.ControlledModel(
+            stubDelegate,
+            dev.workbench.domain.ModelMode.MOCK,
+            runtime,
+            new java.util.concurrent.atomic.AtomicReference<RuntimeException>());
+    controlled.stream(List.of(), List.of(toolSchema), null).collectList().block();
+
+    assertNotNull(captured.get());
+    assertTrue(captured.get().truncated());
+    traces.recordModelPayload(runId, modelCallId, captured.get());
+
+    var stored = traces.modelPayloadsByRun(runId).get(modelCallId);
+    assertNotNull(stored);
+    var mapper = new ObjectMapper();
+
+    String storedSchema = stored.requestTools().getFirst().parametersJson();
+    assertTrue(storedSchema.length() <= 8_192, "60,000 字键名 Schema 必须在限长内，实际：" + storedSchema.length());
+    var schemaNode = mapper.readTree(storedSchema);
+    assertTrue(schemaNode.get("_truncated").asBoolean(), "应输出合法截断摘要信封");
+    assertFalse(storedSchema.contains("secret-value"), "摘要信封不得回显原始字段值");
+
+    String storedArgs = stored.responseToolCalls().getFirst().argumentsJson();
+    assertTrue(storedArgs.length() <= 8_192, "60,000 字键名参数必须在限长内，实际：" + storedArgs.length());
+    var argsNode = mapper.readTree(storedArgs);
+    assertTrue(argsNode.get("_truncated").asBoolean(), "应输出合法截断摘要信封");
+    assertFalse(storedArgs.contains("secret-value"), "摘要信封不得回显原始字段值");
+  }
 }

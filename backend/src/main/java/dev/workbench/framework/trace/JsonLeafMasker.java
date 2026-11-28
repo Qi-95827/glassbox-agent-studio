@@ -48,6 +48,32 @@ public final class JsonLeafMasker {
           "credential",
           "privatekey");
 
+  /** 仅豁免明确已知的模型 Token 用量/限额计数字段；复数凭据集合（如 access_tokens/refresh_tokens）一律按敏感处理。 */
+  private static final java.util.Set<String> NON_SENSITIVE_TOKEN_METRIC_KEYS =
+      java.util.Set.of(
+          "maxtokens",
+          "maxcompletiontokens",
+          "maxoutputtokens",
+          "maxinputtokens",
+          "maxprompttokens",
+          "maxreportedtokens",
+          "inputtokens",
+          "outputtokens",
+          "prompttokens",
+          "completiontokens",
+          "totaltokens",
+          "cachedtokens",
+          "reasoningtokens",
+          "estimatedtokens",
+          "beforetokens",
+          "savedtokens",
+          "remainingtokens",
+          "knowntokens",
+          "tokencount",
+          "tokenlimit",
+          "tokenbudget",
+          "segmenttokens");
+
   private static final Pattern FULL_MASK_PLACEHOLDER =
       Pattern.compile("^\\*\\*\\*MASKED(?:-(?:PRIVATE-KEY|TOKEN|KEY))?\\*\\*\\*$");
 
@@ -72,6 +98,10 @@ public final class JsonLeafMasker {
     JsonNode root;
     try {
       root = json.readTree(value);
+    } catch (com.fasterxml.jackson.core.exc.StreamConstraintsException constraintError) {
+      // 超长字段名（>50,000）或超深嵌套等合法 JSON 触发 Jackson 读限制时，直接返回预算内合法摘要信封，
+      // 既不退回会破坏 JSON 的普通文本硬切，也不回显任何未脱敏原始片段。
+      return envelope(json, value.length(), limit);
     } catch (JsonProcessingException error) {
       return SensitiveDataMasker.maskAndTruncate(value, limit);
     }
@@ -100,9 +130,14 @@ public final class JsonLeafMasker {
     }
 
     // 阶段 3：极端单键名本身超过 limit 时，返回固定合法 JSON 摘要信封，保证调用方永不因非法 JSON 崩毁。
+    return envelope(json, serialized.length(), limit);
+  }
+
+  private static SensitiveDataMasker.TruncatedText envelope(
+      ObjectMapper json, int originalChars, int limit) {
     ObjectNode envelope = json.createObjectNode();
     envelope.put("_truncated", true);
-    envelope.put("_originalChars", serialized.length());
+    envelope.put("_originalChars", originalChars);
     envelope.put("_summary", TRUNCATED_SUFFIX);
     String envelopeJson = serialize(json, envelope);
     if (envelopeJson != null && envelopeJson.length() <= limit) {
@@ -174,16 +209,13 @@ public final class JsonLeafMasker {
   }
 
   /**
-   * 敏感字段名判定：排除纯 Token 计数类键（如 {@code max_tokens}/{@code inputTokens}/{@code token_limit}），
-   * 命中凭据/密钥/口令/认证/Cookie 等字段名时返回 true。
+   * 敏感字段名判定：仅豁免白名单内明确已知的 Token 用量计数字段，
+   * 复数凭据集合（如 {@code access_tokens}/{@code refresh_tokens}）及各类密钥/口令/认证/Cookie 字段一律判定敏感。
    */
   private static boolean sensitiveKey(String fieldName) {
     if (fieldName == null || fieldName.isBlank()) return false;
     String normalized = fieldName.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "");
-    if (normalized.endsWith("tokens")
-        || normalized.contains("tokencount")
-        || normalized.contains("tokenlimit")
-        || normalized.contains("tokenbudget")) {
+    if (NON_SENSITIVE_TOKEN_METRIC_KEYS.contains(normalized)) {
       return false;
     }
     for (String token : SENSITIVE_KEY_TOKENS) {
