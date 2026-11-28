@@ -60,10 +60,11 @@ public class GlassboxTraceStore {
   public void recordModelPayload(String runId, String modelCallId, ModelCallPayload payload) {
     if (runId == null || modelCallId == null || payload == null) return;
     var listTruncated = new boolean[1];
-    var reqMessagesJson = writeListWithinLimit(payload.requestMessages(), listTruncated);
-    var reqToolsJson = writeListWithinLimit(payload.requestTools(), listTruncated);
+    // 先在字段层脱敏再序列化 JSON 数组，防止单个字段中的未闭合 PEM 吞掉数组闭合符和后续条目。
+    var reqMessagesJson = writeListWithinLimit(maskMessages(payload.requestMessages()), listTruncated);
+    var reqToolsJson = writeListWithinLimit(maskTools(payload.requestTools()), listTruncated);
     var respContent = SensitiveDataMasker.maskAndTruncate(payload.responseContent());
-    var respToolsJson = writeListWithinLimit(payload.responseToolCalls(), listTruncated);
+    var respToolsJson = writeListWithinLimit(maskToolCalls(payload.responseToolCalls()), listTruncated);
     // 思考链同样是模型输出，必须和正文一样脱敏后再落库。
     var reasoning = SensitiveDataMasker.maskAndTruncate(payload.reasoningContent());
     boolean truncated =
@@ -125,14 +126,69 @@ public class GlassboxTraceStore {
     }
     if (kept.size() != (items == null ? 0 : items.size()) && truncatedFlag != null)
       truncatedFlag[0] = true;
-    return SensitiveDataMasker.mask(encoded);
+    // 调用方已在字段层完成脱敏；此处直接返回合法 JSON 数组，不再对编码后的 JSON 字符串整段做正则替换。
+    return encoded;
+  }
+
+  private static List<PromptMessage> maskMessages(List<PromptMessage> items) {
+    if (items == null || items.isEmpty()) return List.of();
+    return items.stream()
+        .map(
+            item ->
+                new PromptMessage(
+                    maskField(item.role()),
+                    maskField(item.name()),
+                    maskField(item.content()),
+                    item.charCount()))
+        .toList();
+  }
+
+  private static List<ToolSchemaView> maskTools(List<ToolSchemaView> items) {
+    if (items == null || items.isEmpty()) return List.of();
+    return items.stream()
+        .map(
+            item ->
+                new ToolSchemaView(
+                    maskField(item.name()),
+                    maskField(item.description()),
+                    maskField(item.parametersJson())))
+        .toList();
+  }
+
+  private static List<ToolCallDecision> maskToolCalls(List<ToolCallDecision> items) {
+    if (items == null || items.isEmpty()) return List.of();
+    return items.stream()
+        .map(
+            item ->
+                new ToolCallDecision(
+                    maskField(item.id()),
+                    maskField(item.name()),
+                    maskField(item.argumentsJson())))
+        .toList();
+  }
+
+  private static List<GatewayCheck> maskGatewayChecks(List<GatewayCheck> items) {
+    if (items == null || items.isEmpty()) return List.of();
+    return items.stream()
+        .map(
+            item ->
+                new GatewayCheck(
+                    maskField(item.gate()),
+                    maskField(item.label()),
+                    maskField(item.status()),
+                    maskField(item.detail())))
+        .toList();
+  }
+
+  private static String maskField(String value) {
+    return value == null ? null : SensitiveDataMasker.mask(value);
   }
 
   @Transactional
   public void recordToolTrace(String runId, String toolCallId, ToolCallTrace trace) {
     if (runId == null || toolCallId == null || trace == null) return;
     var args = SensitiveDataMasker.maskAndTruncate(trace.inputArgs());
-    var checksJson = writeListWithinLimit(trace.gatewayChecks(), null);
+    var checksJson = writeListWithinLimit(maskGatewayChecks(trace.gatewayChecks()), null);
     var full = SensitiveDataMasker.maskAndTruncate(trace.fullResult());
     boolean truncated = trace.resultTruncated() || args.truncated() || full.truncated();
     toolTraces.save(

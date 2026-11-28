@@ -98,4 +98,83 @@ class GlassboxTraceStoreTruncationTest {
     assertFalse(stored.truncated());
     assertEquals("正常正文", stored.requestMessages().getFirst().content());
   }
+
+  @Test
+  void unclosedPemInToolDescriptionAndMessagesStaysMaskedAndKeepsJsonArrayReadableAfterDbRoundTrip() {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    String toolCallId = UUID.randomUUID().toString();
+
+    traces.recordModelPayload(
+        runId,
+        modelCallId,
+        new GlassboxModels.ModelCallPayload(
+            List.of(
+                new GlassboxModels.PromptMessage(
+                    "USER",
+                    "analyst",
+                    "{\"secret\": \"-----BEGIN RSA PRIVATE KEY-----\nMIIEowMsgSecret111",
+                    64),
+                new GlassboxModels.PromptMessage("ASSISTANT", "analyst", "第二条正常消息", 7)),
+            List.of(
+                new GlassboxModels.ToolSchemaView(
+                    "leaky_tool",
+                    "工具说明：-----BEGIN RSA PRIVATE KEY-----\nMIIEowToolSecret222",
+                    "{}"),
+                new GlassboxModels.ToolSchemaView("read_file", "读取授权文件", "{\"type\":\"object\"}")),
+            "secret=AKIAIOSFODNN7EXAMPLE:db_suffix_resp",
+            List.of(
+                new GlassboxModels.ToolCallDecision(
+                    "c1",
+                    "leaky_tool",
+                    "{\"pem\":\"-----BEGIN EC PRIVATE KEY-----\nMHcCCallSecret333\"}"),
+                new GlassboxModels.ToolCallDecision("c2", "read_file", "{\"path\":\"sort.js\"}")),
+            false,
+            null,
+            "password=***MASKED***_db_suffix_reason",
+            true));
+
+    var storedModel = traces.modelPayloadsByRun(runId).get(modelCallId);
+    assertNotNull(storedModel, "含未闭合 PEM 的模型快照必须能从 H2 完整读回");
+    assertEquals(2, storedModel.requestTools().size(), "工具列表不得因未闭合 PEM 吞掉 JSON 数组闭合符而丢失条目");
+    assertEquals("read_file", storedModel.requestTools().get(1).name());
+    assertEquals("读取授权文件", storedModel.requestTools().get(1).description());
+    assertFalse(storedModel.requestTools().get(0).description().contains("MIIEowToolSecret222"));
+    assertFalse(storedModel.requestTools().get(0).description().contains("PRIVATE KEY"));
+    assertTrue(storedModel.requestTools().get(0).description().contains("***MASKED-PRIVATE-KEY***"));
+
+    assertEquals(2, storedModel.requestMessages().size(), "消息列表必须完整读回");
+    assertFalse(storedModel.requestMessages().get(0).content().contains("MIIEowMsgSecret111"));
+    assertEquals("第二条正常消息", storedModel.requestMessages().get(1).content());
+
+    assertEquals(2, storedModel.responseToolCalls().size(), "工具决策列表必须完整读回");
+    assertFalse(storedModel.responseToolCalls().get(0).argumentsJson().contains("MHcCCallSecret333"));
+    assertEquals("read_file", storedModel.responseToolCalls().get(1).name());
+
+    assertFalse(storedModel.responseContent().contains("db_suffix_resp"));
+    assertFalse(storedModel.responseContent().contains("AKIAIOSFODNN7EXAMPLE"));
+    assertFalse(storedModel.reasoningContent().contains("db_suffix_reason"));
+
+    // 工具安检列表含未闭合 PEM 同样必须在 H2 写读回后保留全部条目与脱敏结果。
+    traces.recordToolTrace(
+        runId,
+        toolCallId,
+        new GlassboxModels.ToolCallTrace(
+            "{\"secret\":\"-----BEGIN RSA PRIVATE KEY-----\nMIIEowArgs444\"}",
+            List.of(
+                new GlassboxModels.GatewayCheck(
+                    "ARGUMENT_SCHEMA",
+                    "参数校验",
+                    "PASS",
+                    "说明：-----BEGIN RSA PRIVATE KEY-----\nMIIEowCheck555"),
+                new GlassboxModels.GatewayCheck("PATH_WHITELIST", "路径白名单", "DENY", "越权路径")),
+            "ok",
+            false));
+    var storedTool = traces.toolTracesByRun(runId).get(toolCallId);
+    assertNotNull(storedTool);
+    assertEquals(2, storedTool.gatewayChecks().size(), "安检列表不得因未闭合 PEM 破坏 JSON 数组");
+    assertFalse(storedTool.gatewayChecks().get(0).detail().contains("MIIEowCheck555"));
+    assertEquals("DENY", storedTool.gatewayChecks().get(1).status());
+    assertFalse(storedTool.inputArgs().contains("MIIEowArgs444"));
+  }
 }

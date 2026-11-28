@@ -99,6 +99,41 @@ class SensitiveDataMaskerCredentialTest {
   }
 
   @Test
+  void exactPlaceholderIsPreservedWhileMixedMaskPrefixAndPlaintextSuffixIsFullyMasked() {
+    // 1. 整值恰好等于受支持的完整占位符时原样保留，不破坏已有脱敏标记与 JSON 结构。
+    assertEquals(
+        "{\"secret\": \"***MASKED-PRIVATE-KEY***\"}",
+        SensitiveDataMasker.mask("{\"secret\": \"***MASKED-PRIVATE-KEY***\"}"));
+    assertEquals(
+        "{\"token\": \"***MASKED-TOKEN***\"}",
+        SensitiveDataMasker.mask("{\"token\": \"***MASKED-TOKEN***\"}"));
+    assertEquals(
+        "{\"api_key\": \"***MASKED-KEY***\"}",
+        SensitiveDataMasker.mask("{\"api_key\": \"***MASKED-KEY***\"}"));
+    assertEquals("password=***MASKED***", SensitiveDataMasker.maskFinal("password=***MASKED***"));
+
+    // 2. 专项替换后仍连着同一字段的明文后缀，或字面带掩码前缀的混合值，必须整值掩码，绝不放行后缀。
+    String awsPlusSuffix = "secret=AKIAIOSFODNN7EXAMPLE:extra_secret_tail";
+    String literalMaskPrefix = "password=***MASKED***_real_suffix";
+    String jsonTokenPlusSuffix = "{\"token\": \"***MASKED-TOKEN***:leak999\"}";
+    String fakeMaskPrefix = "password=***MASKED-FAKE_secret123";
+    for (String masked :
+        java.util.List.of(
+            SensitiveDataMasker.mask(awsPlusSuffix),
+            SensitiveDataMasker.maskCompleted(awsPlusSuffix),
+            SensitiveDataMasker.maskFinal(awsPlusSuffix))) {
+      assertFalse(masked.contains("AKIAIOSFODNN7EXAMPLE"), masked);
+      assertFalse(masked.contains("extra_secret_tail"), "混合后缀明文泄露：" + masked);
+      assertEquals("secret=***MASKED***", masked);
+    }
+    assertEquals("password=***MASKED***", SensitiveDataMasker.mask(literalMaskPrefix));
+    assertEquals("{\"token\": \"***MASKED***\"}", SensitiveDataMasker.mask(jsonTokenPlusSuffix));
+    assertEquals("password=***MASKED***", SensitiveDataMasker.mask(fakeMaskPrefix));
+    // 流尾截断 KV 对短后缀同样不能豁免。
+    assertEquals("password=***MASKED***", SensitiveDataMasker.maskFinal("password=***MASKED***_ab"));
+  }
+
+  @Test
   void ordinaryTextIsUnchanged() {
     String text = "排序页面需要保留原生实现并给出证据。";
 

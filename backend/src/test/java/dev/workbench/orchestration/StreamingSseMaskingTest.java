@@ -590,6 +590,49 @@ class StreamingSseMaskingTest {
         capturedPayload.get().reasoningContent());
   }
 
+  @Test
+  void mixedMaskedPrefixAndPlaintextSuffixNeverLeaksInSseOrSnapshot() {
+    CapturingPublisher publisher = new CapturingPublisher();
+    var capturedPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+    ControlledAgentRuntime runtime = runtimeWithTrace(publisher, capturedPayload);
+    Model delegate =
+        stubModel(
+            Flux.just(
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder()
+                                .text("secret=AKIAIOSFODNN7EXAMPLE:plain_suffix_body ")
+                                .build(),
+                            ThinkingBlock.builder()
+                                .thinking("{\"token\": \"AKIAIOSFODNN7EXAMPLE:plain_suffix_reason\"} ")
+                                .build()))
+                    .build(),
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder().text("password=***MASKED***_ab").build(),
+                            ThinkingBlock.builder().thinking("password=***MASKED***_cd").build()))
+                    .usage(ChatUsage.builder().inputTokens(10).outputTokens(6).build())
+                    .finishReason("length")
+                    .build()));
+    new ControlledModel(delegate, ModelMode.MOCK, runtime, new AtomicReference<>())
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .collectList()
+        .block();
+
+    String sseContent = publisher.joined("MODEL_DELTA");
+    String sseReasoning = publisher.joined("MODEL_REASONING_DELTA");
+    assertFalse(sseContent.contains("plain_suffix_body"), sseContent);
+    assertFalse(sseContent.contains("_ab"), sseContent);
+    assertFalse(sseReasoning.contains("plain_suffix_reason"), sseReasoning);
+    assertFalse(sseReasoning.contains("_cd"), sseReasoning);
+    assertFalse(capturedPayload.get().responseContent().contains("plain_suffix_body"));
+    assertFalse(capturedPayload.get().responseContent().contains("_ab"));
+    assertFalse(capturedPayload.get().reasoningContent().contains("plain_suffix_reason"));
+    assertFalse(capturedPayload.get().reasoningContent().contains("_cd"));
+  }
+
   private static void assertNoPemLeak(String label, String output, String bodyFragment) {
     assertFalse(output.contains(bodyFragment), label + " 泄露未闭合私钥正文：" + output);
     assertFalse(output.contains("PRIVATE KEY"), label + " 残留未闭合私钥头：" + output);

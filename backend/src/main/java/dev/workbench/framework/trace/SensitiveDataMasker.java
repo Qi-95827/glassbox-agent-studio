@@ -32,6 +32,9 @@ public final class SensitiveDataMasker {
   private static final String KV_KEY =
       "(?:api[_-]?key|secret|password|passwd|token|authorization|cookie)";
   private static final String KV_VALUE_CHARS = "[^\"'\\s,;}\\]。，；！？、）》」』】]";
+  /** 受支持的完整掩码占位符；仅当整个字段值恰好等于完整占位符时才豁免，绝不放行「掩码前缀+明文后缀」的混合值。 */
+  private static final String MASKED_PLACEHOLDER =
+      "\\*\\*\\*MASKED(?:-(?:PRIVATE-KEY|TOKEN|KEY))?\\*\\*\\*";
 
   /**
    * 流式切点检测规则集：与 {@link #mask(String)} 的 10 类规则严格一一对应、彼此独立扫描，
@@ -58,22 +61,23 @@ public final class SensitiveDataMasker {
   private static final Pattern TRUNCATED_TOKEN =
       Pattern.compile(
           "(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|(?i:bearer)\\s+|eyJ))"
-              + "(?!\\*\\*\\*MASKED)[A-Za-z0-9._~+/=-]*$");
-  /** 仅锚定流末尾尚未闭合的凭据键值（与整段规则一致支持跨行空白与引号），仅在流异常中断时兜底。 */
+              + "(?!" + MASKED_PLACEHOLDER + "$)[A-Za-z0-9._~+/=-]*$");
+  /** 仅锚定流末尾尚未闭合的凭据键值（与整段规则一致支持跨行空白与引号），仅在流异常中断时兜底；仅豁免整值恰好等于完整占位符。 */
   private static final Pattern TRUNCATED_KV =
       Pattern.compile(
-          "(?i)(\"?'?" + KV_KEY + "'?\"?\\s*[:=]\\s*\"?'?)(?!\\*\\*\\*MASKED)"
+          "(?i)(\"?'?" + KV_KEY + "'?\"?\\s*[:=]\\s*\"?'?)(?!" + MASKED_PLACEHOLDER + "$)"
               + KV_VALUE_CHARS
               + "+$");
   /** 流末尾截断的 URL 凭据（缺 {@code @}）；排除 1~5 位纯数字端口（如 {@code http://localhost:8088}），避免误伤普通地址。 */
   private static final Pattern TRUNCATED_URL_CREDENTIALS =
       Pattern.compile("://[^/\\s:@'\"]+:(?!\\d{1,5}$)[^/\\s@'\"]+$");
 
-  /** 键值对允许单/双引号与 JSON、HTML 转义引号；值遇到引号、括号、分隔符即停止，绝不吞结构符，且不重复改写已脱敏标记。 */
+  /** 键值对允许单/双引号与 JSON、HTML 转义引号；值遇到引号、括号、分隔符即停止，绝不吞结构符；仅当整值恰好等于完整占位符时才豁免。 */
   private static final Pattern SECRET_KV_PATTERN =
       Pattern.compile(
           "(?i)(\"?'?(?:api[_-]?key|secret|password|passwd|token|authorization|cookie)'?\"?\\s*[:=]\\s*\"?'?)"
-              + "(?!\\*\\*\\*MASKED)([^\"'\\s,;}\\]。，；！？、）》」』】]{6,})");
+              + "(?!" + MASKED_PLACEHOLDER + "(?!" + KV_VALUE_CHARS + "))"
+              + "(" + KV_VALUE_CHARS + "{6,})");
 
   private SensitiveDataMasker() {}
 

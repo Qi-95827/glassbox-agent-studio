@@ -498,19 +498,22 @@ public record ControlledModel(
         var safe = SensitiveDataMasker.maskAndTruncate(text, 16_384);
         if (safe.truncated()) truncated = true;
         String role = msg.getRole() == null ? "USER" : msg.getRole().name();
+        String safeName = msg.getName() == null ? null : SensitiveDataMasker.mask(msg.getName());
         reqMessages.add(
-            new GlassboxModels.PromptMessage(role, msg.getName(), safe.text(), text.length()));
+            new GlassboxModels.PromptMessage(role, safeName, safe.text(), text.length()));
       }
     }
     var reqTools = new ArrayList<GlassboxModels.ToolSchemaView>();
     if (tools != null) {
       for (ToolSchema tool : tools) {
+        String safeName = tool.getName() == null ? null : SensitiveDataMasker.mask(tool.getName());
+        var safeDesc = SensitiveDataMasker.maskAndTruncate(tool.getDescription(), 8_192);
+        if (safeDesc.truncated()) truncated = true;
         String params = safeJson(tool.getParameters());
         var safeParams = SensitiveDataMasker.maskAndTruncate(params, 8_192);
         if (safeParams.truncated()) truncated = true;
         reqTools.add(
-            new GlassboxModels.ToolSchemaView(
-                tool.getName(), tool.getDescription(), safeParams.text()));
+            new GlassboxModels.ToolSchemaView(safeName, safeDesc.text(), safeParams.text()));
       }
     }
     String responseText = accumulator == null ? "" : accumulator.content();
@@ -518,11 +521,12 @@ public record ControlledModel(
     var toolCalls = new ArrayList<GlassboxModels.ToolCallDecision>();
     if (accumulator != null) {
       for (ToolUseBlock tub : accumulator.toolUses()) {
+        String safeName = tub.getName() == null ? null : SensitiveDataMasker.mask(tub.getName());
         String args = safeJson(tub.getInput());
         var safeArgs = SensitiveDataMasker.maskAndTruncate(args, 8_192);
         if (safeArgs.truncated()) truncated = true;
         toolCalls.add(
-            new GlassboxModels.ToolCallDecision(tub.getId(), tub.getName(), safeArgs.text()));
+            new GlassboxModels.ToolCallDecision(tub.getId(), safeName, safeArgs.text()));
       }
     }
     boolean truncatedByModel =
