@@ -1,6 +1,7 @@
 package dev.workbench.framework.trace;
 
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 有状态的流式脱敏器：对任意分帧方式都保证「拼接后的输出」与「整段脱敏」一致。
@@ -27,13 +28,28 @@ public final class StreamingMasker {
     pending.append(fragment);
     if (pending.length() <= HOLD_BACK) return "";
     int cut = pending.length() - HOLD_BACK;
-    Matcher matcher = SensitiveDataMasker.STREAM_PARTIAL.matcher(pending);
-    while (matcher.find()) {
-      int start = matcher.start();
-      if (start >= cut) break;
-      // 结束位置越过当前切点：说明这段敏感形态还会被后续帧延续，必须整体留下。
-      if (matcher.end() > cut) cut = start;
-    }
+    // 对全部规则族独立执行可重叠扫描并定点收敛 cut：
+    // 即使 `Authorization: Bearer` 已被 KV 规则命中，Bearer 规则仍独立看到 `Bearer <opaque>` 并把 cut 回拉到
+    // Bearer 之前，随后下一轮迭代由 KV 规则再把 cut 回拉到 Authorization 之前，确保与整段脱敏完全等价。
+    boolean changed;
+    do {
+      changed = false;
+      for (Pattern pattern : SensitiveDataMasker.STREAM_PARTIAL_PATTERNS) {
+        Matcher matcher = pattern.matcher(pending);
+        int searchFrom = 0;
+        while (searchFrom < cut && matcher.find(searchFrom)) {
+          int start = matcher.start();
+          if (start >= cut) break;
+          if (matcher.end() > cut) {
+            cut = start;
+            changed = true;
+            break;
+          }
+          searchFrom = start + 1;
+        }
+        if (cut <= 0) return "";
+      }
+    } while (changed);
     if (cut <= 0) return "";
     String safe = SensitiveDataMasker.mask(pending.substring(0, cut));
     pending.delete(0, cut);

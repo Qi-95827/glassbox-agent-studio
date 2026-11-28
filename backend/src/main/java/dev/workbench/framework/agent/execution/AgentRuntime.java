@@ -16,6 +16,14 @@ public interface AgentRuntime {
 
   void modelResult(Integer inputTokens, Integer outputTokens);
 
+  /**
+   * 通知本次模型流式输出的结束原因（如 {@code stop}、{@code length}、{@code max_tokens}）。
+   *
+   * <p>必须在 {@link #modelResult(Integer, Integer)} 之前调用，使运行时在输出限长等非自然结束时
+   * 启用截断凭据兜底脱敏，而不是误按自然结束跳过截断收尾。
+   */
+  default void modelFinishReason(String finishReason) {}
+
   /** 记录单次模型调用的完整请求与响应透视快照（脱敏后存储）。 */
   default void modelTrace(GlassboxModels.ModelCallPayload payload) {}
 

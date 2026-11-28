@@ -170,6 +170,7 @@ public record ControlledModel(
                                 try {
                                   if (latest.get() == null)
                                     throw new IllegalStateException("模型未返回响应。");
+                                  runtime.modelFinishReason(accumulator.finishReason());
                                   var usage = latestUsage.get();
                                   runtime.modelResult(
                                       usage == null ? null : usage.getInputTokens(),
@@ -472,6 +473,10 @@ public record ControlledModel(
     boolean streamed() {
       return chunks > 1;
     }
+
+    String finishReason() {
+      return finishReason;
+    }
   }
 
   /** 提取发给模型的消息切片、工具 Schema 以及原始响应/工具决策，脱敏后供玻璃盒透视使用。 */
@@ -516,9 +521,13 @@ public record ControlledModel(
             new GlassboxModels.ToolCallDecision(tub.getId(), tub.getName(), safeArgs.text()));
       }
     }
-    var safeResp = SensitiveDataMasker.maskAndTruncate(responseText, 32_768);
+    boolean truncatedByModel =
+        accumulator != null
+            && SensitiveDataMasker.isTruncatedFinishReason(accumulator.finishReason());
+    var safeResp = SensitiveDataMasker.maskResponseAndTruncate(responseText, 32_768, truncatedByModel);
     if (safeResp.truncated()) truncated = true;
-    var safeReasoning = SensitiveDataMasker.maskAndTruncate(reasoningText, 32_768);
+    var safeReasoning =
+        SensitiveDataMasker.maskResponseAndTruncate(reasoningText, 32_768, truncatedByModel);
     if (safeReasoning.truncated()) truncated = true;
     return new GlassboxModels.ModelCallPayload(
         reqMessages,

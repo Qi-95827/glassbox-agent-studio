@@ -2,20 +2,43 @@ package dev.workbench.orchestration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import dev.workbench.domain.AgentRole;
+import dev.workbench.domain.ModelKind;
+import dev.workbench.domain.ModelMode;
+import dev.workbench.framework.agent.assembly.AgentAssemblySnapshot;
+import dev.workbench.framework.agent.definition.AgentDefinitionRef;
 import dev.workbench.framework.control.RunControl;
 import dev.workbench.framework.event.RunStreamTransient;
+import dev.workbench.framework.trace.GlassboxModels;
+import dev.workbench.infrastructure.agentscope.ControlledModel;
 import dev.workbench.store.AgentAssemblyRecordService;
+import dev.workbench.store.GlassboxTraceStore;
 import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.store.RunStateStore;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ThinkingBlock;
+import io.agentscope.core.model.ChatResponse;
+import io.agentscope.core.model.ChatUsage;
+import io.agentscope.core.model.GenerateOptions;
+import io.agentscope.core.model.Model;
+import io.agentscope.core.model.ToolSchema;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
+import reactor.core.publisher.Flux;
 
 /**
  * 实时 SSE 的跨帧脱敏：任意分帧方式下，前端拼接出来的正文与思考链都不含明文敏感串。
@@ -220,6 +243,246 @@ class StreamingSseMaskingTest {
     multiLineRuntime.modelFailed();
     assertFalse(multiLineAborted.joined("MODEL_DELTA").contains("halfSec"));
     assertTrue(multiLineAborted.joined("MODEL_DELTA").contains("***MASKED***"));
+  }
+
+  @Test
+  void opaqueBearerInAuthorizationHeaderNeverLeaksAcrossAnySplitPoint() {
+    String opaque = "opaque_secret_99887766aabb";
+    String prefix = "这是一段超过流式保留窗口长度的普通前置文本，保证切点会扫过整个 Authorization 与 Bearer 令牌区域。".repeat(3);
+    String suffix = "。后续还有超过保留窗口长度的普通说明文本，确保凭据段会在流结束前触发发射而非拖到最后。".repeat(3);
+    List<String> payloads =
+        List.of(
+            prefix + "Authorization: Bearer " + opaque + suffix,
+            prefix + "{\"Authorization\": \"Bearer " + opaque + "\"}" + suffix,
+            prefix + "Authorization:\n  Bearer\n  " + opaque + suffix);
+
+    for (String text : payloads) {
+      String expected = dev.workbench.framework.trace.SensitiveDataMasker.mask(text);
+      int afterBearer = text.indexOf("Bearer") + "Bearer".length();
+      int afterOpaqueHalf = text.indexOf(opaque) + 6;
+      for (List<String> frames :
+          List.of(
+              splitEveryCharacter(text),
+              List.of(text.substring(0, afterBearer), text.substring(afterBearer)),
+              List.of(text.substring(0, afterBearer + 1), text.substring(afterBearer + 1)),
+              List.of(text.substring(0, afterOpaqueHalf), text.substring(afterOpaqueHalf)),
+              splitRandomly(text, new Random(20261129L)))) {
+        CapturingPublisher publisher = new CapturingPublisher();
+        ControlledAgentRuntime runtime = runtime(publisher);
+        for (String frame : frames) {
+          runtime.modelDelta(frame);
+          runtime.modelReasoningDelta(frame);
+        }
+        runtime.modelFinishReason("stop");
+        runtime.modelResult(null, null);
+        String content = publisher.joined("MODEL_DELTA");
+        String reasoning = publisher.joined("MODEL_REASONING_DELTA");
+        assertFalse(content.contains(opaque), "普通不透明 Bearer 令牌在正文流泄露：" + content);
+        assertFalse(reasoning.contains(opaque), "普通不透明 Bearer 令牌在思考链泄露：" + reasoning);
+        assertEquals(expected, content, "Authorization + 不透明 Bearer 任意分帧拼接必须与整段脱敏逐字一致");
+        assertEquals(expected, reasoning, "思考链 Authorization + 不透明 Bearer 必须与整段脱敏逐字一致");
+      }
+    }
+  }
+
+  @Test
+  void controlledModelLengthLimitCompletionUsesTruncatedFinalMaskWhileNaturalStopPreservesPlainTail() {
+    // 1. 输出限长结束（length / MAX_TOKENS）即使走 onComplete，也必须对正文与思考链及持久化快照启用截断兜底。
+    for (String limitReason : List.of("length", "MAX_TOKENS")) {
+      CapturingPublisher publisher = new CapturingPublisher();
+      var capturedPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+      ControlledAgentRuntime runtime = runtimeWithTrace(publisher, capturedPayload);
+      Model delegate =
+          stubModel(
+              Flux.just(
+                  ChatResponse.builder()
+                      .content(
+                          List.of(
+                              TextBlock.builder().text("请求头 Authorization: Bearer ").build(),
+                              ThinkingBlock.builder().thinking("配置：{\"api_key\": \"").build()))
+                      .build(),
+                  ChatResponse.builder()
+                      .content(
+                          List.of(
+                              TextBlock.builder().text("opaq").build(),
+                              ThinkingBlock.builder().thinking("sk-half").build()))
+                      .usage(ChatUsage.builder().inputTokens(10).outputTokens(5).build())
+                      .finishReason(limitReason)
+                      .build()));
+      var controlled =
+          new ControlledModel(delegate, ModelMode.MOCK, runtime, new AtomicReference<>());
+      controlled.stream(List.of(), List.of(), GenerateOptions.builder().build()).collectList().block();
+
+      String content = publisher.joined("MODEL_DELTA");
+      String reasoning = publisher.joined("MODEL_REASONING_DELTA");
+      assertFalse(content.contains("opaq"), "限长结束(" + limitReason + ")正文半截不透明 Bearer 泄露：" + content);
+      assertTrue(content.contains("***MASKED***"), content);
+      assertFalse(reasoning.contains("sk-half"), "限长结束(" + limitReason + ")思考链半截 api_key 泄露：" + reasoning);
+      assertTrue(reasoning.contains("***MASKED***"), reasoning);
+
+      var payload = capturedPayload.get();
+      assertNotNull(payload, "模型快照必须已记录");
+      assertFalse(payload.responseContent().contains("opaq"), "快照正文同样不得残留半截凭据：" + payload.responseContent());
+      assertFalse(payload.reasoningContent().contains("sk-half"), "快照思考链同样不得残留半截凭据：" + payload.reasoningContent());
+    }
+
+    // 2. 自然结束（finishReason=stop）：末尾裸主机+端口 URL 与普通 token 计数必须原样保留。
+    CapturingPublisher naturalPublisher = new CapturingPublisher();
+    var naturalPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+    ControlledAgentRuntime naturalRuntime = runtimeWithTrace(naturalPublisher, naturalPayload);
+    Model naturalDelegate =
+        stubModel(
+            Flux.just(
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder().text("服务已启动于 http://localhost:8088").build(),
+                            ThinkingBlock.builder().thinking("本次统计 token: 100").build()))
+                    .usage(ChatUsage.builder().inputTokens(10).outputTokens(5).build())
+                    .finishReason("stop")
+                    .build()));
+    var naturalControlled =
+        new ControlledModel(naturalDelegate, ModelMode.MOCK, naturalRuntime, new AtomicReference<>());
+    naturalControlled
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .collectList()
+        .block();
+
+    assertEquals("服务已启动于 http://localhost:8088", naturalPublisher.joined("MODEL_DELTA"));
+    assertEquals("本次统计 token: 100", naturalPublisher.joined("MODEL_REASONING_DELTA"));
+    assertEquals("服务已启动于 http://localhost:8088", naturalPayload.get().responseContent());
+    assertEquals("本次统计 token: 100", naturalPayload.get().reasoningContent());
+  }
+
+  @Test
+  void controlledModelErrorAndCancellationBothFlushViaTruncatedFinalMask() {
+    // 1. 失败中断（onError）
+    CapturingPublisher errorPublisher = new CapturingPublisher();
+    ControlledAgentRuntime errorRuntime = runtimeWithTrace(errorPublisher, new AtomicReference<>());
+    Model errorDelegate =
+        stubModel(
+            Flux.concat(
+                Flux.just(
+                    ChatResponse.builder()
+                        .content(
+                            List.of(
+                                TextBlock.builder().text("Authorization: Bearer errPart").build(),
+                                ThinkingBlock.builder()
+                                    .thinking("连接串 postgres://app:errPass")
+                                    .build()))
+                        .build()),
+                Flux.error(new IllegalStateException("upstream reset"))));
+    var errorControlled =
+        new ControlledModel(errorDelegate, ModelMode.MOCK, errorRuntime, new AtomicReference<>());
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            errorControlled
+                .stream(List.of(), List.of(), GenerateOptions.builder().build())
+                .collectList()
+                .block());
+    assertFalse(errorPublisher.joined("MODEL_DELTA").contains("errPart"));
+    assertTrue(errorPublisher.joined("MODEL_DELTA").contains("***MASKED***"));
+    assertFalse(errorPublisher.joined("MODEL_REASONING_DELTA").contains("errPass"));
+    assertTrue(errorPublisher.joined("MODEL_REASONING_DELTA").contains("***MASKED***"));
+
+    // 2. 下游取消（doOnCancel via take(1)）
+    CapturingPublisher cancelPublisher = new CapturingPublisher();
+    ControlledAgentRuntime cancelRuntime = runtimeWithTrace(cancelPublisher, new AtomicReference<>());
+    Model cancelDelegate =
+        stubModel(
+            Flux.just(
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder().text("配置：\n{\"password\"\n:\n\"cancelSec").build(),
+                            ThinkingBlock.builder().thinking("{\"api_key\": \"sk-cancel").build()))
+                    .build(),
+                ChatResponse.builder()
+                    .content(List.of(TextBlock.builder().text("不会到达的第二帧").build()))
+                    .build()));
+    var cancelControlled =
+        new ControlledModel(cancelDelegate, ModelMode.MOCK, cancelRuntime, new AtomicReference<>());
+    cancelControlled
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .take(1)
+        .collectList()
+        .block();
+    assertFalse(cancelPublisher.joined("MODEL_DELTA").contains("cancelSec"));
+    assertTrue(cancelPublisher.joined("MODEL_DELTA").contains("***MASKED***"));
+    assertFalse(cancelPublisher.joined("MODEL_REASONING_DELTA").contains("sk-cancel"));
+    assertTrue(cancelPublisher.joined("MODEL_REASONING_DELTA").contains("***MASKED***"));
+  }
+
+  private static Model stubModel(Flux<ChatResponse> stream) {
+    return new Model() {
+      @Override
+      public Flux<ChatResponse> stream(
+          List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+        return stream;
+      }
+
+      @Override
+      public String getModelName() {
+        return "mock-stream";
+      }
+
+      @Override
+      public int getContextWindowSize() {
+        return 0;
+      }
+    };
+  }
+
+  private static ControlledAgentRuntime runtimeWithTrace(
+      ApplicationEventPublisher publisher,
+      AtomicReference<GlassboxModels.ModelCallPayload> capturedPayload) {
+    RunControl control = mock(RunControl.class);
+    when(control.lastModelCallId(any())).thenReturn(UUID.randomUUID());
+    when(control.budgetPolicy(any(), any()))
+        .thenReturn(new dev.workbench.framework.control.AgentBudgetPolicy(1, null, null, Map.of(), null));
+    RunEvidenceRecordService evidence = mock(RunEvidenceRecordService.class);
+    when(evidence.eventRefForAgent(any(), any()))
+        .thenReturn(dev.workbench.domain.EventRef.empty());
+    GlassboxTraceStore traces =
+        new GlassboxTraceStore(null, null, null, null) {
+          @Override
+          public void recordModelPayload(
+              String runId, String callId, GlassboxModels.ModelCallPayload payload) {
+            capturedPayload.set(payload);
+          }
+        };
+    var runtime =
+        new ControlledAgentRuntime(
+            UUID.randomUUID().toString(),
+            UUID.randomUUID().toString(),
+            control,
+            mock(AgentAssemblyRecordService.class),
+            mock(RunStateStore.class),
+            evidence,
+            null,
+            null,
+            null,
+            traces,
+            "zh-CN",
+            null,
+            publisher,
+            null);
+    runtime.assemblyResolved(
+        new AgentAssemblySnapshot.Components(
+            new AgentDefinitionRef("text-analysis", 1),
+            "a".repeat(64),
+            new dev.workbench.framework.model.AgentModelRegistry.ModelReference(
+                ModelMode.MOCK, ModelKind.MOCK.code(), 1),
+            null,
+            0,
+            List.of(),
+            Map.of(),
+            new AgentAssemblySnapshot.Authorization(1, AgentRole.ANALYST, 1, null, 0, null, false),
+            new AgentAssemblySnapshot.Input("b".repeat(64), List.of()),
+            List.of(),
+            List.of()));
+    return runtime;
   }
 
   private void assertNoLeak(List<String> contentFrames, List<String> reasoningFrames) {

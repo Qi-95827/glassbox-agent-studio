@@ -48,6 +48,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   private dev.workbench.framework.trace.StreamingMasker reasoningMasker =
       new dev.workbench.framework.trace.StreamingMasker();
+  private String lastFinishReason;
 
   ControlledAgentRuntime(
       String runId,
@@ -225,9 +226,10 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public void beforeModel(ModelKind model) {
-    // 每次模型调用都是新的流：清空上一轮的滞留窗口，避免跨调用拼接出「拼错的」敏感串。
+    // 每次模型调用都是新的流：清空上一轮的滞留窗口与结束原因，避免跨调用拼接出「拼错的」敏感串或错用上一轮截断标记。
     contentMasker = new dev.workbench.framework.trace.StreamingMasker();
     reasoningMasker = new dev.workbench.framework.trace.StreamingMasker();
+    lastFinishReason = null;
     if (assembly == null || ModelKind.forMode(assembly.model().mode()) != model)
       throw new IllegalStateException("模型来源与本次 Agent 装配记录不一致。");
     if (costs != null) costReservation = costs.reserve(runId, model);
@@ -242,10 +244,16 @@ final class ControlledAgentRuntime implements AgentRuntime {
     }
   }
 
+  @Override
+  public synchronized void modelFinishReason(String finishReason) {
+    this.lastFinishReason = finishReason;
+  }
+
   /** 失败/取消时释放预留；先在同一把锁内重查，避免与正常结算并发造成双扣或漏放。 */
   @Override
   public synchronized void modelFailed() {
     // 失败/取消也要冲刷：已到达的尾部同样不能以半截敏感串的形式留在滞留窗口里。
+    lastFinishReason = null;
     flushStreamMaskers(true);
     if (costs != null && costReservation != CostService.Reservation.NONE) {
       costs.cancel(costReservation);
@@ -255,7 +263,10 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public synchronized void modelResult(Integer input, Integer output) {
-    flushStreamMaskers(false);
+    boolean truncated =
+        dev.workbench.framework.trace.SensitiveDataMasker.isTruncatedFinishReason(lastFinishReason);
+    lastFinishReason = null;
+    flushStreamMaskers(truncated);
     control.finishModel(agentId, InvocationStatus.COMPLETED, input, output, null);
     CostService.Settlement settlement = CostService.Settlement.NONE;
     if (costs != null) {

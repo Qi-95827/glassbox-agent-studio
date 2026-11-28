@@ -1,5 +1,7 @@
 package dev.workbench.framework.trace;
 
+import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -32,25 +34,23 @@ public final class SensitiveDataMasker {
   private static final String KV_VALUE_CHARS = "[^\"'\\s,;}\\]。，；！？、）》」』】]";
 
   /**
-   * 流式切点检测：与完整脱敏共享同一形态集合（PEM/JWT/AWS/Google/GitHub/GitLab/Bearer/sk-/URL/KV），
-   * 并使用与整段规则等价的跨行空白（{@code \s}）与引号形态，保证单行/多行格式化凭据在任意跨帧切点都不会先放走前缀。
+   * 流式切点检测规则集：与 {@link #mask(String)} 的 10 类规则严格一一对应、彼此独立扫描，
+   * 彻底消除单一交替正则下「先命中 Authorization KV 吃掉 Bearer 前缀、导致后续不透明令牌漏检」的重叠盲区。
    */
-  static final Pattern STREAM_PARTIAL =
-      Pattern.compile(
-          "(?s)sk-[A-Za-z0-9_-]*"
-              + "|(?i:bearer)\\s+[A-Za-z0-9._~+/=-]*"
-              + "|eyJ[A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]*){0,2}"
-              + "|(?i:\"?'?"
-              + KV_KEY
-              + "'?\"?)(?:\\s*[:=]\\s*\"?'?"
-              + KV_VALUE_CHARS
-              + "*|\\s+)"
-              + "|-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\\s\\S]*)"
-              + "|(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]*"
-              + "|(?<![A-Za-z0-9])AIza[A-Za-z0-9_-]*"
-              + "|(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9_]*|github_pat_[A-Za-z0-9_]*)"
-              + "|(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]*"
-              + "|://[^/\\s:@'\"]+(?::[^/\\s@'\"]*@?)?");
+  static final List<Pattern> STREAM_PARTIAL_PATTERNS =
+      List.of(
+          Pattern.compile(
+              "-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\\s\\S]*)"),
+          Pattern.compile("eyJ[A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]*){0,2}"),
+          Pattern.compile("(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]*"),
+          Pattern.compile("(?<![A-Za-z0-9])AIza[A-Za-z0-9_-]*"),
+          Pattern.compile("(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9_]*|github_pat_[A-Za-z0-9_]*)"),
+          Pattern.compile("(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]*"),
+          Pattern.compile("(?i:bearer)\\s+[A-Za-z0-9._~+/=-]*"),
+          Pattern.compile("sk-[A-Za-z0-9_-]*"),
+          Pattern.compile("://[^/\\s:@'\"]+(?::[^/\\s@'\"]*@?)?"),
+          Pattern.compile(
+              "(?i:\"?'?" + KV_KEY + "'?\"?)(?:\\s*[:=]\\s*\"?'?" + KV_VALUE_CHARS + "*|\\s+)"));
 
   private static final Pattern UNCLOSED_PEM =
       Pattern.compile("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*");
@@ -82,6 +82,12 @@ public final class SensitiveDataMasker {
   /** 对常见密钥、Bearer Token、Cookie、URL 凭据和敏感键值对进行掩码。 */
   public static String mask(String input) {
     if (input == null || input.isEmpty()) return input;
+    String value = maskNonKvTokens(input);
+    value = SECRET_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***");
+    return value;
+  }
+
+  private static String maskNonKvTokens(String input) {
     String value = PEM_PRIVATE_KEY.matcher(input).replaceAll("***MASKED-PRIVATE-KEY***");
     value = JWT.matcher(value).replaceAll("***MASKED-TOKEN***");
     value = AWS_ACCESS_KEY.matcher(value).replaceAll("***MASKED-KEY***");
@@ -91,14 +97,46 @@ public final class SensitiveDataMasker {
     value = BEARER_PATTERN.matcher(value).replaceAll("$1***MASKED***");
     value = API_KEY_PATTERN.matcher(value).replaceAll("sk-***MASKED***");
     value = URL_CREDENTIALS.matcher(value).replaceAll("***MASKED***@");
-    value = SECRET_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***");
     return value;
+  }
+
+  /**
+   * 判断供应商返回的 {@code finishReason} 是否属于输出上限/策略截断等非自然结束。
+   *
+   * <p>采用自然结束白名单（空值或 {@code stop/end_turn/stop_sequence/tool_calls/tool_use/function_call}）：
+   * 凡 {@code length/max_tokens/content_filter/incomplete} 或其他未知非自然原因，均按截断收尾做半截凭据兜底。
+   */
+  public static boolean isTruncatedFinishReason(String finishReason) {
+    if (finishReason == null || finishReason.isBlank()) return false;
+    String normalized = finishReason.trim().toLowerCase(Locale.ROOT);
+    return switch (normalized) {
+      case "stop",
+          "end_turn",
+          "stop_sequence",
+          "tool_calls",
+          "tool_use",
+          "function_call",
+          "finish_reason_stop",
+          "completed" -> false;
+      default -> true;
+    };
   }
 
   /** 先脱敏再按字符上限截断，避免单次大文件或长上下文拖垮存储与前端渲染。 */
   public static TruncatedText maskAndTruncate(String input, int maxChars) {
+    return truncate(input == null ? null : mask(input), maxChars);
+  }
+
+  /** 响应快照脱敏截断：按是否因输出上限截断分别走 {@link #maskFinal} 或 {@link #maskCompleted}，与 SSE 收尾严格对齐。 */
+  public static TruncatedText maskResponseAndTruncate(
+      String input, int maxChars, boolean truncatedByModel) {
     if (input == null) return new TruncatedText(null, false);
-    String masked = mask(input);
+    String masked = truncatedByModel ? maskFinal(input) : maskCompleted(input);
+    return truncate(masked, maxChars);
+  }
+
+  private static TruncatedText truncate(String masked, int maxChars) {
+    if (masked == null) return new TruncatedText(null, false);
     int limit = Math.max(256, maxChars);
     if (masked.length() <= limit) return new TruncatedText(masked, false);
     return new TruncatedText(masked.substring(0, limit) + "\n...[已截断]", true);
@@ -119,17 +157,17 @@ public final class SensitiveDataMasker {
   }
 
   /**
-   * 失败/中断收尾：先做完整匹配脱敏，再兜底掩码残留在末尾的未闭合敏感块。
-   *
-   * <p>流被取消时可能只收到 `-----BEGIN ... PRIVATE KEY-----` 或半截 `"api_key": "sk-...`；
-   * 这些无法被完整匹配命中，必须在这里整体替换，绝不原样发到 SSE。
+   * 失败/取消/输出限长收尾：先做非 KV 完整令牌脱敏，再执行截断令牌兜底（避免 {@code Authorization: Bearer opaq}
+   * 被 KV 规则提前吃掉 {@code Bearer} 导致半截不透明令牌外泄），随后执行完整/截断 KV、截断 URL 凭据与未闭合 PEM 掩码。
    */
   public static String maskFinal(String input) {
     if (input == null || input.isEmpty()) return input;
-    String value = maskCompleted(input);
+    String value = maskNonKvTokens(input);
     value = TRUNCATED_TOKEN.matcher(value).replaceAll("$1***MASKED***");
+    value = SECRET_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***");
     value = TRUNCATED_KV.matcher(value).replaceAll("$1***MASKED***");
     value = TRUNCATED_URL_CREDENTIALS.matcher(value).replaceAll("://***MASKED***");
+    value = UNCLOSED_PEM.matcher(value).replaceAll("***MASKED-PRIVATE-KEY***");
     return value;
   }
 
