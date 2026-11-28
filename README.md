@@ -2,18 +2,19 @@
 
 # Glass-Box Agent Studio
 
-**An Open-Source Glass-Box AI Framework Visualization, Interactive Debugging & Multi-Agent Engineering Workbench**
+**Open the Black Box of AI Agents: A Glass-Box Visual Learning & Debugging Studio for Understanding Every Step of Multi-Agent Workflows**
 
 **English** | [简体中文](./README.zh-CN.md)
 
+[![CI](https://github.com/Qi-95827/glassbox-agent-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/Qi-95827/glassbox-agent-studio/actions/workflows/ci.yml)
 [![Java 21](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/)
 [![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
-[![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
+[![React 19 + TS](https://img.shields.io/badge/React%2019-TypeScript-61dafb.svg)](https://react.dev/)
 [![AgentScope](https://img.shields.io/badge/AgentScope-Java%202.0-blue.svg)](https://github.com/agentscope-ai/agentscope-java)
-[![Tests](https://img.shields.io/badge/Tests-778%20Backend%20%7C%20169%20Frontend-success.svg)](#3-run-full-verification-suite)
+[![Tests](https://img.shields.io/badge/Tests-944%20Backend%20%7C%20207%20Frontend-success.svg)](#option-c-manual-local-setup--verification)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-*Chrome DevTools + Flink Web UI + Visual DAG Studio for AI Agent Frameworks — watch live ReAct streaming & reasoning traces, inspect 4-tier context compaction & Hybrid RAG funnels, compose multi-agent DAGs with conflict detection, fork runs from checkpoints, light up live C4 Architecture X-Rays, and interoperate via OpenTelemetry.*
+*New to AI Agents and wondering how a goal turns into a multi-step DAG, how each agent is assembled, what prompt is really sent to the LLM, why a tool call passes or gets blocked, and how one agent safely hands off work to the next? Here, every single step is **visible to the naked eye, pausable, and auditable** — with built-in **zero-API-key teaching playbooks**.*
 
 </div>
 
@@ -21,159 +22,85 @@
 
 ## Why This Project Exists
 
-Most AI coding agent frameworks run as a **black box**: you type a prompt, text streams by, and you have no clear visibility into:
-- How each agent was assembled (role, skills, model, and which tools were **explicitly stripped away** by permission boundaries);
-- What exact `SYSTEM / USER / TOOL` messages and tool schemas were sent to the LLM;
-- Why a tool call was **allowed (`PASS`)** or **blocked (`DENY`)** by security gates;
-- How upstream agents pass evidence to downstream agents without hallucinating or leaking stale retries;
-- Why a run failed, slowed down, or spent unexpected tokens.
+For beginners and developers alike, most AI agent frameworks behave like a **black box**: you type a prompt, text streams past, and the real engineering mechanics stay hidden:
 
-**Glass-Box Agent Studio** solves this both as a **usable local engineering workbench** (with isolated Git worktrees, human-in-the-loop review, and Bring-Your-Own-Key LLM support) and as a **hands-on learning platform** where every internal mechanism of a production multi-agent system is exposed visually — and even runnable **without an API key** via built-in teaching playbooks.
+- **How is work planned?** How does a high-level goal become a multi-node DAG with dependencies, parallel branches, and human checkpoints?
+- **How is each agent assembled?** Which role, skills, and model are bound — and which risky tools were **explicitly stripped** by permission boundaries?
+- **What actually goes to the LLM?** What exact `SYSTEM / USER / TOOL` messages, tool JSON schemas, and context compaction steps happen behind the scenes?
+- **How do agents hand off without hallucinating?** What verified evidence moves from an upstream node to a downstream node, and how are stale retries blocked?
+- **What enforces safety at runtime?** Which security gates inspect every tool invocation, and why was a call marked `PASS` or `DENY`?
 
----
-
-## Visual Tour & What Is Visualized
-
-| Module | What Is Visualized | Key Learning Value |
-| :--- | :--- | :--- |
-| **1. Workbench Home & Playbooks** | Multi-entry task composer, built-in key-free teaching playbooks, dual-layer status (`TaskStatus` × `RunStatus`) | Understand task routing, planning vs. execution, and human delivery lifecycle |
-| **2. Interactive DAG Execution Graph** | Live React Flow DAG, node status & duration, node breakpoints, lightweight inspector + full-screen Glass-Box modal | Learn DAG dependency scheduling, step-by-step breakpoints, and state projection |
-| **3. Structured Handoff Envelope** | Upstream conclusion, artifacts, decisions, open risks, **transparent `PASS/SKIP/DENY` validation rules** | Learn how to make multi-agent handoffs verifiable and audit-safe |
-| **4. Full LLM I/O Inspector** | Role-colored `SYSTEM / USER / ASSISTANT / TOOL` messages, injected tool JSON schemas, raw responses & `tool_calls` | Master real-world prompt assembly, context management, and tool-calling loops |
-| **5. Agent Assembly & ToolGateway Pipeline** | Tool permission funnel (granted vs. stripped tools) + horizontal 6-gate `ToolGateway` pipeline & Gate 5.5 HITL approvals | Learn least-privilege sandboxing, path whitelisting, loop guards, and optimistic locks |
-| **6. Live ReAct Swimlane & Context Microscope** | Live streaming tokens + separate reasoning trace persistence, turn-by-turn ReAct swimlane, 6-layer context water-level chart & L1–L3 compaction diff with artifact reader | Inspect thought-action-observation loops, multi-tier context compaction, and artifact offload/readback |
-| **7. RAG/Memory X-Ray & Visual Graph Composer** | Hybrid RAG funnel (BM25 + pgvector → RRF + dropped reasons), 3-layer memory & chunk viewer, and interactive `@xyflow/react` plan composer with live conflict highlighting & save-to-run | Master hybrid retrieval ranking, layered memory isolation, write-set disjointness & bounded reflection |
-| **8. Execution Timeline, Checkpoint Fork & Live X-Ray** | 7-span Gantt timeline, Checkpoint state inspector + What-If run forking & side-by-side run diff, plus live C4 Architecture X-Ray replay tied to real runs | Learn Flink-style checkpoint debugging, counterfactual branching, and live framework telemetry |
-| **9. Monitoring, Diagnostics, Open Trace & Eval Flywheel** | Grafana-style SVG dashboard, 5-step auto-diagnostics, OTel/Glass-Box export, read-only external agent trace ingest, and one-click run distillation into Eval Lab v2 | Learn LLM observability, OpenTelemetry interop, and continuous trace-to-eval regression loops |
-| **10. BYOK Model Manager & Whole-Workspace Scope** | Multi-provider OpenAI-compatible presets (AES-256-GCM encrypted), 3-mode whole-workspace (`.`) scope bar, and one-click admin repo auto-grant | Learn secure credential hygiene, SSRF protection, and ergonomic sandboxed workspace onboarding |
+**Glass-Box Agent Studio** has one clear goal: **turn a production multi-agent engine into a transparent glass box** — serving both as a hands-on learning studio where beginners can inspect every internal mechanism without an API key, and as a usable local engineering workbench (isolated Git worktrees, encrypted BYOK model support, and human-in-the-loop delivery).
 
 ---
 
-### 1. Workbench Home & Key-Free Teaching Playbooks
+## Follow One Real Task: See Every Step of a Multi-Agent Workflow
 
-Launch tasks across General, Requirements, Design, Code, Test, and Simulated Bug entries — switch seamlessly between **English / 中文** in the top bar, or click one of the **3 key-free teaching playbooks** to explore multi-agent collaboration, breakpoint debugging, and `ToolGateway` security boundaries immediately.
+Even without an API key, these **6 core views** walk you through the entire lifecycle from prompt to verified delivery:
 
-![Workbench Home (English)](docs/images/readme/en-01-workbench-home.png)
+### 1. Zero-Friction Start: Key-Free Teaching Playbooks
+Launch tasks across General, Requirements, Design, Code, Test, and Simulated Bug entries — or click any of the **3 built-in key-free teaching playbooks** (multi-perspective handoff, breakpoint stepping, and `ToolGateway` safety limits) to watch a full multi-agent run immediately.
 
-**What you can learn here:**
-- **Dual-Layer Status Modeling (`TaskStatus` vs. `RunStatus`)**: Why an immutable agent execution status (`RunStatus`, e.g., `BLOCKED` awaiting review) should be separated from the user-facing delivery lifecycle (`TaskStatus`, e.g., `DELIVERED` once committed in Git).
-- **Candidate Plan Review**: How to generate a structured DAG candidate first and let humans adjust nodes, models, file scopes, and budgets before execution.
+![Workbench Home & Key-Free Playbooks](docs/images/readme/en-01-workbench-home.png)
 
----
+### 2. Big Picture: Interactive Multi-Agent DAG & Breakpoints
+Every run renders as a live React Flow DAG showing upstream/downstream dependencies, node status, and latency. Click any node to open a clean summary drawer with 4 direct Glass-Box entries, or toggle a **red breakpoint** to pause execution before a node runs and inspect its upstream inputs.
 
-### 2. Multi-Agent DAG Execution Flow & Breakpoint Debugging
+![Multi-Agent DAG Execution Flow](docs/images/readme/en-02-dag-flow.png)
 
-Every task executes as a live React Flow DAG. Clicking any node opens a clean right-side overview drawer with 4 direct entry cards into the wide-screen Glass-Box inspector modal, plus one-click **node breakpoints** to pause execution before a node starts.
+### 3. Verifiable Handoffs: Structured Envelopes & Transparent "Why PASS?" Rules
+No opaque string relays. Every handoff between agents is captured as a **structured envelope** showing the upstream conclusion and 4 platform verification checks (`DEPENDENCY_MATCH`, `ATTEMPT_IDENTITY`, `TOOL_EVIDENCE`, `ACCEPTED_RECEIPT`) — expand **"How PASS is determined"** to learn exactly why each check passed or skipped.
 
-![DAG Execution Flow (English)](docs/images/readme/en-02-dag-flow.png)
+![Structured Handoff Envelope & PASS Rules](docs/images/readme/en-03-glassbox-handoff.png)
 
-**What you can learn here:**
-- **Event-Driven Projection**: How backend execution events (`ExecutionGraphProjector`) are projected into a deterministic frontend DAG without coupling UI state to raw engine internals.
-- **Controlled Execution**: How breakpoints, cancellation signals, and bounded waits work safely across concurrent workflow threads.
+### 4. Raw LLM Transparency: Full Prompt, `tool_calls` & ReAct Swimlane
+Open the wide-screen Glass-Box modal to inspect every role-colored `SYSTEM / USER / ASSISTANT / TOOL` message, injected tool JSON schemas, raw responses, and `tool_calls` arguments — alongside a turn-by-turn **ReAct live swimlane**, separated streaming reasoning traces, and 6-layer context compaction diffs, all redacted before persistence.
 
----
+![Full LLM I/O Inspector](docs/images/readme/en-04-glassbox-llm.png)
 
-### 3. Structured Handoff Envelope & Transparent "Why PASS?" Rules
+### 5. Permission Boundaries: Agent Assembly Blueprint & Tool Funnel
+See exactly how each node's agent was constructed: role definition, version, model, bound skills, context sources, and the platform-enforced **Tool Permission Funnel** showing both granted tools and tools **explicitly removed by security boundaries** (across built-in workspace tools and external MCP tools), backed at runtime by 6 `ToolGateway` security gates + Gate 5.5 HITL approval.
 
-Instead of opaque free-text relays between agents, every handoff is inspected as a structured envelope showing the upstream conclusion, involved files, key decisions, open risks, and platform verification checks — with an expandable **"How PASS is determined"** rule guide explaining **why** each check passed or skipped.
+![Agent Assembly Blueprint & Tool Permission Funnel](docs/images/readme/en-05-glassbox-assembly.png)
 
-![Glass-Box Handoff Envelope (English)](docs/images/readme/en-03-glassbox-handoff.png)
+### 6. System-Wide Telemetry: Live Architecture X-Ray
+Switch **Architecture → Live X-Ray** and bind any real run to light up the exact backend modules traversed during execution — complete with real call counts, latency, step-by-step replay scrubbing, and deep links back to the exact Glass-Box evidence tab.
 
-**What you can learn here:**
-- **Anti-Hallucination Handoffs**: How the platform enforces `DEPENDENCY_MATCH`, `ATTEMPT_IDENTITY`, `TOOL_EVIDENCE`, and `ACCEPTED_RECEIPT` so downstream agents only receive verified outputs from direct upstream DAG dependencies.
-- **Deterministic Extraction**: Inspect `StructuredHandoffExtractor.java` to see how bilingual structured summaries and evidence pointers are extracted from agent outputs.
-
----
-
-### 4. Full LLM I/O Trace (Messages, Tool Schemas & `tool_calls`)
-
-See the exact masked payload sent to the LLM (`SYSTEM`, `USER`, `ASSISTANT`, `TOOL`), every injected tool JSON schema, token counts, latency, and the model's raw response or `tool_calls` decisions.
-
-![Glass-Box LLM I/O (English)](docs/images/readme/en-04-glassbox-llm.png)
-
-**What you can learn here:**
-- **Externalized Bilingual Prompt Engineering**: All agent personas, skills, planning prompts, and tool descriptions live as clean external resources under `backend/src/main/resources/prompts/` (Chinese) and `prompts/en/` (English).
-- **Data Masking at Capture Time**: Inspect `ControlledModel.java` and `SensitiveDataMasker.java` to see how 64 KB truncation and secret redaction happen before payloads hit the database.
+![Live Architecture X-Ray](docs/images/readme/en-09-architecture-xray.png)
 
 ---
 
-### 5. Agent Assembly Blueprint & Tool Permission Funnel
+## What Is Built Today (Engineering Summary)
 
-Understand **how an agent is born** for each node: its role definition, bound skills, model, context sources, and the **Tool Permission Funnel** showing both granted tools and tools explicitly stripped by platform security boundaries (e.g., removing `WORKSPACE_WRITE` from read-only review nodes).
+Beyond the 6 core learning views above, the current release completes the **V1–V6 Glass-Box visualization suite and production hardening** — backed 100% by persisted records and live SSE frames (zero mock telemetry):
 
-![Glass-Box Assembly Blueprint (English)](docs/images/readme/en-05-glassbox-assembly.png)
-
-**What you can learn here:**
-- **Least-Privilege Agent Sandboxing**: Even if a prompt tries to trick a reviewer agent into editing files, the write tool is never even injected into its runtime — and `ToolGateway` enforces 6 runtime security gates (`OWNERSHIP_AND_SCOPE`, `TOOL_REGISTRY_GRANT`, `BUDGET_AND_LOOP`, `PATH_WHITELIST`, `ARGUMENT_SCHEMA`, `CANCEL_STATE`).
-
----
-
-### 6. Grafana-Style Fine-Grained Monitoring Dashboard
-
-Monitor every run, node, model, and tool across `24h / 7d / 30d / All` time windows with zero heavy charting dependencies (pure React SVG): KPI cards with success-rate gauge, stacked/line/area time-series charts, status/model/tool donut charts, slow-node rankings, and `ToolGateway` interception analytics.
-
-![Monitoring Dashboard (English)](docs/images/readme/en-06-monitoring-dashboard.png)
-
-**What you can learn here:**
-- **Practical Agent Observability**: How to aggregate run latency (Avg / P95), token consumption, failure rates, and security gate denials from relational audit tables (`MonitoringDashboardService.java`).
+| Pillar | What Works Today |
+| :--- | :--- |
+| **Unified DAG Workflow Engine** | Single-track `WorkflowScheduler` DAG engine (legacy direct track retired); interactive visual plan composer with live write-conflict & cycle highlighting, bounded reflection loops (`maxRevisions`), non-blocking breakpoints, and **post-delivery multi-round task iteration (`run_iterations`)** |
+| **Context & Hybrid RAG Microscope** | 4-tier context compaction (Query-Aware L1 artifact offload/readback, L2 structured anchors, L3 paired-tool hard guard) + 6-layer SVG water-level chart; Hybrid RAG (BM25 with real TF & CJK/ASCII tokenization + `pgvector` → RRF funnel) and 3-layer memory governance with version-guarded backfill |
+| **Timeline, Forking & Open Trace** | 7-span Gantt timeline, frozen Checkpoint inspector, What-If run forking & side-by-side run diff; redacted **OpenTelemetry / Glass-Box trace export**, read-only external Python/Java agent trace ingestion, and one-click run distillation into Eval Lab v2 regression cases |
+| **Observability, Triage & Eval Lab** | Grafana-style pure-SVG monitoring dashboard with **per-task focus filtering**, 5-step automated fault diagnostics with deep links, and Eval Lab v2 six-axis radar with attributable A/B comparison |
+| **Security Sandbox & BYOK** | Multi-provider BYOK (DeepSeek / OpenAI / Qwen / GLM / SiliconFlow / custom OpenAI-compatible) with AES-256-GCM encryption & SSRF guard; full-channel streaming + **JSON-leaf-level secret masking with structure-preserving truncation**; whole-workspace (`.`) 3-mode scope bar, Git worktree isolation, and per-tool MCP admission funnel |
+| **Engineering & Quality Foundation** | 64-stripe per-run locking (`RunLockRegistry`), transactional scheduled cold-data TTL retention, **7 ArchUnit architecture rules** (cycle-free, pure `domain/framework`, field-level zero `@Lob`, unified outbound HTTP), TypeScript frontend contract base, multi-stage `Dockerfile`, and GitHub Actions CI |
 
 ---
 
-### 7. 5-Step Automated Fault Diagnostics & Deep-Link Triage
+## Roadmap: From "Understanding Agents" to "Building Your Own" (V7 Vision)
 
-When a run fails, blocks, triggers security gates, or hits slow LLM calls, click **"One-Click Triage"** to open a guided 5-step diagnostics drawer (`Terminal Status → ToolGateway → LLM I/O → Handoff & Assembly → Workspace Git`). Every finding includes a direct action link that jumps straight to the target node and auto-opens the exact Glass-Box modal tab.
-
-![Run Diagnostics Drawer (English)](docs/images/readme/en-07-diagnostics.png)
-
-**What you can learn here:**
-- **Root-Cause Triage Automation**: Inspect `RunDiagnosticsService.java` to learn how to synthesize multi-table execution evidence into actionable, locale-aware engineering diagnostics.
-
----
-
-### 8. BYOK (Bring Your Own Key) Model & Encrypted Credential Management
-
-Configure your own API keys directly in **Settings → Models & API Keys (BYOK)** with built-in presets for **DeepSeek, OpenAI, Qwen (DashScope), Zhipu GLM, SiliconFlow, and any OpenAI-compatible endpoint**. Test connectivity in one click and optionally set reference pricing for local budget estimation.
-
-![BYOK Settings (English)](docs/images/readme/en-08-byok-settings.png)
-
-**What you can learn here:**
-- **Production-Grade Secret Hygiene**: `SecretCipher.java` encrypts API keys with **AES-256-GCM** (random 12-byte IV), never returns plaintext keys to the frontend (masked as `sk-****xxxx`), validates Base URLs against SSRF, and enforces per-user ownership isolation.
-
----
-
-### 9. V1–V6 Glass-Box AI Framework Visualization Suite (Latest Release)
-
-Built directly on top of the verified backend runtime (zero mock telemetry — every metric, span, and diff comes from persisted records or live SSE frames):
+Today's release focuses on helping learners **see and understand every detail of how a multi-agent system works**. Our next evolution (**V7**) naturally extends this foundation so users can move from **transparent observers** to **visual builders**:
 
 ```mermaid
 flowchart LR
-    V1["V1 · Live ReAct Swimlane\nStreaming Tokens & CoT\nHorizontal 6-Gate Pipeline"]
-    V2["V2 · Context & RAG X-Ray\n6-Layer Water-Level Chart\nBM25 + pgvector -> RRF"]
-    V3["V3 · Visual Plan Composer\nDrag/Edit DAG & Reflection\nLive Conflict & Save-to-Run"]
-    V4["V4 · Timeline & Time-Travel\n7-Span Gantt Flamegraph\nCheckpoint Fork & Diff"]
-    V5["V5 · Live Architecture X-Ray\nBind Real Run to C4 Map\nStep Replay & Deep-Link"]
-    V6["V6 · Open Trace & Flywheel\nOTel / Glass-Box Export\nExternal Ingest & Eval Case"]
-    V1 --> V2 --> V3 --> V4 --> V5 --> V6
+    A["1. Conversational Prompt Workshop\nClarify goals, duties & boundaries\nAI drafts a structured prompt"] --> B["2. Review & Equip Capabilities\nApprove as a versioned private Agent\nCheck off Skills, built-in or MCP tools"]
+    B --> C["3. Visual Drag-and-Drop Workflow\nWire multiple private Agents on canvas\nInherit handoff checks, gates & budgets"]
+    C --> D["4. Full Glass-Box Execution\nReuse DAG, handoff envelopes, LLM I/O\n& Live X-Ray — see what you built"]
 ```
 
-- **Live Streaming ReAct Swimlane & 6-Gate Pipeline (V1)**: Streams incremental tokens and separated reasoning traces (`reasoning_content`, Flyway H2 `V15` / PG `V5`) over SSE per node, paired with a turn-by-turn ReAct swimlane and horizontal 6-gate `ToolGateway` status lights.
-- **Context Compaction Microscope & Hybrid RAG / Memory X-Ray (V2)**: Pure-SVG 6-layer stacked area chart (`SYSTEM / SKILLS / MEMORY / HANDOFF / TOOL_OUTPUTS / HISTORY`) with L1 (60%), L2 (78%), and L3 (92%) threshold lines, before/after compaction details with one-click authenticated `artifactRef` readback, plus a Hybrid RAG retrieval funnel (`BM25` + `pgvector` → `RRF` + dropped reasons), 3-layer memory manager, and document chunk inspector.
-- **Interactive Multi-Agent Visual Graph Composer (V3)**: Switch plan confirmation into an interactive `@xyflow/react` composer to edit nodes, dependencies, file read/write scopes, and bounded reflection edges (`maxRevisions`) with live write-conflict/cycle highlighting (`POST /api/plans/validate-draft`) and validated save-to-candidate execution (`PUT /api/plan-candidates/{id}/draft`).
-- **Execution Timeline, Checkpoint Inspector & What-If Run Forking (V4)**: 7-span Gantt timeline (`NODE / ATTEMPT / MODEL / TOOL / APPROVAL / COMPACTION / CHECKPOINT`), frozen checkpoint viewer, counterfactual run forking (`POST /api/runs/{id}/forks`, `run_forks` table) without mutating source evidence, and side-by-side run comparison.
-- **Live Architecture X-Ray (V5)**: Toggle the C4 Architecture Map into **Live X-Ray** mode, pick any recent run from the dropdown, watch traversed engines light up with real latency/compaction/gate-block badges, scrub step-by-step replay, and deep-link straight back into the exact Glass-Box tab.
-- **Open Glass-Box Trace Protocol & Eval Flywheel (V6)**: Export deterministic redacted **OpenTelemetry** or Glass-Box JSON (`GET /api/runs/{id}/trace-export`), ingest spans from external standalone Python/Java agents (`POST /api/external-traces/runs`, read-only inspection), and distill any real run into an Eval Lab v2 custom regression case in one click (`POST /api/runs/{id}/eval-cases`).
-- **Ergonomic Workspace Onboarding**: 3-mode persistent authorization bar (`Whole Workspace .` with built-in noise exclusions / `Subdirectories` / `Files`), collapsed low-frequency budgets, and one-click admin local Git repo auto-grant.
+- **AI-Guided Prompt Workshop**: Describe in plain language what role you want to build and its boundaries; the assistant structures it into a clean prompt draft that becomes a reusable, versioned private Agent asset once you approve it.
+- **Checkbox Skill & Tool Equipping**: Grant Skills, built-in sandboxed tools, or custom MCP tools via simple checkboxes while previewing the exact Tool Permission Funnel and risk profile upfront.
+- **Visual Multi-Agent Workflow Studio**: Drag and wire multiple private Agents together on a canvas — automatically inheriting this repository's verified handoff checks, 6-gate `ToolGateway`, Gate 5.5 HITL approvals, budget circuit breakers, and full Glass-Box observability.
 
----
-
-## Full-Stack Bilingual Design: Why Two Externalized Prompt Suites?
-
-Unlike typical web apps, an AI Agent platform has **three distinct language layers**: UI copy, backend validation/diagnostics, and **LLM prompts**.
-
-Because **Glass-Box Agent Studio** is built for **visual transparency and hands-on learning**, we intentionally maintain **two mirrored externalized prompt suites** (`backend/src/main/resources/prompts/` for Chinese and `prompts/en/` for English) instead of forcing everyone to read a single language in the LLM inspector:
-1. **Native Clarity in Glass-Box Learning**: When an English learner opens **Model I/O**, they see idiomatic English system prompts, skill guidelines, and tool JSON schemas; when a Chinese learner switches to `中文`, they see native Chinese prompts — making multi-agent prompt engineering effortless to read and compare.
-2. **Task-Frozen Locale (`tasks.locale`)**: Every task persists its creation locale (`zh-CN` / `en-US`) via Flyway `V6`, driving `PromptResourceLoader.load(locale, path)` with automatic fallback so historical runs remain reproducible.
-3. **Code-First Backend & Frontend i18n**: Security gates (`ToolGateway`), handoff checks, and diagnostics are modeled with semantic codes + Spring `MessageSource` (`Accept-Language`) and zero-dependency React JSON locales — so even historical runs adapt cleanly when you switch UI languages.
+> See the detailed design direction in [V7 Visual Drag-and-Drop Agent Workshop & Workflow Studio (Chinese)](docs/概要设计/V7_可视化拖拽Agent工坊与工作流工作室_演进方向.md).
 
 ---
 
@@ -181,111 +108,85 @@ Because **Glass-Box Agent Studio** is built for **visual transparency and hands-
 
 ### Option A: One-Click Setup with an AI Coding Agent (Recommended)
 
-Using **Claude Code, Cursor, Antigravity, Codex, or Windsurf**? Just copy and paste the prompt below to let your AI agent check prerequisites, build, and launch the workbench automatically:
+Using **Antigravity, Claude Code, Cursor, Codex, or Windsurf**? Paste this prompt to let your assistant verify prerequisites, build, and launch automatically:
 
 ```text
 Please clone and set up the open-source project https://github.com/Qi-95827/glassbox-agent-studio locally:
 1. Verify prerequisites: Java 21, Maven 3.9+, Node.js 20+, and Git (Docker Desktop is optional and only needed for Simulated Bug container verification). Tell me clearly if any tool is missing.
 2. Clone the repository into a clean local folder.
 3. Build the frontend from `frontend/user-workbench/` using `npm ci && npm run build`.
-4. Start the Spring Boot backend from the repository root (where `pom.xml` lives, NOT inside `backend/`) using `mvn spring-boot:run`.
+4. Start the Spring Boot backend from the repository root (where `pom.xml` lives) using `mvn spring-boot:run`.
 5. Wait until Tomcat is listening on `http://127.0.0.1:8088`, confirm it is up, and give me the link to open in my browser. Do NOT create or commit any real API keys.
 ```
 
-### Option B: Manual Setup
+### Option B: Run with Docker
 
-#### Prerequisites
-- **Java 21** & **Maven 3.9+**
-- **Node.js 20+**
-- **Git** (Docker Desktop is *optional*, only needed for Simulated Bug container verification)
+Includes a 3-stage `Dockerfile` (frontend build → Fat JAR → minimal non-root JRE image with mounted data volume):
 
-#### 1. Clone & Build Frontend
 ```bash
 git clone https://github.com/Qi-95827/glassbox-agent-studio.git
 cd glassbox-agent-studio
 
-cd frontend/user-workbench
-npm ci
-npm run build
-cd ../..
+docker build -t glassbox-agent-studio .
+docker run --rm -p 127.0.0.1:8088:8088 -v glassbox-data:/app/data glassbox-agent-studio
 ```
 
-### 2. Start the Backend Server
+> Always bind `-p 127.0.0.1:8088:8088` on the host so the workbench stays loopback-only; `LocalOriginFilter` continues to enforce `Host` and `Origin` validation inside the app.
+
+### Option C: Manual Local Setup & Verification
+
+**Prerequisites**: Java 21 · Maven 3.9+ · Node.js 20+ · Git (Docker Desktop optional)
+
 ```bash
+# 1. Build frontend & start backend
+cd frontend/user-workbench && npm ci && npm run build
+cd ../..
 mvn spring-boot:run
 ```
 
-Open **http://127.0.0.1:8088** in your browser:
-1. Follow the on-screen prompt to initialize your local administrator account.
-2. Try any of the **3 key-free teaching playbooks** immediately with the built-in `mock` model.
-3. To use real LLMs, open **Settings → Models & API Keys (BYOK)**, choose a provider (e.g. DeepSeek / OpenAI / Qwen), paste your own API key, and click **Test Connectivity**.
+Open **http://127.0.0.1:8088**, initialize your local admin account, and try any of the **3 key-free teaching playbooks** immediately — or add your own API key under **Settings → Models & API Keys (BYOK)**.
 
-### 3. Run Full Verification Suite
 ```bash
-# Backend unit, integration, Flyway migration & ArchUnit architecture guard tests (H2 default)
+# 2. Run full verification suite (Baseline: 944 Backend | 207 Frontend | 7 ArchUnit rules)
 mvn test
 
-# Optional: run with real Docker bug sandbox verification (requires Docker Desktop)
-# PowerShell: $env:RUN_DOCKER_TESTS="true"; mvn test
-
-# Optional: start PostgreSQL 16 + pgvector and run PG + HNSW + JPA integration tests
-docker compose up -d
-# PowerShell: $env:WORKBENCH_PG_TEST="true"; mvn "-Dtest=PostgresPgVectorIntegrationTest" test
-
-# Frontend format, lint, unit tests & production build
 cd frontend/user-workbench
 npm run format:check
 npm run lint
+npm run typecheck
 npm test
 npm run build
 ```
 
 ---
 
-## Architecture Overview
+## Architecture & Documentation
 
-Strict layered architecture automatically enforced by **ArchUnit** (`ArchitectureGuardTest`): zero top-level package cycles, pure `domain` & `framework` layers, and strict isolation of `io.agentscope` SDK calls to `infrastructure` / `persistence.agentscope` / `app`.
+Strict layered architecture automatically enforced by **ArchUnit** (`ArchitectureGuardTest`, 7 rules), with mirrored externalized bilingual prompt suites (`prompts/` & `prompts/en/`) so learners can inspect native prompts in either English or Chinese.
 
 ```text
-frontend/user-workbench/   React 19 · Vite 6 · MUI (M3) · React Flow · React Query · React Router
+frontend/user-workbench/   React 19 · TypeScript contracts · Vite 6 · MUI · React Flow · React Query
 backend/src/main/java/
-  dev.workbench.domain          Pure domain enums & value objects (zero persistence/web deps)
-  dev.workbench.framework       Pure contracts, ToolGateway (6.5 gates + HITL), OutboundUrlGuard, SecretCipher
-  dev.workbench.infrastructure  AgentScope Java 2.0.4, BYOK/Embedding adapters, hardened MCP (STDIO/HTTP) & pgvector
-  dev.workbench.modelconnection BYOK encrypted model connections, RAG Embedding settings, probing & usage estimation
-  dev.workbench.persistence     JPA entities (H2 CLOB / PG TEXT), repositories & Flyway migrations
-  dev.workbench.planning        Idea drafting, entry routing, candidate DAG generation, budgets & validation
-  dev.workbench.orchestration   Run lifecycle, parallel DAG scheduler, reflection loops & non-blocking breakpoints
-  dev.workbench.control         4-tier context compaction (Query-Aware L1 offload, L2 anchors) & L1 artifacts
-  dev.workbench.delivery        Execution graph projector, node detail & delivery aggregation
-  dev.workbench.workspace       Authorized file sandbox & Git worktree review/commit/merge
-  dev.workbench.privateagent    Versioned private Agents, Skills & read-only Tool configs
-  dev.workbench.memory          Layered long-term memory (V9) & workspace RAG knowledge base (V13 + pgvector)
-  dev.workbench.bug             Simulated Bug triage & isolated Docker Python container regression
-  dev.workbench.evaluation      Eval Lab v2 (6-dim capabilities, Benchmark Hub, custom datasets & A/B compare)
-  dev.workbench.observability   SSE streaming/cursor events, Grafana-style SVG dashboard, Prometheus metrics & 5-step diagnostics
-  dev.workbench.timeline        Execution timeline, Checkpoint/What-If diff, Live Architecture X-Ray, OTel/External Trace & Eval Flywheel
-  dev.workbench.auth/ownership  Session & async auth context, Cookie CSRF, ADMIN_ONLY guards & per-user resource ownership
+  dev.workbench.domain          Pure domain models (zero persistence/web deps)
+  dev.workbench.framework       Pure contracts, ToolGateway (6.5 gates), JsonLeafMasker, SensitiveDataMasker, OutboundUrlGuard
+  dev.workbench.infrastructure  AgentScope Java 2.0.4, BYOK/Embedding adapters, hardened MCP & pgvector
+  dev.workbench.orchestration   64-stripe RunLockRegistry, unified WorkflowScheduler DAG, reflection, breakpoints & iterations
+  dev.workbench.planning        Idea drafting, candidate DAG generation/validation & safe budgets
+  dev.workbench.control         4-tier context compaction & isolated L1 artifact readback
+  dev.workbench.memory          Layered long-term memory & workspace Hybrid RAG (BM25 + pgvector + RRF)
+  dev.workbench.observability   SSE streaming events, per-task monitoring dashboard, 5-step diagnostics & Prometheus metrics
+  dev.workbench.timeline        Timeline Gantt, Checkpoint/What-If fork & diff, Live Architecture X-Ray, OTel/External Trace & Eval Flywheel
+  dev.workbench.maintenance     Transactional scheduled cold-data TTL retention
 backend/src/main/resources/
-  prompts/                      Externalized Chinese prompts & tool contracts (default)
-  prompts/en/                   Mirrored English prompts & tool contracts (for EN tasks)
-  i18n/                         Spring MessageSource bundles (messages_zh_CN / messages_en_US)
-  db/migration/                 Flyway H2 migrations (V1 ~ V18, 98 tables incl. run_iterations)
-  db/migration-pg/              Flyway PostgreSQL 16 + pgvector migrations (V1 ~ V7)
+  prompts/ & prompts/en/        Mirrored Chinese & English externalized prompts and tool contracts
+  db/migration/                 Flyway H2 migrations (V1 ~ V18)
+  db/migration-pg/              Flyway PostgreSQL 16 + pgvector migrations (V1 ~ V8)
 ```
 
----
-
-## Documentation
-
-- [Documentation Index (Chinese)](docs/README.md)
-- [Product Requirements & Technical Architecture](docs/项目总览_产品需求与技术架构.md)
-- [AI Framework Visualization V0–V6 Final Verification Log](docs/交接/AI框架可视化_V0-V6_最终验收记录.md)
-- [External Agent Trace Ingestion & OTel Export Guide](docs/交接/外部Agent_Trace接入指南_2026-11-26.md)
-- [Security Audit, Top 10 Fixes & Roadmap](docs/项目漏洞审计与后续演进改进文档.md)
-- [Top 10 Security & P0 Fixes Verification Log](docs/交接/Top10安全止血与P0修复_验收记录.md)
-- [PostgreSQL 16 + pgvector Deployment Guide](docs/开发记录/PGVector切换与部署指南.md)
-- [Engineering & Security Coding Standards](docs/开发规范/代码开发规范.md)
+- **[Full Documentation Index (Chinese)](docs/README.md)** · **[Product Requirements & Architecture Overview](docs/项目总览_产品需求与技术架构.md)**
+- **[V7 Roadmap: Visual Drag-and-Drop Agent Workshop & Workflow Studio](docs/概要设计/V7_可视化拖拽Agent工坊与工作流工作室_演进方向.md)**
+- **[V0–V6 Visualization Verification Log](docs/交接/AI框架可视化_V0-V6_最终验收记录.md)** · **[External Agent Trace & OTel Guide](docs/交接/外部Agent_Trace接入指南_2026-11-26.md)**
+- **[PostgreSQL 16 + pgvector Guide](docs/开发记录/PGVector切换与部署指南.md)** · **[Engineering & Security Standards](docs/开发规范/代码开发规范.md)**
 
 ---
 
