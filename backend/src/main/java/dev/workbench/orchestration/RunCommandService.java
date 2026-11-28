@@ -76,19 +76,7 @@ final class RunCommandService {
           || (run.status() == RunStatus.PAUSED && yieldedWithoutWorker)) {
         String reason =
             run.status() == RunStatus.PENDING ? "用户取消了排队中的运行，尚未启动 Agent。" : "用户取消了已暂停（断点让出线程）的运行。";
-        runs.finishStoppedRun(
-            new StopCompletion(
-                java.util.UUID.fromString(id),
-                null,
-                StopCause.USER_CANCELLED,
-                reason,
-                run.rounds(),
-                run.tools(),
-                run.elapsedMs(),
-                null));
-        paused.remove(id);
-        clearControl(id);
-        if (workflows != null) workflows.clearReleasedBreakpoints(id);
+        finishCancelledWithoutWorker(id, run, reason);
       } else {
         cancelled.add(id);
         Object monitor = pauseMonitors.get(id);
@@ -136,13 +124,17 @@ final class RunCommandService {
   }
 
   /**
-   * 断点继续派发被执行器拒绝时的原子回滚：在同一分段锁内恢复 {@code yielded} 标记，
-   * 并保留已有轮次/工具数/耗时与结果，确保用户稍后再次点击继续仍能重新派发。
+   * 断点继续派发被执行器拒绝时的原子回滚：在同一分段锁内先协调派发窗口内已到达的取消请求（此时无工作线程可消费
+   * {@code cancelled}，必须直接进入取消终态），未取消时再恢复 {@code yielded} 标记并保留已有计数。
    */
   void rollbackRejectedResume(String id) {
     synchronized (locks.lockFor(id)) {
       RunSnapshot snapshot = runs.runSnapshot(id);
       if (snapshot.status() != RunStatus.PAUSED) return;
+      if (cancelled.contains(id)) {
+        finishCancelledWithoutWorker(id, snapshot, "用户取消了已暂停（断点让出线程）的运行。");
+        return;
+      }
       yielded.add(id);
       runs.update(
           id,
@@ -153,6 +145,24 @@ final class RunCommandService {
           snapshot.tools(),
           snapshot.elapsedMs());
     }
+  }
+
+  /** 在已持有同一运行分段锁的前提下，直接终结无工作线程承载的排队或断点暂停运行。 */
+  void finishCancelledWithoutWorker(String id, RunSnapshot snapshot, String reason) {
+    runs.finishStoppedRun(
+        new StopCompletion(
+            java.util.UUID.fromString(id),
+            null,
+            StopCause.USER_CANCELLED,
+            reason,
+            snapshot.rounds(),
+            snapshot.tools(),
+            snapshot.elapsedMs(),
+            null));
+    paused.remove(id);
+    yielded.remove(id);
+    clearControl(id);
+    if (workflows != null) workflows.clearReleasedBreakpoints(id);
   }
 
   /**

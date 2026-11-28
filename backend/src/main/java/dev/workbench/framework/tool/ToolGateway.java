@@ -85,7 +85,7 @@ public final class ToolGateway {
         kind,
         toolVersion,
         fingerprint,
-        fingerprint,
+        null,
         effect,
         start,
         summary,
@@ -263,11 +263,9 @@ public final class ToolGateway {
       if (stopped != null) throw stopped;
       boolean actionStarted = false;
       var checks = new ArrayList<GatewayCheck>();
-      // 指纹仅用于防循环查重；玻璃盒轨迹必须记录实际生效的工具参数 JSON（人工改参后记录最终生效版本）。
+      // 指纹仅用于防循环查重；玻璃盒轨迹只记录实际生效的工具参数 JSON（兼容入口未传参数时显式标记未提供，绝不回退为指纹）。
       String traceArgs =
-          argsJson != null && !argsJson.isBlank()
-              ? argsJson
-              : (fingerprint == null ? "{}" : fingerprint);
+          argsJson != null && !argsJson.isBlank() ? argsJson : "{\"_argsProvided\":false}";
       try {
         var callId = runtime.beforeTool(kind, toolVersion, fingerprint);
         addCheck(toolName, checks, 

@@ -489,4 +489,131 @@ class GlassboxTraceStoreTruncationTest {
     assertFalse(storedArgs.contains("sk-prod1234567890abcdef"));
     assertTrue(argsNode.get("content").asText().endsWith("...[已截断]"), "超长文本叶子应被优雅截断而非破坏 JSON");
   }
+
+  /**
+   * 宽 JSON 端到端回归（对应独立评审 80 标签反例 + 宽数值数组）：
+   * 80 个各 400 字符的标签及大规模纯数值数组，经 ControlledModel 生产端 → GlassboxTraceStore → H2 落库读回后，
+   * 长度必须严格 <= 8,192（含截断标记本身）且仍可被 Jackson 正常解析，绝不退化为非法截断文本。
+   */
+  @Test
+  void wideJsonWith80TagsAndNumericArrayStaysValidAndWithinLimitAfterH2RoundTrip() throws Exception {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    var captured = new java.util.concurrent.atomic.AtomicReference<GlassboxModels.ModelCallPayload>();
+    dev.workbench.framework.agent.execution.AgentRuntime runtime =
+        new dev.workbench.framework.agent.execution.AgentRuntime() {
+          @Override
+          public void beforeModel(dev.workbench.domain.ModelKind modelName) {}
+
+          @Override
+          public void modelResult(Integer input, Integer output) {}
+
+          @Override
+          public void modelTrace(GlassboxModels.ModelCallPayload value) {
+            captured.set(value);
+          }
+
+          @Override
+          public void assemblyResolved(
+              dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Components components) {}
+
+          @Override
+          public UUID beforeTool(
+              dev.workbench.domain.ToolKind tool, int version, String fingerprint) {
+            return UUID.randomUUID();
+          }
+
+          @Override
+          public void check() {}
+
+          @Override
+          public void event(dev.workbench.domain.EventType type, String message) {}
+
+          @Override
+          public void toolResult(String result) {}
+
+          @Override
+          public void toolRejected(String safeMessage) {}
+        };
+
+    var wideTags = new java.util.ArrayList<String>();
+    for (int i = 0; i < 80; i++) {
+      wideTags.add("tag-" + i + "-" + "x".repeat(390));
+    }
+    var wideNumbers = new java.util.ArrayList<Integer>();
+    for (int i = 0; i < 2500; i++) {
+      wideNumbers.add(100_000 + i);
+    }
+    var toolSchema =
+        io.agentscope.core.model.ToolSchema.builder()
+            .name("bulk_tag")
+            .description("批量标签工具")
+            .parameters(
+                java.util.Map.of(
+                    "type",
+                    "object",
+                    "properties",
+                    java.util.Map.of(
+                        "tags", java.util.Map.of("enum", wideTags),
+                        "ids", java.util.Map.of("examples", wideNumbers))))
+            .build();
+    var responseChunk =
+        io.agentscope.core.model.ChatResponse.builder()
+            .content(
+                List.of(
+                    io.agentscope.core.message.ToolUseBlock.builder()
+                        .id("call-wide-1")
+                        .name("bulk_tag")
+                        .input(java.util.Map.of("tags", wideTags, "ids", wideNumbers))
+                        .build()))
+            .build();
+    io.agentscope.core.model.Model stubDelegate =
+        new io.agentscope.core.model.Model() {
+          @Override
+          public reactor.core.publisher.Flux<io.agentscope.core.model.ChatResponse> stream(
+              List<io.agentscope.core.message.Msg> messages,
+              List<io.agentscope.core.model.ToolSchema> tools,
+              io.agentscope.core.model.GenerateOptions options) {
+            return reactor.core.publisher.Flux.just(responseChunk);
+          }
+
+          @Override
+          public String getModelName() {
+            return "wide-stub";
+          }
+
+          @Override
+          public int getContextWindowSize() {
+            return 0;
+          }
+        };
+
+    var controlled =
+        new dev.workbench.infrastructure.agentscope.ControlledModel(
+            stubDelegate,
+            dev.workbench.domain.ModelMode.MOCK,
+            runtime,
+            new java.util.concurrent.atomic.AtomicReference<RuntimeException>());
+    controlled.stream(List.of(), List.of(toolSchema), null).collectList().block();
+
+    assertNotNull(captured.get());
+    assertTrue(captured.get().truncated(), "宽 JSON 裁剪后必须标记 truncated");
+    traces.recordModelPayload(runId, modelCallId, captured.get());
+
+    var stored = traces.modelPayloadsByRun(runId).get(modelCallId);
+    assertNotNull(stored);
+    var mapper = new ObjectMapper();
+
+    String storedSchema = stored.requestTools().getFirst().parametersJson();
+    assertTrue(
+        storedSchema.length() <= 8_192,
+        "宽 Schema 截断后必须严格 <= 8,192，实际：" + storedSchema.length());
+    assertTrue(mapper.readTree(storedSchema).isObject(), "宽 Schema 从 H2 读回后仍必须是合法 JSON");
+
+    String storedArgs = stored.responseToolCalls().getFirst().argumentsJson();
+    assertTrue(
+        storedArgs.length() <= 8_192,
+        "宽参数截断后必须严格 <= 8,192，实际：" + storedArgs.length());
+    assertTrue(mapper.readTree(storedArgs).isObject(), "宽参数从 H2 读回后仍必须是合法 JSON");
+  }
 }

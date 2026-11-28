@@ -75,6 +75,11 @@ final class RunExecutionEngine {
     synchronized (locks.lockFor(id)) {
       run = runs.runSnapshot(id);
       if (run.status() != dev.workbench.domain.RunStatus.PAUSED) return;
+      if (commands.cancelled().contains(id)) {
+        // 派发窗口内用户已请求取消：直接进入取消终态，不切回 RUNNING 也不启动任何节点。
+        commands.finishCancelledWithoutWorker(id, run, "用户取消了已暂停（断点让出线程）的运行。");
+        return;
+      }
       plan = workflows.plan(id);
       if (plan == null) return;
       try {

@@ -313,6 +313,86 @@ class ToolGatewayTest {
     assertEquals("edited", parsed.get("content").asText());
   }
 
+  @Test
+  void traceMasksStructuredSensitiveSubtreesAndNumbersWhileKeepingTokenCounts() throws Exception {
+    var runtime = new StubRuntime();
+    var gateway =
+        new ToolGateway(
+            new ObjectMapper().findAndRegisterModules(),
+            runtime,
+            new AtomicReference<RuntimeException>());
+    String structuredArgs =
+        "{\"credentials\":[\"opaque-secret-a\",{\"sub\":\"opaque-secret-b\",\"pin\":987654},123456],"
+            + "\"apiKey\":{\"value\":\"plain_key_xyz\",\"code\":654321},"
+            + "\"password\":556677,"
+            + "\"max_tokens\":4096,"
+            + "\"path\":\"src/App.jsx\"}";
+    gateway.execute(
+        ToolKind.MCP,
+        "mcp.vault.call",
+        1,
+        dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.MCP, "vault"),
+        structuredArgs,
+        ToolEffect.READ_ONLY,
+        "调用外部工具",
+        value -> "摘要",
+        () -> {},
+        null,
+        null,
+        null,
+        () -> "ok");
+
+    assertNotNull(runtime.lastTrace);
+    String raw = runtime.lastTrace.inputArgs();
+    assertFalse(raw.contains("opaque-secret-a"), "敏感数组内的文本值不得泄露：" + raw);
+    assertFalse(raw.contains("opaque-secret-b"), "敏感嵌套对象内的文本值不得泄露：" + raw);
+    assertFalse(raw.contains("plain_key_xyz"), "敏感对象内的子字段不得泄露：" + raw);
+    assertFalse(raw.contains("987654"), "敏感子树内的数字凭据不得泄露：" + raw);
+    assertFalse(raw.contains("123456"), "敏感数组内的数字凭据不得泄露：" + raw);
+    assertFalse(raw.contains("654321"), "敏感对象内的数字码不得泄露：" + raw);
+    assertFalse(raw.contains("556677"), "敏感键直接数字值不得泄露：" + raw);
+
+    var node = new ObjectMapper().readTree(raw);
+    assertEquals("***MASKED***", node.at("/credentials/0").asText());
+    assertEquals("***MASKED***", node.at("/credentials/1/sub").asText());
+    assertEquals("***MASKED***", node.at("/credentials/1/pin").asText());
+    assertEquals("***MASKED***", node.at("/credentials/2").asText());
+    assertEquals("***MASKED***", node.at("/apiKey/value").asText());
+    assertEquals("***MASKED***", node.at("/apiKey/code").asText());
+    assertEquals("***MASKED***", node.get("password").asText());
+    assertEquals(4096, node.get("max_tokens").asInt(), "普通 Token 计数上限不得被误脱敏");
+    assertEquals("src/App.jsx", node.get("path").asText());
+  }
+
+  @Test
+  void compatOverloadWithoutArgsJsonRecordsExplicitNotProvidedInsteadOfFingerprint() throws Exception {
+    var runtime = new StubRuntime();
+    var gateway =
+        new ToolGateway(
+            new ObjectMapper().findAndRegisterModules(),
+            runtime,
+            new AtomicReference<RuntimeException>());
+    String fingerprint =
+        dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, "a.js");
+    gateway.execute(
+        ToolKind.WORKSPACE_READ,
+        dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+        fingerprint,
+        ToolEffect.READ_ONLY,
+        "开始",
+        value -> "摘要",
+        () -> {},
+        null,
+        () -> "ok");
+
+    assertNotNull(runtime.lastTrace);
+    assertFalse(
+        runtime.lastTrace.inputArgs().contains(fingerprint),
+        "兼容重载缺省参数时也不得把 SHA-256 指纹写入 inputArgs");
+    var node = new ObjectMapper().readTree(runtime.lastTrace.inputArgs());
+    assertFalse(node.get("_argsProvided").asBoolean());
+  }
+
   private static final class StubRuntime implements AgentRuntime {
     final UUID id = UUID.randomUUID();
     final ArrayList<EventType> events = new ArrayList<>();
