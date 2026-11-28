@@ -414,6 +414,188 @@ class StreamingSseMaskingTest {
     assertTrue(cancelPublisher.joined("MODEL_REASONING_DELTA").contains("***MASKED***"));
   }
 
+  @Test
+  void unclosedPemInsideSensitiveKvFieldNeverLeaksAcrossAllCompletionPathsAndSnapshot() {
+    String longPrefix = "普通前置说明文本用于跨越流式窗口边界。".repeat(4);
+
+    // 1. 自然结束（finishReason=stop）：敏感字段内嵌未闭合 PEM，跨帧切分后正文、推理与快照均无私钥正文。
+    CapturingPublisher stopPub = new CapturingPublisher();
+    var stopPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+    ControlledAgentRuntime stopRuntime = runtimeWithTrace(stopPub, stopPayload);
+    Model stopDelegate =
+        stubModel(
+            Flux.just(
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder()
+                                .text(longPrefix + "{\"secret\": \"-----BEGIN RSA ")
+                                .build(),
+                            ThinkingBlock.builder()
+                                .thinking(longPrefix + "password=-----BEGIN EC ")
+                                .build()))
+                    .build(),
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder()
+                                .text("PRIVATE KEY-----\nMIIEowStopBody111")
+                                .build(),
+                            ThinkingBlock.builder()
+                                .thinking("PRIVATE KEY-----\nMHcCStopBody222")
+                                .build()))
+                    .usage(ChatUsage.builder().inputTokens(12).outputTokens(8).build())
+                    .finishReason("stop")
+                    .build()));
+    new ControlledModel(stopDelegate, ModelMode.MOCK, stopRuntime, new AtomicReference<>())
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .collectList()
+        .block();
+    assertNoPemLeak("自然结束 SSE 正文", stopPub.joined("MODEL_DELTA"), "MIIEowStopBody111");
+    assertNoPemLeak("自然结束 SSE 推理", stopPub.joined("MODEL_REASONING_DELTA"), "MHcCStopBody222");
+    assertNotNull(stopPayload.get());
+    assertNoPemLeak("自然结束快照正文", stopPayload.get().responseContent(), "MIIEowStopBody111");
+    assertNoPemLeak("自然结束快照推理", stopPayload.get().reasoningContent(), "MHcCStopBody222");
+    assertNoPemLeak(
+        "存储层二次 maskAndTruncate 后快照正文",
+        dev.workbench.framework.trace.SensitiveDataMasker.maskAndTruncate(
+                stopPayload.get().responseContent())
+            .text(),
+        "MIIEowStopBody111");
+
+    // 2. 限长结束（finishReason=length）：敏感字段内嵌未闭合 PEM，SSE 双通道与快照均不得外泄。
+    CapturingPublisher limitPub = new CapturingPublisher();
+    var limitPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+    ControlledAgentRuntime limitRuntime = runtimeWithTrace(limitPub, limitPayload);
+    Model limitDelegate =
+        stubModel(
+            Flux.just(
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder()
+                                .text("{\"secret\": \"-----BEGIN RSA PRIVATE KEY-----\nMIIEowLimit333")
+                                .build(),
+                            ThinkingBlock.builder()
+                                .thinking("{\"token\": \"-----BEGIN PRIVATE KEY-----\nMIIEowLimit444")
+                                .build()))
+                    .usage(ChatUsage.builder().inputTokens(10).outputTokens(5).build())
+                    .finishReason("length")
+                    .build()));
+    new ControlledModel(limitDelegate, ModelMode.MOCK, limitRuntime, new AtomicReference<>())
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .collectList()
+        .block();
+    assertNoPemLeak("限长结束 SSE 正文", limitPub.joined("MODEL_DELTA"), "MIIEowLimit333");
+    assertNoPemLeak("限长结束 SSE 推理", limitPub.joined("MODEL_REASONING_DELTA"), "MIIEowLimit444");
+    assertNoPemLeak("限长结束快照正文", limitPayload.get().responseContent(), "MIIEowLimit333");
+    assertNoPemLeak("限长结束快照推理", limitPayload.get().reasoningContent(), "MIIEowLimit444");
+
+    // 3. 失败中断（onError）
+    CapturingPublisher errPub = new CapturingPublisher();
+    ControlledAgentRuntime errRuntime = runtimeWithTrace(errPub, new AtomicReference<>());
+    Model errDelegate =
+        stubModel(
+            Flux.concat(
+                Flux.just(
+                    ChatResponse.builder()
+                        .content(
+                            List.of(
+                                TextBlock.builder()
+                                    .text("{\"secret\": \"-----BEGIN RSA PRIVATE KEY-----\nMIIEowErr555")
+                                    .build(),
+                                ThinkingBlock.builder()
+                                    .thinking("token: -----BEGIN RSA PRIVATE KEY-----\nMIIEowErr666")
+                                    .build()))
+                        .build()),
+                Flux.error(new IllegalStateException("stream broken"))));
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            new ControlledModel(errDelegate, ModelMode.MOCK, errRuntime, new AtomicReference<>())
+                .stream(List.of(), List.of(), GenerateOptions.builder().build())
+                .collectList()
+                .block());
+    assertNoPemLeak("失败中断 SSE 正文", errPub.joined("MODEL_DELTA"), "MIIEowErr555");
+    assertNoPemLeak("失败中断 SSE 推理", errPub.joined("MODEL_REASONING_DELTA"), "MIIEowErr666");
+
+    // 4. 下游取消（doOnCancel via take(1)）
+    CapturingPublisher cancelPub = new CapturingPublisher();
+    ControlledAgentRuntime cancelRuntime = runtimeWithTrace(cancelPub, new AtomicReference<>());
+    Model cancelDelegate =
+        stubModel(
+            Flux.just(
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder()
+                                .text("{\"secret\": \"-----BEGIN RSA PRIVATE KEY-----\nMIIEowCancel777")
+                                .build(),
+                            ThinkingBlock.builder()
+                                .thinking("password: \"-----BEGIN RSA PRIVATE KEY-----\nMIIEowCancel888")
+                                .build()))
+                    .build(),
+                ChatResponse.builder()
+                    .content(List.of(TextBlock.builder().text("第二帧").build()))
+                    .build()));
+    new ControlledModel(cancelDelegate, ModelMode.MOCK, cancelRuntime, new AtomicReference<>())
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .take(1)
+        .collectList()
+        .block();
+    assertNoPemLeak("取消中断 SSE 正文", cancelPub.joined("MODEL_DELTA"), "MIIEowCancel777");
+    assertNoPemLeak("取消中断 SSE 推理", cancelPub.joined("MODEL_REASONING_DELTA"), "MIIEowCancel888");
+  }
+
+  @Test
+  void blankTrailingFinishReasonChunkCannotDowngradeEarlierLengthTruncation() {
+    CapturingPublisher publisher = new CapturingPublisher();
+    var capturedPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+    ControlledAgentRuntime runtime = runtimeWithTrace(publisher, capturedPayload);
+    // 模拟部分兼容供应商在 stream_options.include_usage 下的尾帧序列：先发 length，尾帧仅带 usage 和空白 finishReason。
+    Model delegate =
+        stubModel(
+            Flux.just(
+                ChatResponse.builder()
+                    .content(
+                        List.of(
+                            TextBlock.builder().text("Authorization: Bearer opaq42").build(),
+                            ThinkingBlock.builder().thinking("{\"api_key\": \"sk-tail").build()))
+                    .finishReason("length")
+                    .build(),
+                ChatResponse.builder()
+                    .content(List.of())
+                    .usage(ChatUsage.builder().inputTokens(10).outputTokens(5).build())
+                    .finishReason("")
+                    .build(),
+                ChatResponse.builder()
+                    .content(List.of())
+                    .usage(ChatUsage.builder().inputTokens(10).outputTokens(5).build())
+                    .finishReason("   ")
+                    .build()));
+    new ControlledModel(delegate, ModelMode.MOCK, runtime, new AtomicReference<>())
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .collectList()
+        .block();
+
+    assertFalse(publisher.joined("MODEL_DELTA").contains("opaq42"), publisher.joined("MODEL_DELTA"));
+    assertFalse(
+        publisher.joined("MODEL_REASONING_DELTA").contains("sk-tail"),
+        publisher.joined("MODEL_REASONING_DELTA"));
+    assertFalse(
+        capturedPayload.get().responseContent().contains("opaq42"),
+        capturedPayload.get().responseContent());
+    assertFalse(
+        capturedPayload.get().reasoningContent().contains("sk-tail"),
+        capturedPayload.get().reasoningContent());
+  }
+
+  private static void assertNoPemLeak(String label, String output, String bodyFragment) {
+    assertFalse(output.contains(bodyFragment), label + " 泄露未闭合私钥正文：" + output);
+    assertFalse(output.contains("PRIVATE KEY"), label + " 残留未闭合私钥头：" + output);
+    assertTrue(output.contains("***MASKED-PRIVATE-KEY***"), label + " 缺少私钥掩码标记：" + output);
+  }
+
   private static Model stubModel(Flux<ChatResponse> stream) {
     return new Model() {
       @Override

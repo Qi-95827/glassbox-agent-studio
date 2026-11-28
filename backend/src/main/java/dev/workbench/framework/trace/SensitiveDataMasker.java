@@ -69,26 +69,34 @@ public final class SensitiveDataMasker {
   private static final Pattern TRUNCATED_URL_CREDENTIALS =
       Pattern.compile("://[^/\\s:@'\"]+:(?!\\d{1,5}$)[^/\\s@'\"]+$");
 
-  /** 键值对允许单/双引号与 JSON、HTML 转义引号；值遇到引号、括号、分隔符即停止，绝不吞结构符。 */
+  /** 键值对允许单/双引号与 JSON、HTML 转义引号；值遇到引号、括号、分隔符即停止，绝不吞结构符，且不重复改写已脱敏标记。 */
   private static final Pattern SECRET_KV_PATTERN =
       Pattern.compile(
           "(?i)(\"?'?(?:api[_-]?key|secret|password|passwd|token|authorization|cookie)'?\"?\\s*[:=]\\s*\"?'?)"
-              + "([^\"'\\s,;}\\]。，；！？、）》」』】]{6,})");
+              + "(?!\\*\\*\\*MASKED)([^\"'\\s,;}\\]。，；！？、）》」』】]{6,})");
 
   private SensitiveDataMasker() {}
 
   public record TruncatedText(String text, boolean truncated) {}
 
-  /** 对常见密钥、Bearer Token、Cookie、URL 凭据和敏感键值对进行掩码。 */
+  /**
+   * 整段脱敏：严格执行「多行私钥块（完整+未闭合）→ 专项令牌与 URL 凭据 → 泛化键值」三层顺序，
+   * 确保泛化 KV 规则绝不会提前吃掉 {@code -----BEGIN} 或 {@code Bearer} 前缀而破坏后续专项结构识别。
+   */
   public static String mask(String input) {
     if (input == null || input.isEmpty()) return input;
-    String value = maskNonKvTokens(input);
+    String value = maskBlocksAndTokens(input);
     value = SECRET_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***");
     return value;
   }
 
-  private static String maskNonKvTokens(String input) {
+  /**
+   * 第 1 层（多行块：完整与未闭合 PEM）+ 第 2 层（全部专项令牌与 URL 凭据）；
+   * 统一在泛化 {@link #SECRET_KV_PATTERN} 之前执行，消除一切前缀被 KV 吃掉的重叠盲区。
+   */
+  private static String maskBlocksAndTokens(String input) {
     String value = PEM_PRIVATE_KEY.matcher(input).replaceAll("***MASKED-PRIVATE-KEY***");
+    value = UNCLOSED_PEM.matcher(value).replaceAll("***MASKED-PRIVATE-KEY***");
     value = JWT.matcher(value).replaceAll("***MASKED-TOKEN***");
     value = AWS_ACCESS_KEY.matcher(value).replaceAll("***MASKED-KEY***");
     value = GOOGLE_API_KEY.matcher(value).replaceAll("***MASKED-KEY***");
@@ -147,27 +155,24 @@ public final class SensitiveDataMasker {
   }
 
   /**
-   * 正常结束收尾：执行与整段等价的完整脱敏，并对未闭合私钥块兜底；不触发异常截断规则，避免误伤末尾的普通
-   * {@code http://localhost:8088} 或 {@code token: 100}。
+   * 正常结束收尾：与整段 {@link #mask(String)} 共用同一三层优先级管线（未闭合 PEM 已在 KV 之前处理），
+   * 不触发流尾截断规则，避免误伤末尾的普通 {@code http://localhost:8088} 或 {@code token: 100}。
    */
   public static String maskCompleted(String input) {
-    if (input == null || input.isEmpty()) return input;
-    String value = mask(input);
-    return UNCLOSED_PEM.matcher(value).replaceAll("***MASKED-PRIVATE-KEY***");
+    return mask(input);
   }
 
   /**
-   * 失败/取消/输出限长收尾：先做非 KV 完整令牌脱敏，再执行截断令牌兜底（避免 {@code Authorization: Bearer opaq}
-   * 被 KV 规则提前吃掉 {@code Bearer} 导致半截不透明令牌外泄），随后执行完整/截断 KV、截断 URL 凭据与未闭合 PEM 掩码。
+   * 失败/取消/输出限长收尾：严格遵守「多行块（完整+未闭合 PEM）→ 专项令牌与 URL（完整+流尾截断）→
+   * 泛化 KV（完整+流尾截断）」三层顺序，确保任何专项结构都不会被泛化键值规则提前吃掉前缀。
    */
   public static String maskFinal(String input) {
     if (input == null || input.isEmpty()) return input;
-    String value = maskNonKvTokens(input);
+    String value = maskBlocksAndTokens(input);
     value = TRUNCATED_TOKEN.matcher(value).replaceAll("$1***MASKED***");
+    value = TRUNCATED_URL_CREDENTIALS.matcher(value).replaceAll("://***MASKED***");
     value = SECRET_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***");
     value = TRUNCATED_KV.matcher(value).replaceAll("$1***MASKED***");
-    value = TRUNCATED_URL_CREDENTIALS.matcher(value).replaceAll("://***MASKED***");
-    value = UNCLOSED_PEM.matcher(value).replaceAll("***MASKED-PRIVATE-KEY***");
     return value;
   }
 

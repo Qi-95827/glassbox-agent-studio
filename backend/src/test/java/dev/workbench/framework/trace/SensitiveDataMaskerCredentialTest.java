@@ -78,6 +78,27 @@ class SensitiveDataMaskerCredentialTest {
   }
 
   @Test
+  void unclosedPrivateKeyInsideSensitiveKvFieldNeverLeaksInAnyMaskEntrypoint() {
+    String jsonSecretPem =
+        "{\"secret\": \"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234567890";
+    String unquotedPasswordPem = "password=-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEI998877";
+
+    for (String sample : java.util.List.of(jsonSecretPem, unquotedPasswordPem)) {
+      for (String masked :
+          java.util.List.of(
+              SensitiveDataMasker.mask(sample),
+              SensitiveDataMasker.maskCompleted(sample),
+              SensitiveDataMasker.maskFinal(sample),
+              SensitiveDataMasker.maskAndTruncate(sample).text())) {
+        assertFalse(masked.contains("MIIEowIBAAKCAQEA1234567890"), "私钥正文泄露：" + masked);
+        assertFalse(masked.contains("MHcCAQEEI998877"), "EC 私钥正文泄露：" + masked);
+        assertFalse(masked.contains("PRIVATE KEY"), "私钥头不得残留：" + masked);
+        assertTrue(masked.contains("***MASKED-PRIVATE-KEY***"), masked);
+      }
+    }
+  }
+
+  @Test
   void ordinaryTextIsUnchanged() {
     String text = "排序页面需要保留原生实现并给出证据。";
 

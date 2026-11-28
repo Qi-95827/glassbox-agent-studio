@@ -422,7 +422,11 @@ public record ControlledModel(
     StreamDeltas accept(ChatResponse response) {
       if (response == null) return StreamDeltas.EMPTY;
       chunks++;
-      if (response.getFinishReason() != null) finishReason = response.getFinishReason();
+      if (response.getFinishReason() != null
+          && !response.getFinishReason().isBlank()
+          && !SensitiveDataMasker.isTruncatedFinishReason(finishReason)) {
+        finishReason = response.getFinishReason();
+      }
       if (response.getContent() == null) return StreamDeltas.EMPTY;
       var textDelta = new StringBuilder();
       var reasoningDelta = new StringBuilder();
