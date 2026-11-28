@@ -361,6 +361,26 @@ class MonitoringDashboardServiceTest {
     assertEquals(total, bucketed, "分桶同样不能因分片丢行");
   }
 
+  /** 分片任务选项：跨多批 IN 分片合并后仍须严格收敛到 limit，且保留全局最新活跃任务。 */
+  @Test
+  void shardedTaskOptionsRespectLimitAndGlobalRecency() {
+    java.time.Instant now = java.time.Instant.now();
+    var taskIds = new java.util.ArrayList<String>();
+    for (int index = 0; index < 505; index++) {
+      String id = java.util.UUID.randomUUID().toString();
+      taskIds.add(id);
+      String ts = now.minusSeconds(600 - index).toString();
+      task(id, "分片任务-" + index, ts);
+      run(java.util.UUID.randomUUID().toString(), id, "COMPLETED", 100L, null, ts);
+    }
+    var result = dashboard.dashboard("24h", null, null);
+    assertEquals(200, result.taskOptions().size(), "taskOptions 分片合并后绝不能突破 200 上限");
+    assertEquals(
+        taskIds.getLast(),
+        result.taskOptions().getFirst().taskId(),
+        "落在第二片中的最新活跃任务必须排在全局第一位");
+  }
+
   private void task(String id, String goal, String now) {    db.update(
         "INSERT INTO tasks(id,goal,scenario,created_at) VALUES(?,?,?,?)",
         id,

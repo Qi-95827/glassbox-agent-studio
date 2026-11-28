@@ -2,6 +2,7 @@ package dev.workbench.maintenance;
 
 import dev.workbench.domain.RunStatus;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import org.slf4j.Logger;
@@ -89,17 +90,26 @@ public class DataRetentionService {
     Instant now = Instant.now();
     String payloadCutoff = now.minus(payloadDays, ChronoUnit.DAYS).toString();
     String artifactCutoff = now.minus(artifactDays, ChronoUnit.DAYS).toString();
-    String sessionCutoff = now.minus(sessionDays, ChronoUnit.DAYS).toString();
+    LocalDateTime sessionCutoff = LocalDateTime.now().minusDays(sessionDays);
 
     int artifacts = deleteColdRows("context_artifacts", artifactCutoff);
     int payloads = deleteColdRows("model_call_payloads", payloadCutoff);
     int toolTraces = deleteColdRows("tool_call_traces", payloadCutoff);
 
-    // Agent 会话不带运行归属，且更新时间是 TIMESTAMP 列：必须传时间戳参数，不能与 ISO 字符串比较。
+    // Agent 会话 updated_at 为 TIMESTAMP 列，直接使用 LocalDateTime；同时跳过仍归属活跃运行实例的会话。
     int sessions =
         jdbc.update(
-            "DELETE FROM agentscope_sessions WHERE updated_at < ?",
-            java.sql.Timestamp.from(now.minus(sessionDays, ChronoUnit.DAYS)));
+            "DELETE FROM agentscope_sessions"
+                + " WHERE updated_at < ?"
+                + " AND NOT EXISTS ("
+                + "SELECT 1 FROM agent_invocations a JOIN runs r ON r.id = a.run_id"
+                + " WHERE r.status IN (?, ?, ?)"
+                + " AND (agentscope_sessions.session_id = a.id"
+                + " OR agentscope_sessions.session_id LIKE CONCAT('%:', a.id)))",
+            sessionCutoff,
+            ACTIVE_RUN_STATUSES.get(0),
+            ACTIVE_RUN_STATUSES.get(1),
+            ACTIVE_RUN_STATUSES.get(2));
 
     return new RetentionReport(payloads, toolTraces, artifacts, sessions);
   }
@@ -116,8 +126,10 @@ public class DataRetentionService {
         "DELETE FROM "
             + table
             + " WHERE created_at < ?"
-            + " AND (run_id IS NULL OR run_id NOT IN"
-            + " (SELECT id FROM runs WHERE status IN (?, ?, ?)))",
+            + " AND (run_id IS NULL OR NOT EXISTS"
+            + " (SELECT 1 FROM runs r WHERE r.id = "
+            + table
+            + ".run_id AND r.status IN (?, ?, ?)))",
         cutoff,
         ACTIVE_RUN_STATUSES.get(0),
         ACTIVE_RUN_STATUSES.get(1),

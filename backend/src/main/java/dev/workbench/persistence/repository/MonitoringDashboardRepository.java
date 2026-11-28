@@ -106,7 +106,16 @@ public class MonitoringDashboardRepository {
    * <p>只看任务与运行元数据，不读取任何提示词、模型输出或文件正文；按最近活跃排序并有硬上限，供监控页筛选下拉直接消费。
    */
   public List<TaskOptionRow> taskOptions(List<String> taskIds, int limit) {
-    if (taskIds != null && taskIds.size() > IN_CHUNK) return chunked(taskIds, chunk -> taskOptions(chunk, limit));
+    if (taskIds != null && taskIds.size() > IN_CHUNK) {
+      // 分片合并后必须按最近活跃时间全局重排并收敛到 limit，避免多片拼接突破上限或丢失最新任务。
+      return chunked(taskIds, chunk -> taskOptions(chunk, limit)).stream()
+          .sorted(
+              java.util.Comparator.comparing(
+                  TaskOptionRow::latestAt,
+                  java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+          .limit(Math.max(1, limit))
+          .toList();
+    }
     if (taskIds == null || taskIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions

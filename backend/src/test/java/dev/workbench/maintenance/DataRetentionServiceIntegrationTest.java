@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.workbench.app.WorkbenchApplication;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,7 @@ class DataRetentionServiceIntegrationTest {
           "tool_call_traces",
           "context_artifacts",
           "agentscope_sessions",
+          "agent_invocations",
           "events",
           "runs",
           "tasks"
@@ -76,8 +78,14 @@ class DataRetentionServiceIntegrationTest {
     // 无运行归属的过期产物：按过期清理。
     artifact("artifact-orphan", null, old);
 
-    session("session-old", now.minus(30, ChronoUnit.DAYS));
-    session("session-recent", now.minus(1, ChronoUnit.DAYS));
+    String pausedAgentId = UUID.randomUUID().toString();
+    agentInvocation(pausedAgentId, expiredPaused, old);
+    LocalDateTime oldSessionTime = LocalDateTime.now().minusDays(30);
+    LocalDateTime recentSessionTime = LocalDateTime.now().minusDays(1);
+    session("session-old", oldSessionTime);
+    session("session-recent", recentSessionTime);
+    // 关联活跃 PAUSED 运行的过期会话：必须保留，绝不因超期误删。
+    session("LOCAL:" + pausedAgentId, oldSessionTime);
 
     long tasksBefore = count("tasks");
     long runsBefore = count("runs");
@@ -88,7 +96,7 @@ class DataRetentionServiceIntegrationTest {
     assertEquals(1, report.deletedPayloads(), "只应删除过期终态运行的模型载荷");
     assertEquals(1, report.deletedToolTraces(), "只应删除过期终态运行的工具轨迹");
     assertEquals(2, report.deletedArtifacts(), "过期终态 + 无归属产物应被清理");
-    assertEquals(1, report.deletedSessions(), "只应删除超过会话保留期的 Agent 会话");
+    assertEquals(1, report.deletedSessions(), "只应删除未关联活跃运行的过期 Agent 会话");
 
     assertTrue(!exists("model_call_payloads", "model_call_id", "payload-old"));
     assertTrue(!exists("tool_call_traces", "tool_call_id", "trace-old"));
@@ -104,6 +112,9 @@ class DataRetentionServiceIntegrationTest {
 
     assertTrue(!exists("agentscope_sessions", "session_id", "session-old"), "过期会话应被清理");
     assertTrue(exists("agentscope_sessions", "session_id", "session-recent"), "近期会话必须保留");
+    assertTrue(
+        exists("agentscope_sessions", "session_id", "LOCAL:" + pausedAgentId),
+        "活跃 PAUSED 运行关联的会话绝不能被误删");
 
     // 审计主干零损耗。
     assertEquals(tasksBefore, count("tasks"), "tasks 绝不能被清理");
@@ -182,7 +193,23 @@ class DataRetentionServiceIntegrationTest {
         createdAt);
   }
 
-  private void session(String id, Instant updatedAt) {
+  private void agentInvocation(String agentId, String runId, String createdAt) {
+    db.update(
+        """
+        INSERT INTO agent_invocations(id,run_id,role_name,task_goal,role_code,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?)
+        """,
+        agentId,
+        runId,
+        "分析 Agent",
+        "活跃会话保护样本",
+        "ANALYST",
+        "RUNNING",
+        createdAt,
+        createdAt);
+  }
+
+  private void session(String id, LocalDateTime updatedAt) {
     db.update(
         """
         INSERT INTO agentscope_sessions(session_id,state_key,item_index,state_data,version,created_at,updated_at)
@@ -193,8 +220,8 @@ class DataRetentionServiceIntegrationTest {
         0,
         "{}",
         0L,
-        java.sql.Timestamp.from(updatedAt),
-        java.sql.Timestamp.from(updatedAt));
+        updatedAt,
+        updatedAt);
   }
 
   private long count(String table) {
