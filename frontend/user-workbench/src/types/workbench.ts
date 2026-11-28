@@ -104,27 +104,26 @@ export interface RunSummary {
 }
 
 /**
- * 运行的 camelCase 摘要：`ExecutionView` 头部字段的子集。
+ * 运行的 camelCase 摘要：`ExecutionView` 头部字段的公共基类。
  *
  * <p>来源：`ExecutionViewService.ExecutionView`（`GET /api/runs/{id}/execution-view`）。
  * 任务描述里「id/taskId/status/stopCause/…」的 camelCase 诉求对应这里；注意运行标识的字段名是 `runId`。
  */
-export type RunExecutionSummary = Pick<
-  ExecutionView,
-  | 'runId'
-  | 'taskId'
-  | 'parentRunId'
-  | 'runStatus'
-  | 'stopCause'
-  | 'reason'
-  | 'result'
-  | 'createdAt'
-  | 'updatedAt'
-  | 'elapsedMs'
-  | 'rounds'
-  | 'tools'
-  | 'taskVersion'
->;
+export interface RunExecutionSummary {
+  taskId: string;
+  runId: string;
+  parentRunId: string | null;
+  runStatus: RunStatus;
+  stopCause: string | null;
+  reason: string | null;
+  result: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  elapsedMs: number;
+  rounds: number;
+  tools: number;
+  taskVersion: number;
+}
 
 /**
  * 同任务轮次项。

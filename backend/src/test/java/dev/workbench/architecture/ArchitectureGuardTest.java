@@ -103,6 +103,10 @@ class ArchitectureGuardTest {
                   .should()
                   .beAnnotatedWith(jakarta.persistence.Lob.class))
           .and(
+              com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noFields()
+                  .should()
+                  .beAnnotatedWith(jakarta.persistence.Lob.class))
+          .and(
               com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noCodeUnits()
                   .should()
                   .beAnnotatedWith(jakarta.persistence.Lob.class))

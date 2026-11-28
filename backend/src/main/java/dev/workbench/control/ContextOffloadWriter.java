@@ -18,6 +18,8 @@ import java.util.Map;
  */
 final class ContextOffloadWriter {
   private static final int L1_MIN_CHARS = 1_500;
+  private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+      new com.fasterxml.jackson.databind.ObjectMapper();
 
   private final List<ContextArtifactStore> artifactStores;
 
@@ -151,7 +153,7 @@ final class ContextOffloadWriter {
         rows.add(
             Map.of(
                 "line", line.line(), "text", ContextTextSignals.compact(line.text(), 300)));
-      return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(rows);
+      return JSON.writeValueAsString(rows);
     } catch (Exception e) {
       return "[]";
     }
