@@ -510,7 +510,8 @@ public record ControlledModel(
         var safeDesc = SensitiveDataMasker.maskAndTruncate(tool.getDescription(), 8_192);
         if (safeDesc.truncated()) truncated = true;
         String params = safeJson(tool.getParameters());
-        var safeParams = SensitiveDataMasker.maskAndTruncate(params, 8_192);
+        var safeParams =
+            dev.workbench.framework.trace.JsonLeafMasker.maskAndTruncate(TRACE_JSON, params, 8_192);
         if (safeParams.truncated()) truncated = true;
         reqTools.add(
             new GlassboxModels.ToolSchemaView(safeName, safeDesc.text(), safeParams.text()));
@@ -523,7 +524,8 @@ public record ControlledModel(
       for (ToolUseBlock tub : accumulator.toolUses()) {
         String safeName = tub.getName() == null ? null : SensitiveDataMasker.mask(tub.getName());
         String args = safeJson(tub.getInput());
-        var safeArgs = SensitiveDataMasker.maskAndTruncate(args, 8_192);
+        var safeArgs =
+            dev.workbench.framework.trace.JsonLeafMasker.maskAndTruncate(TRACE_JSON, args, 8_192);
         if (safeArgs.truncated()) truncated = true;
         toolCalls.add(
             new GlassboxModels.ToolCallDecision(tub.getId(), safeName, safeArgs.text()));

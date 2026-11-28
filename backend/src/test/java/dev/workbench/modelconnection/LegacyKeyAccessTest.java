@@ -96,14 +96,62 @@ class LegacyKeyAccessTest {
 
   @Test
   void listHidesLegacyEntryFromOrdinaryUsers() {
+    byte[] key = new byte[32];
+    new SecureRandom(new byte[] {4, 2, 6}).nextBytes(key);
+    var withLegacyKeyFile =
+        new ModelConnectionService(
+            connections, probe, auth, new SecretCipher(key), OutboundUrlGuard.strict(), () -> true);
     login("USER", false);
     when(connections.findByOwnerUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
 
-    var view = service.list();
+    var view = withLegacyKeyFile.list();
 
     assertTrue(
         view.builtIns().stream().noneMatch(item -> "legacy-deepseek".equals(item.id())),
-        "普通用户不应看到宿主机全局密钥条目");
+        "即使宿主机存在旧密钥文件，普通用户也不应看到宿主机全局密钥条目");
+    assertTrue(view.builtIns().stream().anyMatch(item -> "mock".equals(item.id())));
+    verify(auth).initialized();
+  }
+
+  @Test
+  void listShowsLegacyEntryToAdminWhenKeyFileExists() {
+    byte[] key = new byte[32];
+    new SecureRandom(new byte[] {4, 2, 6}).nextBytes(key);
+    var withLegacyKeyFile =
+        new ModelConnectionService(
+            connections, probe, auth, new SecretCipher(key), OutboundUrlGuard.strict(), () -> true);
+    login("ADMIN", false);
+    when(connections.findByOwnerUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
+
+    var view = withLegacyKeyFile.list();
+
+    assertTrue(
+        view.builtIns().stream().anyMatch(item -> "legacy-deepseek".equals(item.id())),
+        "宿主机存在旧密钥文件时，管理员应能看到遗留兜底条目");
+  }
+
+  @Test
+  void listOmitsLegacyEntryWhenKeyFileAbsentEvenForAdmin() {
+    byte[] key = new byte[32];
+    new SecureRandom(new byte[] {4, 2, 6}).nextBytes(key);
+    var withoutLegacyKeyFile =
+        new ModelConnectionService(
+            connections,
+            probe,
+            auth,
+            new SecretCipher(key),
+            OutboundUrlGuard.strict(),
+            () -> false);
+    UserEntity admin = mock(UserEntity.class);
+    when(admin.getId()).thenReturn("u1");
+    when(auth.current()).thenReturn(Optional.of(admin));
+    when(connections.findByOwnerUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
+
+    var view = withoutLegacyKeyFile.list();
+
+    assertTrue(
+        view.builtIns().stream().noneMatch(item -> "legacy-deepseek".equals(item.id())),
+        "宿主机未放置旧密钥文件时，任何角色都不应看到遗留兜底条目");
     assertTrue(view.builtIns().stream().anyMatch(item -> "mock".equals(item.id())));
   }
 }

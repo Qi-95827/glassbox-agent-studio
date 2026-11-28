@@ -78,26 +78,26 @@ public final class SensitiveDataMasker {
       Pattern.compile(
           "(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|(?i:bearer)\\s+|eyJ))"
               + "(?!" + MASKED_PLACEHOLDER + "$)[A-Za-z0-9._~+/=-]*$");
-  /** 流末尾尚未闭合的双引号凭据值（允许含空格、逗号与转义引号），仅当整值恰好等于完整占位符时豁免。 */
+  /** 流末尾尚未闭合的双引号凭据值（允许含空格、逗号、转义引号及末尾悬空转义起始符），仅当整值恰好等于完整占位符时豁免。 */
   private static final Pattern TRUNCATED_QUOTED_DOUBLE_KV =
       Pattern.compile(
           "(?i)(\"?'?"
               + KV_KEY
               + "'?\"?\\s*[:=]\\s*(?<!\\\\)\")(?!"
               + MASKED_PLACEHOLDER
-              + "$)"
+              + "$)(?:"
               + DOUBLE_QUOTED_ATOM
-              + "+$");
-  /** 流末尾尚未闭合的单引号凭据值（允许含空格、逗号与转义引号），仅当整值恰好等于完整占位符时豁免。 */
+              + "+\\\\?|\\\\)$");
+  /** 流末尾尚未闭合的单引号凭据值（允许含空格、逗号、转义引号及末尾悬空转义起始符），仅当整值恰好等于完整占位符时豁免。 */
   private static final Pattern TRUNCATED_QUOTED_SINGLE_KV =
       Pattern.compile(
           "(?i)(\"?'?"
               + KV_KEY
               + "'?\"?\\s*[:=]\\s*(?<!\\\\)')(?!"
               + MASKED_PLACEHOLDER
-              + "$)"
+              + "$)(?:"
               + SINGLE_QUOTED_ATOM
-              + "+$");
+              + "+\\\\?|\\\\)$");
   /** 仅锚定流末尾尚未闭合的无引号凭据键值（与整段规则一致支持跨行空白），仅在流异常中断时兜底；仅豁免整值恰好等于完整占位符。 */
   private static final Pattern TRUNCATED_KV =
       Pattern.compile(

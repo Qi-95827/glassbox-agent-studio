@@ -58,6 +58,21 @@ public class JdbcMemoryVectorIndex implements MemoryVectorIndex {
 
   @Override
   public void store(String workspaceId, String memoryId, String modelName, float[] embedding) {
+    storeInternal(workspaceId, memoryId, modelName, embedding, null);
+  }
+
+  @Override
+  public void storeIfVersion(
+      String workspaceId, String memoryId, String modelName, float[] embedding, int expectedVersion) {
+    storeInternal(workspaceId, memoryId, modelName, embedding, expectedVersion);
+  }
+
+  private void storeInternal(
+      String workspaceId,
+      String memoryId,
+      String modelName,
+      float[] embedding,
+      Integer expectedVersion) {
     if (!available() || embedding == null || embedding.length == 0) return;
     int dimension = columnDimension();
     if (dimension > 0 && dimension != embedding.length) {
@@ -66,13 +81,24 @@ public class JdbcMemoryVectorIndex implements MemoryVectorIndex {
       return;
     }
     try {
-      jdbc.update(
-          "UPDATE memory_records SET embedding_vec = ?::vector, embedding_model = ?"
-              + " WHERE id = ? AND workspace_id = ? AND status = 'ACTIVE'",
-          literal(embedding),
-          modelName,
-          memoryId,
-          workspaceId);
+      if (expectedVersion == null) {
+        jdbc.update(
+            "UPDATE memory_records SET embedding_vec = ?::vector, embedding_model = ?"
+                + " WHERE id = ? AND workspace_id = ? AND status = 'ACTIVE'",
+            literal(embedding),
+            modelName,
+            memoryId,
+            workspaceId);
+      } else {
+        jdbc.update(
+            "UPDATE memory_records SET embedding_vec = ?::vector, embedding_model = ?"
+                + " WHERE id = ? AND workspace_id = ? AND status = 'ACTIVE' AND version = ?",
+            literal(embedding),
+            modelName,
+            memoryId,
+            workspaceId,
+            expectedVersion);
+      }
     } catch (RuntimeException e) {
       // 失败不能回滚外层记忆回填事务；embedding_json 仍可支撑内存余弦降级。
       LOG.warn("记忆向量列写入失败，已保留 embedding_json 并降级为词法召回：{}", e.getMessage());

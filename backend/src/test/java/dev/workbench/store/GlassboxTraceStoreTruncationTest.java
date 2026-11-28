@@ -350,4 +350,143 @@ class GlassboxTraceStoreTruncationTest {
     assertNotNull(storedTool);
     assertFalse(storedTool.inputArgs().contains("MIIEBrokenSecret666"));
   }
+
+  /**
+   * 端到端回归（生产端 ControlledModel → 落库 GlassboxTraceStore → H2 读回 → Jackson 解析）：
+   * 即使工具 Schema 或工具调用参数包含未闭合 PEM、敏感键值或超过 8,192 字符的超长字段，
+   * 生产端也必须先走 JSON 叶子脱敏与树内限长，不能提前破坏 JSON 导致落库后无法反序列化。
+   */
+  @Test
+  void controlledModelProductionToH2RoundTripKeepsToolSchemaAndArgsValidJson() throws Exception {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    var captured = new java.util.concurrent.atomic.AtomicReference<GlassboxModels.ModelCallPayload>();
+    dev.workbench.framework.agent.execution.AgentRuntime runtime =
+        new dev.workbench.framework.agent.execution.AgentRuntime() {
+          @Override
+          public void beforeModel(dev.workbench.domain.ModelKind modelName) {}
+
+          @Override
+          public void modelResult(Integer input, Integer output) {}
+
+          @Override
+          public void modelTrace(GlassboxModels.ModelCallPayload value) {
+            captured.set(value);
+          }
+
+          @Override
+          public void assemblyResolved(
+              dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.Components components) {}
+
+          @Override
+          public UUID beforeTool(
+              dev.workbench.domain.ToolKind tool, int version, String fingerprint) {
+            return UUID.randomUUID();
+          }
+
+          @Override
+          public void check() {}
+
+          @Override
+          public void event(dev.workbench.domain.EventType type, String message) {}
+
+          @Override
+          public void toolResult(String result) {}
+
+          @Override
+          public void toolRejected(String safeMessage) {}
+        };
+
+    String longBody = "L".repeat(12_000);
+    var toolSchema =
+        io.agentscope.core.model.ToolSchema.builder()
+            .name("sign_file")
+            .description("签名并写入文件")
+            .parameters(
+                java.util.Map.of(
+                    "type",
+                    "object",
+                    "properties",
+                    java.util.Map.of(
+                        "pem",
+                        java.util.Map.of(
+                            "default", "-----BEGIN RSA PRIVATE KEY-----\nMIIEProdSchemaSecret"),
+                        "notes",
+                        java.util.Map.of("description", longBody),
+                        "path",
+                        java.util.Map.of("const", "src/sort.js"))))
+            .build();
+    var responseChunk =
+        io.agentscope.core.model.ChatResponse.builder()
+            .content(
+                List.of(
+                    io.agentscope.core.message.TextBlock.builder().text("调用工具").build(),
+                    io.agentscope.core.message.ToolUseBlock.builder()
+                        .id("call-prod-1")
+                        .name("sign_file")
+                        .input(
+                            java.util.Map.of(
+                                "pem",
+                                "-----BEGIN EC PRIVATE KEY-----\nMHcCProdArgSecret",
+                                "apiKey",
+                                "sk-prod1234567890abcdef",
+                                "content",
+                                longBody,
+                                "path",
+                                "src/sort.js"))
+                        .build()))
+            .build();
+    io.agentscope.core.model.Model stubDelegate =
+        new io.agentscope.core.model.Model() {
+          @Override
+          public reactor.core.publisher.Flux<io.agentscope.core.model.ChatResponse> stream(
+              List<io.agentscope.core.message.Msg> messages,
+              List<io.agentscope.core.model.ToolSchema> tools,
+              io.agentscope.core.model.GenerateOptions options) {
+            return reactor.core.publisher.Flux.just(responseChunk);
+          }
+
+          @Override
+          public String getModelName() {
+            return "prod-stub";
+          }
+
+          @Override
+          public int getContextWindowSize() {
+            return 0;
+          }
+        };
+
+    var controlled =
+        new dev.workbench.infrastructure.agentscope.ControlledModel(
+            stubDelegate,
+            dev.workbench.domain.ModelMode.MOCK,
+            runtime,
+            new java.util.concurrent.atomic.AtomicReference<RuntimeException>());
+    controlled.stream(List.of(), List.of(toolSchema), null).collectList().block();
+
+    assertNotNull(captured.get(), "ControlledModel 必须产出玻璃盒载荷");
+    assertTrue(captured.get().truncated(), "超过 8,192 字符的大字段应标记 truncated");
+    traces.recordModelPayload(runId, modelCallId, captured.get());
+
+    var stored = traces.modelPayloadsByRun(runId).get(modelCallId);
+    assertNotNull(stored, "落库后必须能从 H2 完整读回");
+    var mapper = new ObjectMapper();
+
+    String storedSchema = stored.requestTools().getFirst().parametersJson();
+    assertTrue(storedSchema.length() <= 8_192, "工具 Schema 应在生产端限长到 8,192 以内");
+    var schemaNode = mapper.readTree(storedSchema);
+    assertEquals("src/sort.js", schemaNode.at("/properties/path/const").asText(), "相邻字段必须完整保留");
+    assertEquals("***MASKED-PRIVATE-KEY***", schemaNode.at("/properties/pem/default").asText());
+    assertFalse(storedSchema.contains("MIIEProdSchemaSecret"));
+
+    String storedArgs = stored.responseToolCalls().getFirst().argumentsJson();
+    assertTrue(storedArgs.length() <= 8_192, "工具参数应在生产端限长到 8,192 以内");
+    var argsNode = mapper.readTree(storedArgs);
+    assertEquals("src/sort.js", argsNode.get("path").asText(), "相邻路径字段必须完整保留");
+    assertEquals("***MASKED-PRIVATE-KEY***", argsNode.get("pem").asText());
+    assertFalse(storedArgs.contains("MHcCProdArgSecret"));
+    assertFalse(storedArgs.contains("sk-prod1234567890abcdef"));
+    assertTrue(argsNode.get("content").asText().endsWith("...[已截断]"), "超长文本叶子应被优雅截断而非破坏 JSON");
+  }
 }

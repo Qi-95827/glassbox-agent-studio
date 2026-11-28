@@ -29,5 +29,8 @@ RUN mkdir -p /app/data && chown -R workbench:workbench /app
 USER workbench
 VOLUME ["/app/data"]
 EXPOSE 8088
+# 容器内监听 0.0.0.0 以便宿主机端口映射可达；宿主机启动建议绑定 127.0.0.1:8088:8088，
+# 且应用侧 LocalOriginFilter 仍强制校验 Host 与 Origin。
+ENV SERVER_ADDRESS="0.0.0.0"
 ENV JAVA_TOOL_OPTIONS="-Dfile.encoding=UTF-8"
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

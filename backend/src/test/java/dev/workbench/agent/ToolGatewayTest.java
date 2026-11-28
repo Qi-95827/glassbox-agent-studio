@@ -239,11 +239,88 @@ class ToolGatewayTest {
     assertEquals(java.util.List.of(EventType.TOOL_STARTED), runtime.events);
   }
 
+  @Test
+  void traceRecordsEffectiveMaskedArgsJsonInsteadOfSha256Fingerprint() throws Exception {
+    var runtime = new StubRuntime();
+    var gateway =
+        new ToolGateway(
+            new ObjectMapper().findAndRegisterModules(),
+            runtime,
+            new AtomicReference<RuntimeException>());
+    String fingerprint =
+        dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_READ, "sort.js");
+    String rawArgs =
+        "{\"path\":\"sort.js\",\"token\":\"sk-1234567890abcdef\",\"pem\":\"-----BEGIN RSA PRIVATE KEY-----\\nMIIESecret\"}";
+    gateway.execute(
+        ToolKind.WORKSPACE_READ,
+        "WORKSPACE_READ",
+        dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+        fingerprint,
+        rawArgs,
+        ToolEffect.READ_ONLY,
+        "开始",
+        value -> "摘要",
+        () -> {},
+        null,
+        null,
+        null,
+        () -> "ok");
+
+    assertNotNull(runtime.lastTrace);
+    assertFalse(
+        runtime.lastTrace.inputArgs().equals(fingerprint),
+        "工具轨迹 inputArgs 不得退化为 SHA-256 指纹");
+    var parsed = new ObjectMapper().readTree(runtime.lastTrace.inputArgs());
+    assertEquals("sort.js", parsed.get("path").asText(), "实际路径参数必须可读");
+    assertFalse(runtime.lastTrace.inputArgs().contains("sk-1234567890abcdef"));
+    assertFalse(runtime.lastTrace.inputArgs().contains("MIIESecret"));
+  }
+
+  @Test
+  void traceRecordsEditedArgsJsonWhenApprovedWithEdits() throws Exception {
+    var runtime = new StubRuntime();
+    runtime.nextApproval =
+        new dev.workbench.framework.tool.ToolApprovalDecision(
+            dev.workbench.framework.tool.ToolApprovalAction.APPROVE_WITH_EDITED_ARGS,
+            "{\"path\":\"safe.js\",\"content\":\"edited\"}",
+            null);
+    var gateway =
+        new ToolGateway(
+            new ObjectMapper().findAndRegisterModules(),
+            runtime,
+            new AtomicReference<RuntimeException>(),
+            ctx ->
+                new dev.workbench.framework.tool.ToolRiskAssessment(
+                    dev.workbench.framework.tool.ToolRiskLevel.HIGH, "需审批"));
+    gateway.execute(
+        ToolKind.WORKSPACE_WRITE,
+        "WORKSPACE_WRITE",
+        dev.workbench.framework.tool.ToolContracts.SINGLE_FILE_VERSION,
+        dev.workbench.framework.tool.ToolFingerprint.of(ToolKind.WORKSPACE_WRITE, "orig.js"),
+        "{\"path\":\"orig.js\",\"content\":\"orig\"}",
+        ToolEffect.WRITE,
+        "开始写入",
+        value -> "摘要",
+        () -> {},
+        null,
+        edited -> {},
+        edited -> "ok",
+        () -> "orig");
+
+    assertNotNull(runtime.lastTrace);
+    var parsed = new ObjectMapper().readTree(runtime.lastTrace.inputArgs());
+    assertEquals("safe.js", parsed.get("path").asText(), "人工改参放行后轨迹应记录最终生效的参数");
+    assertEquals("edited", parsed.get("content").asText());
+  }
+
   private static final class StubRuntime implements AgentRuntime {
     final UUID id = UUID.randomUUID();
     final ArrayList<EventType> events = new ArrayList<>();
     String result;
     String rejected;
+    dev.workbench.framework.trace.GlassboxModels.ToolCallTrace lastTrace;
+    dev.workbench.framework.tool.ToolApprovalDecision nextApproval =
+        dev.workbench.framework.tool.ToolApprovalDecision.approve();
 
     public void beforeModel(ModelKind model) {}
 
@@ -268,6 +345,21 @@ class ToolGatewayTest {
 
     public void toolRejected(String value) {
       rejected = value;
+    }
+
+    @Override
+    public void toolTrace(
+        UUID toolCallId, dev.workbench.framework.trace.GlassboxModels.ToolCallTrace trace) {
+      this.lastTrace = trace;
+    }
+
+    @Override
+    public dev.workbench.framework.tool.ToolApprovalDecision approvalDecision(
+        String toolName,
+        int toolVersion,
+        String argsJson,
+        dev.workbench.framework.tool.ToolRiskAssessment risk) {
+      return nextApproval;
     }
   }
 }

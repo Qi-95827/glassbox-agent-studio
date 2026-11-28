@@ -263,6 +263,11 @@ public final class ToolGateway {
       if (stopped != null) throw stopped;
       boolean actionStarted = false;
       var checks = new ArrayList<GatewayCheck>();
+      // 指纹仅用于防循环查重；玻璃盒轨迹必须记录实际生效的工具参数 JSON（人工改参后记录最终生效版本）。
+      String traceArgs =
+          argsJson != null && !argsJson.isBlank()
+              ? argsJson
+              : (fingerprint == null ? "{}" : fingerprint);
       try {
         var callId = runtime.beforeTool(kind, toolVersion, fingerprint);
         addCheck(toolName, checks, 
@@ -305,7 +310,7 @@ public final class ToolGateway {
               nanos,
               ToolResult.ErrorCode.INVALID_ARGUMENT,
               "工具输入不符合参数约束，请检查参数后再决定是否重试。",
-              fingerprint,
+              traceArgs,
               checks);
         }
         if (scopeValidate == null) {
@@ -341,7 +346,7 @@ public final class ToolGateway {
                 nanos,
                 ToolResult.ErrorCode.INVALID_ARGUMENT,
                 "工具路径不在任务授权范围内，未执行动作；请改用已授权文件。",
-                fingerprint,
+                traceArgs,
                 checks);
           }
         }
@@ -371,7 +376,7 @@ public final class ToolGateway {
               nanos,
               ToolResult.ErrorCode.APPROVAL_REJECTED,
               approval.reason() == null ? "用户拒绝执行该工具，请调整方案后继续。" : "用户拒绝执行该工具：" + approval.reason(),
-              fingerprint,
+              traceArgs,
               checks);
         }
         runtime.check();
@@ -379,6 +384,9 @@ public final class ToolGateway {
         try {
           actionStarted = true;
           if (approval.edited()) {
+            if (approval.editedArgsJson() != null && !approval.editedArgsJson().isBlank()) {
+              traceArgs = approval.editedArgsJson();
+            }
             if (editedValidate == null || editedAction == null)
               return rejected(
                   callId,
@@ -389,7 +397,7 @@ public final class ToolGateway {
                   nanos,
                   ToolResult.ErrorCode.INVALID_ARGUMENT,
                   "当前工具不支持改参放行，请按原参数重新审批。",
-                  fingerprint,
+                  traceArgs,
                   checks);
             try {
               // 改参放行必须重新经过 Gate 5 的文件/作用域授权交集复验，防止绕过。
@@ -413,7 +421,7 @@ public final class ToolGateway {
                   nanos,
                   ToolResult.ErrorCode.INVALID_ARGUMENT,
                   "修改后的参数未通过授权复验，工具未执行。",
-                  fingerprint,
+                  traceArgs,
                   checks);
             }
             data = editedAction.apply(approval.editedArgsJson());
@@ -433,7 +441,7 @@ public final class ToolGateway {
               nanos,
               ToolResult.ErrorCode.STALE_VERSION,
               "文件版本已变化，请重新读取授权文件后再决定是否修改。",
-              fingerprint,
+              traceArgs,
               checks);
         } catch (IllegalArgumentException e) {
           if (effect == ToolEffect.WRITE) throw e;
@@ -452,7 +460,7 @@ public final class ToolGateway {
               nanos,
               ToolResult.ErrorCode.INVALID_ARGUMENT,
               "工具输入不符合约束，请检查参数和授权范围后再决定是否重试。",
-              fingerprint,
+              traceArgs,
               checks);
         }
         Instant finished = Instant.now();
@@ -475,7 +483,7 @@ public final class ToolGateway {
         runtime.event(EventType.TOOL_FINISHED, safeSummary);
         if (observedVersion == null) runtime.toolResult(safeSummary);
         else runtime.toolResult(safeSummary, observedVersion);
-        recordTrace(callId, fingerprint, checks, value);
+        recordTrace(callId, traceArgs, checks, value);
         return value;
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
@@ -551,8 +559,10 @@ public final class ToolGateway {
   }
 
   private void recordTrace(
-      UUID callId, String fingerprint, List<GatewayCheck> checks, String fullResult) {
-    var safeArgs = SensitiveDataMasker.maskAndTruncate(fingerprint == null ? "{}" : fingerprint);
+      UUID callId, String inputArgs, List<GatewayCheck> checks, String fullResult) {
+    var safeArgs =
+        dev.workbench.framework.trace.JsonLeafMasker.maskAndTruncate(
+            json, inputArgs == null ? "{}" : inputArgs, SensitiveDataMasker.DEFAULT_MAX_CHARS);
     var safeResult = SensitiveDataMasker.maskAndTruncate(fullResult);
     runtime.toolTrace(
         callId,

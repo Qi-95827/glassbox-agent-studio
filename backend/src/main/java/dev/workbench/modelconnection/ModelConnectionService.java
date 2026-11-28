@@ -34,6 +34,7 @@ public class ModelConnectionService {
   private final ModelProbe probe;
   private final AuthService auth;
   private final OutboundUrlGuard guard;
+  private final java.util.function.BooleanSupplier legacyKeyExists;
 
   @org.springframework.beans.factory.annotation.Autowired
   public ModelConnectionService(
@@ -60,11 +61,24 @@ public class ModelConnectionService {
       AuthService auth,
       SecretCipher cipher,
       OutboundUrlGuard guard) {
+    this(connections, probe, auth, cipher, guard, () -> Files.exists(LEGACY_DEEPSEEK_KEY));
+  }
+
+  /** 单元测试可注入遗留密钥文件存在性，避免结果受宿主机是否放置 config/deepseek-api-key.txt 影响。 */
+  ModelConnectionService(
+      UserModelConnectionRepository connections,
+      ModelProbe probe,
+      AuthService auth,
+      SecretCipher cipher,
+      OutboundUrlGuard guard,
+      java.util.function.BooleanSupplier legacyKeyExists) {
     this.connections = connections;
     this.probe = probe;
     this.auth = auth;
     this.cipher = cipher;
     this.guard = guard == null ? OutboundUrlGuard.strict() : guard;
+    this.legacyKeyExists =
+        legacyKeyExists == null ? () -> Files.exists(LEGACY_DEEPSEEK_KEY) : legacyKeyExists;
   }
 
   public record SaveRequest(
@@ -161,7 +175,7 @@ public class ModelConnectionService {
             true,
             true,
             "用于教学和快速体验，不产生真实模型费用。"));
-    if (Files.exists(LEGACY_DEEPSEEK_KEY) && legacyKeyAllowed()) {
+    if (legacyKeyExists.getAsBoolean() && legacyKeyAllowed()) {
       builtIns.add(
           new ConnectionView(
               "legacy-deepseek",

@@ -78,17 +78,30 @@ final class RunDispatchService {
 
   /** 恢复因断点让出线程的运行：重新投递回执行器，继续认领剩余 PENDING 节点。 */
   void dispatchResume(String runId) {
+    dispatchResume(runId, null);
+  }
+
+  /**
+   * 恢复因断点让出线程的运行；执行器拒绝时交由 {@code onRejected} 在同一运行分段锁内恢复
+   * {@code yielded} 标记并保留既有计数。
+   */
+  void dispatchResume(String runId, Runnable onRejected) {
     try {
       executor.submit(() -> engine.executeResume(runId));
     } catch (RejectedExecutionException e) {
+      if (onRejected != null) {
+        onRejected.run();
+        return;
+      }
+      var snapshot = runs.runSnapshot(runId);
       runs.update(
           runId,
           dev.workbench.domain.RunStatus.PAUSED,
           "恢复请求未能加入执行队列，运行保持暂停，可稍后再次继续。",
           null,
-          0,
-          0,
-          0);
+          snapshot.rounds(),
+          snapshot.tools(),
+          snapshot.elapsedMs());
     }
   }
 

@@ -218,113 +218,23 @@ public class GlassboxTraceStore {
     return value == null ? null : SensitiveDataMasker.mask(value);
   }
 
-  /** 敏感键名归一后集合：与 {@link SensitiveDataMasker} 的键值规则同口径。 */
-  private static final List<String> SENSITIVE_KEY_TOKENS =
-      List.of("apikey", "secret", "password", "passwd", "token", "authorization", "cookie");
-
-  /** 完整掩码占位符：整值等于它们时视为已脱敏，不再叠加。 */
-  private static final List<String> MASKED_PLACEHOLDERS =
-      List.of("***MASKED***", "***MASKED-PRIVATE-KEY***", "***MASKED-TOKEN***", "***MASKED-KEY***");
-
-  private static boolean sensitiveKey(String fieldName) {
-    if (fieldName == null) return false;
-    String normalized =
-        fieldName.toLowerCase(java.util.Locale.ROOT).replace("_", "").replace("-", "");
-    for (String token : SENSITIVE_KEY_TOKENS) if (normalized.contains(token)) return true;
-    return false;
-  }
-
-  private static boolean fullyMaskedValue(String value) {
-    if (value == null) return false;
-    if (MASKED_PLACEHOLDERS.contains(value) || "sk-***MASKED***".equals(value)) return true;
-    return value.matches("(?i)Bearer\\s+\\*\\*\\*MASKED(?:-(?:PRIVATE-KEY|TOKEN|KEY))?\\*\\*\\*");
-  }
-
   /**
-   * 仅执行长度截断，不再对已完成叶子脱敏并重新序列化的 JSON 字符串做第二次整段正则替换。
-   */
-  private static SensitiveDataMasker.TruncatedText truncateMasked(String masked) {
-    if (masked == null) return new SensitiveDataMasker.TruncatedText(null, false);
-    int limit = SensitiveDataMasker.DEFAULT_MAX_CHARS;
-    if (masked.length() <= limit) return new SensitiveDataMasker.TruncatedText(masked, false);
-    return new SensitiveDataMasker.TruncatedText(masked.substring(0, limit) + "\n...[已截断]", true);
-  }
-
-  /**
-   * 载荷字段的内层 JSON 叶子级脱敏。
-   *
-   * <p>工具参数与参数 Schema 本身是 JSON 字符串：若直接对整段文本跑正则，一个未闭合 PEM 会吞掉该字符串
-   * 自身的闭合引号与相邻字段，落库后无法再反序列化。这里先解析成树、逐叶子脱敏、再序列化回合法 JSON；
-   * 非 JSON 文本或解析失败时退回整段脱敏，绝不抛异常。
+   * 载荷字段的内层 JSON 叶子级脱敏与结构保真限长：与 {@link dev.workbench.framework.trace.JsonLeafMasker}
+   * 共享同一实现，保证生产端与落库端对未闭合 PEM、敏感键值及超长字段的口径 100% 一致。
    */
   private String maskJsonOrText(String value) {
-    if (value == null || value.isBlank()) return value;
-    String trimmed = value.trim();
-    if (!trimmed.startsWith("{") && !trimmed.startsWith("["))
-      return SensitiveDataMasker.mask(value);
-    com.fasterxml.jackson.databind.JsonNode root;
-    try {
-      root = json.readTree(value);
-    } catch (JsonProcessingException error) {
-      return SensitiveDataMasker.mask(value);
-    }
-    if (root == null || !(root.isObject() || root.isArray()))
-      return SensitiveDataMasker.mask(value);
-    maskJsonLeaves(root);
-    try {
-      return json.writeValueAsString(root);
-    } catch (JsonProcessingException error) {
-      return SensitiveDataMasker.mask(value);
-    }
-  }
-
-  private static void maskJsonLeaves(com.fasterxml.jackson.databind.JsonNode node) {
-    if (node instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
-      var names = new java.util.ArrayList<String>();
-      object.fieldNames().forEachRemaining(names::add);
-      for (String name : names) {
-        var child = object.get(name);
-        if (child == null) continue;
-        if (child.isObject() || child.isArray()) {
-          maskJsonLeaves(child);
-          continue;
-        }
-        if (!child.isTextual()) continue;
-        object.put(name, maskLeafText(name, child.asText()));
-      }
-      return;
-    }
-    if (node instanceof com.fasterxml.jackson.databind.node.ArrayNode array) {
-      for (int index = 0; index < array.size(); index++) {
-        var child = array.get(index);
-        if (child == null) continue;
-        if (child.isObject() || child.isArray()) {
-          maskJsonLeaves(child);
-          continue;
-        }
-        if (child.isTextual())
-          array.set(index, com.fasterxml.jackson.databind.node.TextNode.valueOf(
-              SensitiveDataMasker.mask(child.asText())));
-      }
-    }
-  }
-
-  /**
-   * 敏感键名下的叶子值：先按既有规则脱敏；只有整值已彻底化为完整掩码占位符（或短于 6 字符）时才保留专项占位符，
-   * 否则（含无前缀口令、以及「专项掩码/占位符前缀 + 明文后缀」的混合值）一律整体替换为统一占位符，防止旁路泄露。
-   */
-  private static String maskLeafText(String fieldName, String raw) {
-    String masked = SensitiveDataMasker.mask(raw);
-    if (!sensitiveKey(fieldName)) return masked;
-    if (raw.length() < 6 || fullyMaskedValue(masked)) return masked;
-    return "***MASKED***";
+    return dev.workbench.framework.trace.JsonLeafMasker.maskAndTruncate(
+            json, value, SensitiveDataMasker.DEFAULT_MAX_CHARS)
+        .text();
   }
 
   @Transactional
   public void recordToolTrace(String runId, String toolCallId, ToolCallTrace trace) {
     if (runId == null || toolCallId == null || trace == null) return;
-    // 工具入参常常是 JSON 字符串：先在叶子层脱敏再做体积截断，不再对合法 JSON 重复跑整段正则。
-    var args = truncateMasked(maskJsonOrText(trace.inputArgs()));
+    // 工具入参常常是 JSON 字符串：在叶子层脱敏并在树内限长，保证合法 JSON 不被整段正则或硬切破坏。
+    var args =
+        dev.workbench.framework.trace.JsonLeafMasker.maskAndTruncate(
+            json, trace.inputArgs(), SensitiveDataMasker.DEFAULT_MAX_CHARS);
     var checksJson = writeListWithinLimit(maskGatewayChecks(trace.gatewayChecks()), null);
     var full = SensitiveDataMasker.maskAndTruncate(trace.fullResult());
     boolean truncated = trace.resultTruncated() || args.truncated() || full.truncated();

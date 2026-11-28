@@ -441,7 +441,7 @@ export interface SupplementView {
   decidedAt: string | null;
 }
 
-/** 人工接手记录；旧测试或审批是否失效以服务端快照为准。 */
+/** 人工接手记录（执行视图投影）；旧测试或审批是否失效以服务端快照为准。 */
 export interface HandoverView {
   id: string;
   status: string;
@@ -449,6 +449,25 @@ export interface HandoverView {
   currentFingerprint: string | null;
   evidenceInvalidated: boolean;
   revalidationRequired: boolean;
+  note: string | null;
+  takenAt: string;
+  returnedAt: string | null;
+}
+
+/**
+ * 人工接手写接口返回记录（`POST /api/runs/{id}/handover` 与 `/handover/return`）。
+ *
+ * <p>来源：`RunHandoverService.Handover` record；与执行视图 {@link HandoverView} 不同，
+ * 这里携带 `runId` / `workspaceId`，不携带由视图层衍生的 `revalidationRequired`。
+ */
+export interface HandoverRecord {
+  id: string;
+  runId: string;
+  workspaceId: string;
+  status: string;
+  baselineFingerprint: string | null;
+  currentFingerprint: string | null;
+  evidenceInvalidated: boolean;
   note: string | null;
   takenAt: string;
   returnedAt: string | null;
@@ -1010,13 +1029,13 @@ export interface RunDiffNodeSide {
   files: string[];
 }
 
-/** 逐节点对照行。 */
+/** 逐节点对照行；仅在某一侧存在的分叉节点另一侧返回 `null`。 */
 export interface RunDiffNode {
   key: string;
   title: string | null;
   role: string | null;
-  base: RunDiffNodeSide;
-  target: RunDiffNodeSide;
+  base: RunDiffNodeSide | null;
+  target: RunDiffNodeSide | null;
 }
 
 /** 运行指标块（对照两侧各一份）。 */

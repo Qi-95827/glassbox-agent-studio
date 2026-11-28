@@ -4,7 +4,7 @@ import type {
   AgentMetricsRow,
   ArchitectureXray,
   ExecutionView,
-  HandoverView,
+  HandoverRecord,
   JsonObject,
   NodeDetail,
   PlanProposal,
@@ -93,9 +93,9 @@ export const runsApi = {
     requestId: string,
     payload: unknown
   ): Promise<SupplementSubmitResult> => post(`/runs/${runId}/supplements/${requestId}`, payload),
-  takeHandover: (runId: string, note: string): Promise<HandoverView> =>
+  takeHandover: (runId: string, note: string): Promise<HandoverRecord> =>
     post(`/runs/${runId}/handover`, { note }),
-  returnHandover: (runId: string, note: string): Promise<HandoverView> =>
+  returnHandover: (runId: string, note: string): Promise<HandoverRecord> =>
     post(`/runs/${runId}/handover/return`, { note }),
   delivery: (runId: string, options?: RequestOptions): Promise<RunDelivery> =>
     get(`/runs/${runId}/delivery`, options),

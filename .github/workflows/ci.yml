@@ -33,9 +33,16 @@ jobs:
 
       - name: 静态红线：主代码零 @Lob
         run: |
-          if git grep -n "@Lob" -- "backend/src/main"; then
+          set +e
+          git grep -n "@Lob" -- "backend/src/main"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
             echo "禁止在 backend/src/main 使用 @Lob"
             exit 1
+          elif [ "$rc" -gt 1 ]; then
+            echo "git grep 执行异常（退出码 $rc）"
+            exit "$rc"
           fi
 
       - name: 静态红线：config/ 与 data/ 不得入库

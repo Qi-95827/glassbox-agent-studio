@@ -113,26 +113,20 @@ class ArchitectureGuardTest {
           .because("主代码禁止使用 @Lob，大正文必须走受控列或文件");
 
   /**
-   * 出站 HTTP 客户端只能由统一出站封装与其基础设施适配器创建。
+   * 出站 HTTP 客户端只能由统一出站封装创建。
    *
    * <p>规则只禁止「创建」客户端（{@code newHttpClient()} / {@code newBuilder()}）：{@code HttpClient} 自带连接池、
-   * 代理与超时语义，业务代码自建客户端会绕过 {@code OutboundUrlGuard} 的地址与凭据防护。
-   * 复用注入的共享客户端仍然合法，因此不会误伤正常调用方。白名单只有两处：
-   *
-   * <ul>
-   *   <li>{@code dev.workbench.framework.outbound}：唯一的出站客户端工厂；
-   *   <li>{@code dev.workbench.infrastructure}：MCP 等协议适配层，必须复用同一套防护。
-   * </ul>
+   * 代理与超时语义，业务或适配器代码自建客户端会绕过 {@code OutboundUrlGuard} 的地址与凭据防护。
+   * 复用注入的共享客户端仍然合法，因此不会误伤正常调用方。唯一白名单为 {@code dev.workbench.framework.outbound}。
    */
   @ArchTest
   static final ArchRule httpClientCreationOnlyInsideOutboundAdapters =
       noClasses()
           .that()
-          .resideOutsideOfPackages(
-              "dev.workbench.framework.outbound..", "dev.workbench.infrastructure..")
+          .resideOutsideOfPackages("dev.workbench.framework.outbound..")
           .should()
           .callMethod(java.net.http.HttpClient.class, "newHttpClient")
           .orShould()
           .callMethod(java.net.http.HttpClient.class, "newBuilder")
-          .because("出站 HTTP 客户端必须由统一出站封装创建，禁止业务代码自建客户端绕过防护");
+          .because("出站 HTTP 客户端必须由统一出站封装创建，禁止业务或适配器代码自建客户端绕过防护");
 }

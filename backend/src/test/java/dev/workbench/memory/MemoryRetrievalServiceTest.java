@@ -138,6 +138,74 @@ class MemoryRetrievalServiceTest {
             .toList();
     when(repository.summarizeByWorkspaceAndStatus("ws", MemoryStatus.ACTIVE)).thenReturn(summaries);
     when(repository.findAllById(any())).thenReturn(rows);
+    when(repository.updateEmbeddingIfVersionMatches(
+            anyString(), eq("ws"), anyString(), anyString(), eq(MemoryStatus.ACTIVE), anyInt()))
+        .thenReturn(1);
+  }
+
+  @Test
+  void staleBackfillIsDiscardedWhenVersionAdvancedConcurrently() {
+    var repository = mock(MemoryRecordRepository.class);
+    var entity = row("mem-race", "排序页面使用原生 JavaScript", "[\"sort.js\"]", 0.9);
+    stub(List.of(entity), repository);
+    // 模拟在 embedAll 期间用户编辑了正文并推进了版本号：条件回填受影响行数为 0。
+    when(repository.updateEmbeddingIfVersionMatches(
+            eq("mem-race"), eq("ws"), anyString(), eq("test-embed"), eq(MemoryStatus.ACTIVE), eq(1)))
+        .thenReturn(0);
+    var provider =
+        new dev.workbench.framework.memory.MemoryEmbeddingProvider() {
+          @Override
+          public boolean isAvailable() {
+            return true;
+          }
+
+          @Override
+          public String modelName() {
+            return "test-embed";
+          }
+
+          @Override
+          public float[] embed(String text) {
+            return new float[] {1, 0};
+          }
+        };
+    var storeCalls = new java.util.concurrent.atomic.AtomicInteger();
+    var index =
+        new dev.workbench.framework.memory.MemoryVectorIndex() {
+          @Override
+          public boolean available() {
+            return true;
+          }
+
+          @Override
+          public void store(
+              String workspaceId, String memoryId, String modelName, float[] embedding) {
+            storeCalls.incrementAndGet();
+          }
+
+          @Override
+          public void storeIfVersion(
+              String workspaceId,
+              String memoryId,
+              String modelName,
+              float[] embedding,
+              int expectedVersion) {
+            storeCalls.incrementAndGet();
+          }
+
+          @Override
+          public List<VectorHit> nearest(
+              String workspaceId, String modelName, float[] query, int limit) {
+            return List.of();
+          }
+        };
+
+    var service = new MemoryRetrievalService(repository, List.of(provider), List.of(index));
+    service.retrieve("ws", new MemorySearchQuery("排序 JavaScript", List.of("sort.js"), 5));
+
+    assertEquals(0, storeCalls.get(), "版本推进后绝不能把旧向量写回向量索引");
+    assertNull(entity.getEmbeddingJson(), "旧回填被丢弃后不得污染内存对象");
+    verify(repository, never()).saveAll(any());
   }
 
   private static MemoryRecordEntity agentRow(

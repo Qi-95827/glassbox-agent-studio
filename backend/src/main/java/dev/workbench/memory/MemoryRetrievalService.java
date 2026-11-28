@@ -212,12 +212,19 @@ public class MemoryRetrievalService {
       var vector = vectors.get(index);
       if (vector == null || vector.length == 0) continue;
       var row = missing.get(index);
-      row.embed(encode(vector), modelName);
+      String encoded = encode(vector);
+      int version = row.getVersion();
+      // 按读取时的正文版本条件写入：若编辑已在 embedAll 期间提交，版本不匹配直接丢弃旧向量，
+      // 绝不再调用 saveAll 回写整行实体覆盖新正文，也不向 pgvector 写入过期向量。
+      int updated =
+          records.updateEmbeddingIfVersionMatches(
+              row.getId(), workspaceId, encoded, modelName, MemoryStatus.ACTIVE, version);
+      if (updated <= 0) continue;
+      row.embed(encoded, modelName);
       for (var indexPort : vectorIndexes)
         if (indexPort != null && indexPort.available())
-          indexPort.store(workspaceId, row.getId(), modelName, vector);
+          indexPort.storeIfVersion(workspaceId, row.getId(), modelName, vector, version);
     }
-    records.saveAll(missing);
   }
 
   private Map<String, Double> pushdown(String workspaceId, String modelName, float[] query) {

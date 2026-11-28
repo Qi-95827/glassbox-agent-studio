@@ -14,6 +14,16 @@ public interface MemoryVectorIndex {
   /** 写入/覆盖单条 ACTIVE 记忆的向量；禁止写入 CANDIDATE。 */
   void store(String workspaceId, String memoryId, String modelName, float[] embedding);
 
+  /**
+   * 按正文版本条件写入单条 ACTIVE 记忆的向量；版本已推进时静默丢弃旧回填，绝不覆盖新正文。
+   *
+   * <p>默认实现委托给 {@link #store}，PostgreSQL 实现需在 SQL 中显式校验 {@code version = ?}。
+   */
+  default void storeIfVersion(
+      String workspaceId, String memoryId, String modelName, float[] embedding, int expectedVersion) {
+    store(workspaceId, memoryId, modelName, embedding);
+  }
+
   /** 按工作区与向量模型召回最近的 Top-K；cosine 范围为 [0,1]。 */
   List<VectorHit> nearest(String workspaceId, String modelName, float[] query, int limit);
 

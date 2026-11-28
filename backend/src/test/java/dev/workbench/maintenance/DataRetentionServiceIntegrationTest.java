@@ -32,6 +32,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class DataRetentionServiceIntegrationTest {
   @Autowired DataRetentionService retention;
   @Autowired JdbcTemplate db;
+  @Autowired org.springframework.transaction.support.TransactionTemplate tx;
 
   /** 每个用例从干净证据开始：避免同一 H2 库内前一个用例的过期数据影响本用例的删除计数。 */
   @org.junit.jupiter.api.BeforeEach
@@ -128,13 +129,47 @@ class DataRetentionServiceIntegrationTest {
   @Test
   void disabledRetentionDeletesNothing() {
     var service =
-        new DataRetentionService(db, false, 30, 30, 14);
+        new DataRetentionService(db, tx, false, 30, 30, 14);
     Instant old = Instant.now().minus(90, ChronoUnit.DAYS);
     String run = terminalRun("COMPLETED", old.toString());
     payload("payload-disabled", run, old.toString());
     var report = service.purgeExpired();
     assertEquals(new DataRetentionService.RetentionReport(0, 0, 0, 0), report);
     assertTrue(exists("model_call_payloads", "model_call_id", "payload-disabled"));
+  }
+
+  /**
+   * 定时入口 {@code scheduledPurge()} 必须通过程序化事务执行，而非同类自调用绕过代理：
+   * 一旦中途某张表删除抛出异常，前序表已删除的过期记录必须全部回滚。
+   */
+  @Test
+  void scheduledPurgeRollsBackAtomicallyOnMidwayFailure() {
+    Instant old = Instant.now().minus(60, ChronoUnit.DAYS);
+    String run = terminalRun("COMPLETED", old.toString());
+    artifact("artifact-rollback", run, old.toString());
+    payload("payload-rollback", run, old.toString());
+
+    JdbcTemplate failingJdbc =
+        new JdbcTemplate(db.getDataSource()) {
+          @Override
+          public int update(String sql, Object... args) {
+            if (sql != null && sql.contains("DELETE FROM tool_call_traces")) {
+              throw new org.springframework.dao.DataAccessResourceFailureException("模拟中途故障");
+            }
+            return super.update(sql, args);
+          }
+        };
+    var service = new DataRetentionService(failingJdbc, tx, true, 30, 30, 14);
+
+    // scheduledPurge() 捕获异常避免中断调度线程，但事务必须回滚前面已执行的 DELETE。
+    service.scheduledPurge();
+
+    assertTrue(
+        exists("context_artifacts", "id", "artifact-rollback"),
+        "中途失败后 context_artifacts 的前序删除必须已回滚");
+    assertTrue(
+        exists("model_call_payloads", "model_call_id", "payload-rollback"),
+        "中途失败后 model_call_payloads 的前序删除必须已回滚");
   }
 
   private String terminalRun(String status, String createdAt) {

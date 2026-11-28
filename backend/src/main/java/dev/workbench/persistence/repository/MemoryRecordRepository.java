@@ -91,4 +91,24 @@ public interface MemoryRecordRepository extends JpaRepository<MemoryRecordEntity
           + " where m.id = :id and m.status = :active")
   int recordHit(
       @Param("id") String id, @Param("hitAt") String hitAt, @Param("active") MemoryStatus active);
+
+  /**
+   * 按版本条件回填语义向量：只在记录仍为 ACTIVE 且正文版本未变更时写入。
+   *
+   * <p>防止「检索线程等待远端 embedAll 期间，用户编辑正文清空向量并推进 version，随后旧回填覆盖新内容或写回过期向量」的并发竞态。
+   */
+  @Transactional
+  @Modifying(flushAutomatically = true, clearAutomatically = true)
+  @Query(
+      "update MemoryRecordEntity m set m.embeddingJson = :embeddingJson,"
+          + " m.embeddingModel = :embeddingModel"
+          + " where m.id = :id and m.workspaceId = :workspaceId and m.status = :active"
+          + " and m.version = :version")
+  int updateEmbeddingIfVersionMatches(
+      @Param("id") String id,
+      @Param("workspaceId") String workspaceId,
+      @Param("embeddingJson") String embeddingJson,
+      @Param("embeddingModel") String embeddingModel,
+      @Param("active") MemoryStatus active,
+      @Param("version") int version);
 }

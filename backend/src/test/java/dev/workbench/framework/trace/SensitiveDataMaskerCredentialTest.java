@@ -183,6 +183,22 @@ class SensitiveDataMaskerCredentialTest {
     assertEquals(
         "{'password': '***MASKED***",
         SensitiveDataMasker.maskFinal("{'password': '***MASKED*** tail"));
+    // 3. 截断边界恰好落在转义对的首个反斜杠 \ 处时，双引号与单引号未闭合凭据都必须完整脱敏。
+    assertEquals(
+        "{\"password\": \"***MASKED***",
+        SensitiveDataMasker.maskFinal("{\"password\": \"my secret, tail\\"));
+    assertEquals(
+        "{'password': '***MASKED***",
+        SensitiveDataMasker.maskFinal("{'password': 'my secret, tail\\"));
+    assertEquals(
+        "{\"token\": \"***MASKED***",
+        SensitiveDataMasker.maskResponseAndTruncate("{\"token\": \"abc def\\", 1024, true).text());
+    assertEquals(
+        "{'token': '***MASKED***",
+        SensitiveDataMasker.maskResponseAndTruncate("{'token': 'abc def\\", 1024, true).text());
+    assertEquals(
+        "{\"token\": \"***MASKED***",
+        SensitiveDataMasker.maskFinal("{\"token\": \"\\"));
     assertEquals(
         "{\"token\": \"100\", \"note\": \"hello world\"}",
         SensitiveDataMasker.mask("{\"token\": \"100\", \"note\": \"hello world\"}"));

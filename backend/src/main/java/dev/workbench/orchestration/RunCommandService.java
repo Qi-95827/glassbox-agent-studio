@@ -130,7 +130,29 @@ final class RunCommandService {
         }
     }
     // 断点暂停已让出工作线程，必须重新派发；普通暂停只是唤醒仍在等待的线程，不重复派发。
-    if (resumeDispatch && dispatcher != null) dispatcher.dispatchResume(id);
+    if (resumeDispatch && dispatcher != null) {
+      dispatcher.dispatchResume(id, () -> rollbackRejectedResume(id));
+    }
+  }
+
+  /**
+   * 断点继续派发被执行器拒绝时的原子回滚：在同一分段锁内恢复 {@code yielded} 标记，
+   * 并保留已有轮次/工具数/耗时与结果，确保用户稍后再次点击继续仍能重新派发。
+   */
+  void rollbackRejectedResume(String id) {
+    synchronized (locks.lockFor(id)) {
+      RunSnapshot snapshot = runs.runSnapshot(id);
+      if (snapshot.status() != RunStatus.PAUSED) return;
+      yielded.add(id);
+      runs.update(
+          id,
+          RunStatus.PAUSED,
+          "恢复请求未能加入执行队列，运行保持暂停，可稍后再次继续。",
+          null,
+          snapshot.rounds(),
+          snapshot.tools(),
+          snapshot.elapsedMs());
+    }
   }
 
   /**

@@ -7,11 +7,12 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 冷数据 TTL 清理：只清理「已过期且所属运行已终态」的大对象，绝不触碰审计主干。
@@ -38,13 +39,16 @@ public class DataRetentionService {
           RunStatus.PAUSED.name());
 
   private final JdbcTemplate jdbc;
+  private final TransactionTemplate tx;
   private final boolean enabled;
   private final int payloadDays;
   private final int artifactDays;
   private final int sessionDays;
 
+  @Autowired
   public DataRetentionService(
       JdbcTemplate jdbc,
+      TransactionTemplate tx,
       @Value("${workbench.retention.enabled:true}") boolean enabled,
       @Value("${workbench.retention.payload-days:30}") int payloadDays,
       @Value("${workbench.retention.artifact-days:30}") int artifactDays,
@@ -52,17 +56,24 @@ public class DataRetentionService {
     if (payloadDays < 1 || artifactDays < 1 || sessionDays < 1)
       throw new IllegalArgumentException("冷数据保留天数必须为不小于 1 的整数。");
     this.jdbc = jdbc;
+    this.tx = tx;
     this.enabled = enabled;
     this.payloadDays = payloadDays;
     this.artifactDays = artifactDays;
     this.sessionDays = sessionDays;
   }
 
+  /** 兼容无 TransactionTemplate 注入的轻量单元测试构造。 */
+  DataRetentionService(
+      JdbcTemplate jdbc, boolean enabled, int payloadDays, int artifactDays, int sessionDays) {
+    this(jdbc, null, enabled, payloadDays, artifactDays, sessionDays);
+  }
+
   /** 清理结果汇总；字段是本次真实删除的行数。 */
   public record RetentionReport(
       int deletedPayloads, int deletedToolTraces, int deletedArtifacts, int deletedSessions) {}
 
-  /** 定时入口：仅在启用时执行，且异常不向调度线程外抛，避免一次失败终止之后的全部调度。 */
+  /** 定时入口：通过 {@link #purgeExpired()} 的程序化事务执行，避免同类自调用绕过事务代理。 */
   @Scheduled(cron = "${workbench.retention.cron:0 30 3 * * *}")
   public void scheduledPurge() {
     if (!enabled) return;
@@ -82,11 +93,17 @@ public class DataRetentionService {
   /**
    * 执行一次过期清理。
    *
-   * <p>只用「运行已终态或没有运行归属」作为删除前提；活跃运行的数据无条件保留。
+   * <p>只用「运行已终态或没有运行归属」作为删除前提；活跃运行的数据无条件保留。使用 {@link TransactionTemplate}
+   * 保证无论外部调用还是 {@link #scheduledPurge()} 定时自调用，四张表的删除都在同一事务内原子提交或整体回滚。
    */
-  @Transactional
   public RetentionReport purgeExpired() {
     if (!enabled) return new RetentionReport(0, 0, 0, 0);
+    if (tx == null) return purgeExpiredInternal();
+    var report = tx.execute(ignored -> purgeExpiredInternal());
+    return report == null ? new RetentionReport(0, 0, 0, 0) : report;
+  }
+
+  private RetentionReport purgeExpiredInternal() {
     Instant now = Instant.now();
     String payloadCutoff = now.minus(payloadDays, ChronoUnit.DAYS).toString();
     String artifactCutoff = now.minus(artifactDays, ChronoUnit.DAYS).toString();
