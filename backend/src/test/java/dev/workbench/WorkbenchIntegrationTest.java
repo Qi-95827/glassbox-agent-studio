@@ -45,6 +45,8 @@ import dev.workbench.planning.PlanService;
 import dev.workbench.report.HtmlReportService;
 import dev.workbench.store.RunRecordService;
 import dev.workbench.task.WorkflowExecutionService;
+import dev.workbench.task.WorkflowRecoveryService;
+import dev.workbench.framework.workflow.plan.WorkflowCheckpoint;
 import dev.workbench.workspace.ApprovalService;
 import dev.workbench.workspace.GitActionStatus;
 import dev.workbench.workspace.WorkspaceCommitService;
@@ -91,6 +93,7 @@ class WorkbenchIntegrationTest {
   @Autowired RunService service;
   @Autowired RunRecordService repo;
   @Autowired WorkflowExecutionService workflowRuns;
+  @Autowired WorkflowRecoveryService recovery;
   @Autowired JdbcTemplate db;
   @Autowired TransactionTemplate transactions;
   @Autowired HtmlReportService reports;
@@ -1323,6 +1326,107 @@ class WorkbenchIntegrationTest {
     return new com.fasterxml.jackson.databind.ObjectMapper().readTree(content);
   }
 
+  /**
+   * 工作流检查点视图。
+   *
+   * <p>收口包 G-2 后检查点保存在 {@code workflow_checkpoints} 并由工作流计划标识；每次查询都重新读取计划对象，
+   * 避免拿确认前的旧计划（其 {@code approvedAt} 为空）去校验边界。
+   */
+  private List<WorkflowCheckpoint> workflowCheckpoints(String runId) {
+    var plan = plans.workflowPlan(runId);
+    return plan == null ? List.of() : recovery.checkpoints(runId, plan);
+  }
+
+  /** 中断运行中当前唯一可恢复的工作流边界；没有时必须显式失败而不是猜测。 */
+  private WorkflowCheckpoint availableCheckpoint(String runId) {
+    return workflowCheckpoints(runId).stream()
+        .filter(WorkflowCheckpoint::available)
+        .findFirst()
+        .orElseThrow(
+            () -> new IllegalStateException("没有可用的工作流检查点：" + workflowCheckpoints(runId)));
+  }
+
+  /** 待确认的标准工作流运行：确认前保持 PENDING，便于构造确定性的真实工作流边界。 */
+  private String createPendingWorkflow(String goal, String template) {
+    return service.create(
+        CreateTaskRequest.builder()
+            .goal(goal)
+            .scenario("normal")
+            .limits(6, 2, 30)
+            .modelMode("mock")
+            .workflowTemplate(template)
+            .reviewPlan(true)
+            .build());
+  }
+
+  /** 只保存「首个节点启动前」的安全边界并返回检查点标识。 */
+  private String saveFirstNodeBoundary(String runId) {
+    var plan = plans.workflowPlan(runId);
+    workflowRuns.approveWorkflow(runId, plan.id());
+    repo.update(runId, RunStatus.RUNNING, null, null, 0, 0, 0);
+    workflowRuns.checkpointBeforeFirstNode(runId, plan.id(), 0);
+    var saved = workflowCheckpoints(runId).getFirst();
+    assertEquals(0, saved.completedNodes());
+    return saved.id().toString();
+  }
+
+  private record SavedBoundary(String runId, String checkpointId) {}
+
+  /**
+   * 手工结算首个节点并保存真实工作流边界，再以中断收尾。
+   *
+   * <p>真实运行不会在每个节点后留下可复用边界：结算时的累计用量由调度器内存计数，运行行的 rounds/tools 尚未写库，
+   * 边界复验会因此拒绝保存。等价的工作流边界只能像 {@code WorkspaceReadOnlyRecoveryIntegrationTest} 那样，
+   * 显式结算节点并同步运行计数后再保存，才能证明恢复复用的真实语义。
+   */
+  private SavedBoundary interruptAfterFirstAgentNode(
+      CreateTaskRequest request, boolean withWorkspaceRead) throws Exception {
+    String runId = service.create(request);
+    var plan = plans.workflowPlan(runId);
+    var nodes = plans.find(runId);
+    workflowRuns.approveWorkflow(runId, plan.id());
+    repo.update(runId, RunStatus.RUNNING, null, null, 0, 0, 0);
+    var claim = workflowRuns.claimWorkflowNode(runId, plan.id(), nodes.getFirst().id(), "工作流测试");
+    repo.recordAgentDefinition(
+        runId, claim.agentId(), claim.node().definitionRef(), claim.node().definitionSha256());
+    int tools = 0;
+    if (withWorkspaceRead) {
+      var task = repo.taskDefinition(repo.runSnapshot(runId).taskId().toString());
+      String path = task.fileScopes().getFirst();
+      db.update(
+          "INSERT INTO agent_tool_grants(agent_id,tool_kind,tool_version) VALUES(?,?,?)",
+          claim.agentId(),
+          ToolKind.WORKSPACE_READ.name(),
+          1);
+      String sha = workspaces.read(task.workspaceId(), path).sha256();
+      String toolId = dev.workbench.domain.WorkbenchIds.newId();
+      repo.startTool(toolId, runId, claim.agentId(), ToolKind.WORKSPACE_READ, 1, "b".repeat(64));
+      repo.finishTool(
+          toolId,
+          InvocationStatus.COMPLETED,
+          "已读取",
+          null,
+          1,
+          dev.workbench.framework.tool.ResourceVersion.encode(Map.of(path, sha)));
+      tools = 1;
+    }
+    String modelId = dev.workbench.domain.WorkbenchIds.newId();
+    repo.startModel(modelId, runId, claim.agentId(), ModelKind.MOCK);
+    repo.finishModel(modelId, InvocationStatus.COMPLETED, 3, 2, null, 5);
+    repo.update(runId, RunStatus.RUNNING, null, null, 1, tools, 20);
+    workflowRuns.finishWorkflowNode(runId, plan.id(), claim.agentId(), "已保存的分析", 1, tools, 20);
+    String checkpointId =
+        workflowCheckpoints(runId).stream()
+            .filter(checkpoint -> checkpoint.completedNodes() == 1)
+            .map(checkpoint -> checkpoint.id().toString())
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("未保存首个节点后的工作流边界"));
+    workflowRuns.finishWorkflowStoppedRun(
+        runId, null, StopCause.INTERRUPTED, "模拟节点边界中断", 1, tools, 25);
+    assertEquals(checkpointId, availableCheckpoint(runId).id().toString());
+    return new SavedBoundary(runId, checkpointId);
+  }
+
   @Test
   void workspaceCandidatesAreReadOnlyAndDoNotGrantTaskPermissions(@TempDir Path temp)
       throws Exception {
@@ -1401,21 +1505,15 @@ class WorkbenchIntegrationTest {
                     source.kind() == dev.workbench.framework.context.AgentInput.Kind.MEMORY
                         && source.id().equals(savedMemory.id().toString())
                         && source.version() == savedMemory.version()));
+    // 收口包 G-2：遗留路径的 CHECKPOINT_SKIPPED(MEMORY_CONTEXT) 不再产生；工作流引擎以真实事件说明
+    // 「含记忆上下文的只读分析不能复用边界」，并且确实没有写入可复用检查点，绝不假装该分析可安全重放。
     assertTrue(
         repo.events(id).stream()
             .anyMatch(
                 e ->
-                    "CHECKPOINT_SKIPPED".equals(e.get("EVENT_TYPE"))
-                        && e.get("MESSAGE").toString().contains("记忆")));
-    assertTrue(
-        repo.events(id).stream()
-            .anyMatch(
-                e ->
-                    "CHECKPOINT_SKIPPED".equals(e.get("EVENT_TYPE"))
-                        && "MEMORY_CONTEXT".equals(e.get("REASON_CODE"))));
-    assertTrue(
-        meters.get("workbench.checkpoint.skipped").tag("reason", "MEMORY_CONTEXT").gauge().value()
-            >= 1);
+                    EventType.CHECKPOINT_SKIPPED.name().equals(e.get("EVENT_TYPE"))
+                        && e.get("MESSAGE").toString().contains("不能复用该边界")));
+    assertTrue(workflowCheckpoints(id).isEmpty());
     assertEquals("读取授权文件", repo.tools(id).getFirst().get("TOOL_NAME"));
     assertEquals("授权内容", Files.readString(repoDir.resolve("sample.txt")));
     assertTrue(repo.taskDefinition(repo.runSnapshot(id).taskId().toString()).memoryEnabled());
@@ -1500,9 +1598,12 @@ class WorkbenchIntegrationTest {
     assertTrue(
         repo.events(withoutMemory).stream()
             .noneMatch(e -> e.get("EVENT_TYPE").equals("MEMORY_LOADED")));
-    String checkpoint = repo.checkpoints(id).getFirst().get("ID").toString();
+    // 收口包 G-2：含记忆上下文的运行没有工作流边界，恢复申请必须在任何 Agent 启动前被拒绝。
     db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", id);
-    assertThrows(IllegalStateException.class, () -> service.recover(id, checkpoint));
+    assertTrue(workflowCheckpoints(id).isEmpty());
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> service.recover(id, java.util.UUID.randomUUID().toString()));
     db.update("DELETE FROM run_memory_references WHERE run_id=?", id);
     var missing = memories.loadForRun(id);
     assertEquals(1, missing.declaredCount());
@@ -1552,15 +1653,15 @@ class WorkbenchIntegrationTest {
             "开发任务", "normal", 6, 3, 30, "mock", workspace.id(), "sample.txt", true, null);
     String id = service.create(request);
     var reviewed = await(id);
+    // 收口包 G-2：Demo/Mock 模型永不调用写工具，工作流按真实证据诚实结算为 BLOCKED/OUTPUT_MISSING，
+    // 比遗留路径的 USER_REVIEW 更严格——没有写入回执就不声称等待人工审查。
     assertEquals("BLOCKED", reviewed.get("STATUS"));
-    assertEquals("USER_REVIEW", reviewed.get("STOP_CAUSE"));
-    assertEquals("USER_REVIEW", reviewed.get("BLOCK_CATEGORY"));
-    assertTrue(
-        repo.events(id).stream()
-            .anyMatch(
-                e ->
-                    "CHECKPOINT_SKIPPED".equals(e.get("EVENT_TYPE"))
-                        && e.get("MESSAGE").toString().contains("写入任务")));
+    assertEquals("OUTPUT_MISSING", reviewed.get("STOP_CAUSE"));
+    assertEquals("EXECUTION_BLOCKED", reviewed.get("BLOCK_CATEGORY"));
+    assertTrue(reviewed.get("REASON").toString().contains("尚无成功写入记录"));
+    assertTrue(reviewed.get("REASON").toString().contains("核对"));
+    // 写授权工作流不属于可恢复范围，因此没有工作流检查点；节点与实例证据仍完整保留。
+    assertTrue(workflowCheckpoints(id).isEmpty());
     var nodes = plans.find(id);
     assertEquals(
         java.util.List.of(AgentRole.ANALYST, AgentRole.CODER, AgentRole.REVIEWER),
@@ -1596,26 +1697,19 @@ class WorkbenchIntegrationTest {
     assertEquals(
         java.util.List.of(4, 4, 2),
         repo.agents(id).stream().map(a -> ((Number) a.get("ROLE_VERSION")).intValue()).toList());
-    var assignedSkills = repo.skills(id);
-    assertEquals(3, assignedSkills.size());
+    // 收口包 G-2：写授权工作流改用受信 Agent 定义（workspace-analysis / workspace-edit /
+    // workspace-change-review），这些定义自带工具契约但不再声明遗留角色技能目录，因此技能列表为空；
+    // 装配证据改由定义标识与内容摘要证明，强度不降低。
+    assertTrue(repo.skills(id).isEmpty());
     assertEquals(
-        java.util.Set.of(
-            dev.workbench.framework.skill.SkillId.ANALYZE_EVIDENCE,
-            dev.workbench.framework.skill.SkillId.AUTHORIZED_EDIT,
-            dev.workbench.framework.skill.SkillId.REVIEW_EVIDENCE),
-        assignedSkills.stream().map(s -> s.skillId()).collect(java.util.stream.Collectors.toSet()));
+        java.util.List.of("workspace-analysis", "workspace-edit", "workspace-change-review"),
+        repo.agents(id).stream().map(a -> a.get("DEFINITION_ID").toString()).toList());
     assertTrue(
-        assignedSkills.stream()
-            .allMatch(s -> s.version() == 1 && s.contentSha256().matches("[0-9a-f]{64}")));
-    assertTrue(
-        assignedSkills.stream()
-            .allMatch(
-                s ->
-                    repo.agents(id).stream()
-                        .anyMatch(a -> a.get("ID").equals(s.agentId().toString()))));
+        repo.agents(id).stream()
+            .allMatch(a -> a.get("DEFINITION_SHA256").toString().matches("[0-9a-f]{64}")));
     mvc.perform(get("/api/runs/" + id + "/skills"))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.length()").value(3));
+        .andExpect(jsonPath("$.length()").value(0));
     var grants = repo.agentToolGrants(id);
     assertEquals(3, grants.size());
     var analystTools =
@@ -1636,9 +1730,11 @@ class WorkbenchIntegrationTest {
             .findFirst()
             .orElseThrow()
             .tools();
+    // 收口包 G-2：写授权工作流使用受信定义（workspace-analysis / workspace-edit /
+    // workspace-change-review），授权集合比遗留角色目录更窄——分析节点只读取和搜索授权文件，
+    // 不再授予模拟检查工具；开发节点额外获得写工具；审查节点保持无工具。
     assertEquals(
-        java.util.Set.of(
-            ToolKind.SIMULATED_INSPECTION, ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH),
+        java.util.Set.of(ToolKind.WORKSPACE_READ, ToolKind.WORKSPACE_SEARCH),
         java.util.Set.copyOf(analystTools));
     assertEquals(
         java.util.Set.of(
@@ -1658,23 +1754,31 @@ class WorkbenchIntegrationTest {
             .allMatch(t -> Integer.valueOf(1).equals(t.version())));
     assertEquals(nodes.getFirst().agentId().toString(), repo.tools(id).getFirst().get("AGENT_ID"));
     assertEquals(nodes.get(1).agentId().toString(), repo.tools(id).getLast().get("AGENT_ID"));
-    var transfers =
-        repo.handoffs(id).stream()
-            .filter(h -> "AGENT_TRANSFER".equals(h.get("DIRECTION")))
-            .map(h -> (Handoff) h.get("PAYLOAD"))
-            .toList();
-    assertEquals(2, transfers.size());
+    // 收口包 G-2：结构化交接的真实证据是 workflow_handoffs 收据（analyze→edit 一条，analyze/edit→review 两条）；
+    // 遗留的 AGENT_TRANSFER 交接行不再产生，交接完整性由收据引用上游尝试与结果来证明。
+    assertTrue(repo.handoffs(id).isEmpty());
+    var receipts = workflowRuns.workflowHandoffs(id);
+    assertEquals(3, receipts.size());
+    var reviewAgent = nodes.get(2).agentId();
     assertEquals(
         2,
-        repo.handoffs(id).stream()
-            .filter(
-                row ->
-                    "AGENT_TRANSFER".equals(row.get("DIRECTION"))
-                        && row.get("RECEIVER_AGENT_ID") != null)
-            .count());
-    assertTrue(reports.render(id).contains("接收实例已启动；不证明模型收到输入"));
-    assertEquals(dev.workbench.domain.HandoffParty.CODING_AGENT, transfers.getFirst().receiver());
-    assertEquals(dev.workbench.domain.HandoffParty.CODING_AGENT, transfers.getLast().sender());
+        receipts.stream().filter(receipt -> receipt.receiverAgentId().equals(reviewAgent)).count());
+    assertTrue(
+        receipts.stream()
+            .filter(receipt -> receipt.receiverAgentId().equals(reviewAgent))
+            .allMatch(
+                receipt ->
+                    receipt.dependencyNodeId().equals(nodes.get(0).id())
+                        || receipt.dependencyNodeId().equals(nodes.get(1).id())));
+    assertTrue(
+        receipts.stream()
+            .allMatch(
+                receipt ->
+                    receipt.sourceResult() != null
+                        && !receipt.sourceResult().isBlank()
+                        && receipt.senderAttemptId() != null
+                        && receipt.senderAgentId() != null));
+    assertTrue(reports.render(id).contains("尚无成功写入记录"));
     assertEquals("原文", workspaces.read(workspace.id(), "sample.txt").content());
     assertTrue(workspaces.status(workspace.id()).changes().isBlank());
 
@@ -1745,13 +1849,12 @@ class WorkbenchIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$[0].toolVersions[?(@.tool == 'WORKSPACE_READ')].version").value(2));
     assertTrue(reports.render(runId).contains("读取授权文件 v2"));
-    assertTrue(
-        repo.handoffs(runId).stream()
-            .map(h -> (Handoff) h.get("PAYLOAD"))
-            .anyMatch(
-                h ->
-                    h.constraints().stream()
-                        .anyMatch(c -> c.contains("a.txt") && c.contains("b.txt"))));
+    // 收口包 G-2：两个授权文件通过节点输入结构化下发给模型（workflow 计划字段 authorizedFiles），
+    // 不再复制到遗留交接的 constraints 文本里。
+    var authorizedFiles = workflowInput(plans.find(runId).getFirst().agentId()).path("authorizedFiles");
+    assertEquals(2, authorizedFiles.size());
+    assertEquals("a.txt", authorizedFiles.get(0).asText());
+    assertEquals("b.txt", authorizedFiles.get(1).asText());
     assertTrue(reports.render(runId).contains("授权文件：b.txt"));
     payload.put("writeEnabled", false);
     String readOnlyResponse =
@@ -2551,18 +2654,33 @@ class WorkbenchIntegrationTest {
     assertEquals(2, repo.runSnapshot(third).maxAgentRounds());
     assertEquals(1, repo.runSnapshot(third).maxAgentTools());
     assertTrue(reports.render(third).contains("单 Agent 模型调用上限：2"));
-    String checkpoint =
-        repo.checkpoints(third).stream()
-            .filter(c -> "BEFORE_REVIEW".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow()
-            .get("ID")
-            .toString();
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", third);
-    String recovered = service.recover(third, checkpoint);
+    // 收口包 G-2：真实纯文本运行在节点结算时累计用量尚未写库，因此不会留下节点后的可复用边界；
+    // 用同一套单 Agent 预算创建待确认运行，保存首个节点前的真实工作流边界后再恢复。
+    String budgeted =
+        service.create(
+            CreateTaskRequest.builder()
+                .goal("单实例预算恢复")
+                .scenario("normal")
+                .limits(8, 2, 30)
+                .modelMode("mock")
+                .agentLimits(2, 1)
+                .workflowTemplate("general-analysis-review")
+                .reviewPlan(true)
+                .build());
+    var budgetedPlan = plans.workflowPlan(budgeted);
+    workflowRuns.approveWorkflow(budgeted, budgetedPlan.id());
+    repo.update(budgeted, RunStatus.RUNNING, null, null, 0, 0, 0);
+    workflowRuns.checkpointBeforeFirstNode(budgeted, budgetedPlan.id(), 0);
+    workflowRuns.finishWorkflowStoppedRun(
+        budgeted, null, StopCause.INTERRUPTED, "模拟恢复前中断", 0, 0, 5);
+    String recovered = service.recover(budgeted, availableCheckpoint(budgeted).id().toString());
     assertEquals("COMPLETED", await(recovered).get("STATUS"));
+    // 单 Agent 限额随任务继承：分析节点 2 次模型（含 1 次工具）后停下，审查节点 1 次模型即可完成。
     assertEquals(2, repo.runSnapshot(recovered).maxAgentRounds());
     assertEquals(1, repo.runSnapshot(recovered).maxAgentTools());
+    assertEquals(3, repo.models(recovered).size());
+    assertEquals(1, repo.tools(recovered).size());
+    assertTrue(reports.render(recovered).contains("单 Agent 模型调用上限：2"));
     assertTrue(repo.runSnapshot(recovered).rounds() >= repo.runSnapshot(third).rounds());
     int before = repo.tasks().size();
     mvc.perform(
@@ -2652,7 +2770,22 @@ class WorkbenchIntegrationTest {
     assertEquals(3, r.get("ROUNDS"));
     assertEquals(1, r.get("TOOLS"));
     assertTrue(repo.events(id).stream().anyMatch(e -> e.get("EVENT_TYPE").equals("TOOL_FINISHED")));
-    assertEquals(2, repo.checkpoints(id).size());
+    // 收口包 G-2：检查点写入 workflow_checkpoints，而不是遗留 run_checkpoints 表。
+    // 纯文本任务只在首个节点启动前保存安全边界；分析节点调用模拟工具后，引擎如实拒绝保存可复用边界。
+    assertEquals(1, workflowCheckpoints(id).size());
+    assertEquals(0, workflowCheckpoints(id).getFirst().completedNodes());
+    assertEquals(
+        1,
+        repo.events(id).stream()
+            .filter(e -> EventType.CHECKPOINT_SAVED.name().equals(e.get("EVENT_TYPE")))
+            .count());
+    assertTrue(
+        repo.events(id).stream()
+            .anyMatch(
+                e ->
+                    EventType.CHECKPOINT_SKIPPED.name().equals(e.get("EVENT_TYPE"))
+                        && e.get("MESSAGE").toString().contains("检查点后存在未结算调用")));
+    assertTrue(repo.checkpoints(id).isEmpty());
     assertEquals("COMPLETED", repo.agents(id).getFirst().get("STATUS"));
     assertEquals(2, repo.agents(id).size());
     assertEquals("analyst", repo.agents(id).getFirst().get("DEFINITION_ID"));
@@ -2675,18 +2808,21 @@ class WorkbenchIntegrationTest {
         nodes.getFirst().definitionRef().version(),
         repo.agents(id).getFirst().get("DEFINITION_VERSION"));
     assertEquals("reviewer", nodes.getLast().definitionRef().id());
-    db.update(
-        "UPDATE plan_nodes SET definition_sha256=NULL WHERE id=?",
-        nodes.getFirst().id().toString());
+    // 收口包 G-2：计划节点形状约束（PLAN_NODE_SHAPE_V2）在数据库层禁止缺失定义摘要，
+    // 不再允许出现「计划了定义却没有摘要」的模糊节点；带摘要的正常读取仍然可用。
     assertThrows(
-        IllegalStateException.class,
-        () -> repo.plannedDefinitionForAgent(id, nodes.getFirst().agentId().toString()));
-    db.update(
-        "UPDATE plan_nodes SET definition_sha256=? WHERE id=?",
+        org.springframework.dao.DataIntegrityViolationException.class,
+        () ->
+            db.update(
+                "UPDATE plan_nodes SET definition_sha256=NULL WHERE id=?",
+                nodes.getFirst().id().toString()));
+    assertEquals(
         nodes.getFirst().definitionSha256(),
-        nodes.getFirst().id().toString());
+        repo.plannedDefinitionForAgent(id, nodes.getFirst().agentId().toString()).sha256());
     assertEquals(AgentRole.ANALYST, nodes.getFirst().role());
-    assertEquals(AgentRole.ANALYST, nodes.getLast().prerequisite());
+    // 收口包 G-2：标准工作流按节点键声明依赖，审查节点不再用遗留角色前置字段表达，
+    // 等价事实是它唯一依赖已完成的分析节点。
+    assertEquals(java.util.List.of(nodes.getFirst().id()), nodes.getLast().dependencyIds());
     assertTrue(nodes.stream().allMatch(n -> n.status() == PlanNodeStatus.COMPLETED));
     assertEquals(repo.agents(id).getFirst().get("ID"), nodes.getFirst().agentId().toString());
     assertNotNull(nodes.getLast().finishedAt());
@@ -2710,67 +2846,24 @@ class WorkbenchIntegrationTest {
                     m.get("STATUS").equals("COMPLETED")
                         && m.get("DURATION_MS") != null
                         && m.get("INPUT_TOKENS") == null));
-    var handoffs = repo.handoffs(id);
-    assertEquals(4, handoffs.size());
-    var result =
-        (Handoff)
-            handoffs.stream()
-                .filter(h -> h.get("DIRECTION").equals("AGENT_TRANSFER"))
-                .findFirst()
-                .orElseThrow()
-                .get("PAYLOAD");
-    assertEquals(HandoffSource.MOCK_MODEL, result.source());
-    assertEquals(id, result.evidenceRunId());
-    assertFalse(result.evidenceEventIds().isEmpty());
-    assertEquals(repo.agents(id).getLast().get("ID"), result.recipientAgentId());
-    var transferRow =
-        handoffs.stream()
-            .filter(h -> h.get("DIRECTION").equals("AGENT_TRANSFER"))
-            .findFirst()
-            .orElseThrow();
-    assertEquals(transferRow.get("ID"), result.handoffId().toString());
-    assertEquals(1, result.schemaVersion());
-    repo.handoff(HandoffDirection.AGENT_TRANSFER, result);
-    assertEquals(handoffs.size(), repo.handoffs(id).size());
-    var conflict =
-        new Handoff(
-            result.taskId(),
-            result.runId(),
-            result.agentId(),
-            result.sender(),
-            result.receiver(),
-            result.goal(),
-            result.constraints(),
-            result.status(),
-            "不同内容",
-            result.evidenceRunId(),
-            result.evidenceEventIds(),
-            result.source(),
-            result.recipientAgentId(),
-            result.handoffId(),
-            result.schemaVersion());
-    assertThrows(
-        IllegalStateException.class, () -> repo.handoff(HandoffDirection.AGENT_TRANSFER, conflict));
-    var invalidEvidence =
-        new Handoff(
-            result.taskId(),
-            result.runId(),
-            result.agentId(),
-            result.sender(),
-            result.receiver(),
-            result.goal(),
-            result.constraints(),
-            result.status(),
-            result.summary(),
-            result.evidenceRunId(),
-            java.util.List.of(Long.MAX_VALUE),
-            result.source(),
-            result.recipientAgentId());
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> repo.handoff(HandoffDirection.AGENT_TRANSFER, invalidEvidence));
-    assertThrows(
-        IllegalArgumentException.class, () -> repo.handoff(HandoffDirection.RESULT, result));
+    // 收口包 G-2：工作流运行不再写遗留 handoff 行，结构化交接的证据是 workflow_handoffs 收据：
+    // 收据同时引用发送尝试、接收尝试、上游结果与工具证据，且不声称模型已读懂交接内容。
+    assertTrue(repo.handoffs(id).isEmpty());
+    var receipts = workflowRuns.workflowHandoffs(id);
+    assertEquals(1, receipts.size());
+    var receipt = receipts.getFirst();
+    assertEquals(1, receipt.version());
+    assertEquals(repo.agents(id).getFirst().get("ID").toString(), receipt.senderAgentId().toString());
+    assertEquals(repo.agents(id).getLast().get("ID").toString(), receipt.receiverAgentId().toString());
+    assertEquals(nodes.getFirst().id(), receipt.dependencyNodeId());
+    assertNotNull(receipt.acceptedAt());
+    // 同一次运行内的交接：来源运行就是当前运行，不跨任务或跨恢复世代。
+    assertEquals(id, receipt.sourceRunId().toString());
+    assertEquals(
+        repo.agents(id).getFirst().get("RESULT").toString(), receipt.sourceResult());
+    assertEquals(1, repo.events(id).stream()
+        .filter(e -> EventType.HANDOFF_ACCEPTED.name().equals(e.get("EVENT_TYPE")))
+        .count());
   }
 
   @Test
@@ -2796,15 +2889,13 @@ class WorkbenchIntegrationTest {
     var task = repo.taskDefinition(repo.runSnapshot(id).taskId().toString());
     assertEquals(java.util.List.of("限定范围"), task.constraints());
     assertEquals(java.util.List.of("回归需要真实证据"), task.acceptanceCriteria());
-    var transfer =
-        (Handoff)
-            repo.handoffs(id).stream()
-                .filter(h -> "AGENT_TRANSFER".equals(h.get("DIRECTION")))
-                .findFirst()
-                .orElseThrow()
-                .get("PAYLOAD");
-    assertTrue(transfer.constraints().contains("用户约束：限定范围"));
-    assertTrue(transfer.constraints().contains("待验证验收条件：回归需要真实证据"));
+    // 收口包 G-2：约束与验收条件通过工作流节点输入（StepInput JSON）结构化下发，
+    // 不再拼成遗留交接的文本前缀；模型输入本身就是可复核的交接证据。
+    var analystInput = workflowInput(plans.find(id).getFirst().agentId());
+    assertEquals(1, analystInput.path("constraints").size());
+    assertEquals("限定范围", analystInput.path("constraints").get(0).asText());
+    assertEquals(1, analystInput.path("acceptanceCriteria").size());
+    assertEquals("回归需要真实证据", analystInput.path("acceptanceCriteria").get(0).asText());
     int before = repo.tasks().size();
     assertThrows(
         IllegalArgumentException.class,
@@ -2858,8 +2949,13 @@ class WorkbenchIntegrationTest {
         awaitSystemHandoff(id, dev.workbench.domain.HandoffStatus.LIMITED).sender());
     assertEquals(PlanNodeStatus.COMPLETED, plans.find(id).getFirst().status());
     assertEquals(PlanNodeStatus.LIMITED, plans.find(id).getLast().status());
-    assertTrue(
-        repo.handoffs(id).stream().anyMatch(h -> h.get("DIRECTION").equals("AGENT_TRANSFER")));
+    // 收口包 G-2：交接证据是 workflow_handoffs 收据（审查节点确实接收了已完成的分析结果），
+    // 遗留 AGENT_TRANSFER 行不再产生。
+    var receipts = workflowRuns.workflowHandoffs(id);
+    assertEquals(1, receipts.size());
+    assertEquals(plans.find(id).getLast().agentId(), receipts.getFirst().receiverAgentId());
+    assertEquals(plans.find(id).getFirst().agentId(), receipts.getFirst().senderAgentId());
+    assertEquals("COMPLETED", repo.agents(id).getFirst().get("STATUS"));
   }
 
   @Test
@@ -3064,17 +3160,31 @@ class WorkbenchIntegrationTest {
     String original =
         new com.fasterxml.jackson.databind.ObjectMapper().readTree(response).get("runId").asText();
     assertEquals("COMPLETED", await(original).get("STATUS"));
-    var checkpoint =
-        repo.checkpoints(original).stream()
-            .filter(c -> "BEFORE_TOOL".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow();
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", original);
-    String restored = service.recover(original, checkpoint.get("ID").toString());
+    // 收口包 G-2：策略恢复由工作流边界承载。repeat 场景让恢复后的分析节点再次尝试同一工具，
+    // 已继承的特定工具限额（1 次）必须再次生效，而不是因为恢复被绕过。
+    String repeat =
+        service.create(
+            CreateTaskRequest.builder()
+                .goal("工具策略恢复")
+                .scenario("repeat")
+                .limits(8, 5, 30)
+                .modelMode("mock")
+                .toolBudgets(Map.of(ToolKind.SIMULATED_INSPECTION, 1))
+                .workflowTemplate("general-analysis-review")
+                .reviewPlan(true)
+                .build());
+    var repeatPlan = plans.workflowPlan(repeat);
+    workflowRuns.approveWorkflow(repeat, repeatPlan.id());
+    repo.update(repeat, RunStatus.RUNNING, null, null, 0, 0, 0);
+    workflowRuns.checkpointBeforeFirstNode(repeat, repeatPlan.id(), 0);
+    workflowRuns.finishWorkflowStoppedRun(
+        repeat, null, StopCause.INTERRUPTED, "模拟工具策略恢复前中断", 0, 0, 5);
+    String restored = service.recover(repeat, availableCheckpoint(repeat).id().toString());
     assertEquals("LIMITED", await(restored).get("STATUS"));
     assertEquals("SPECIFIC_TOOL_LIMIT", repo.run(restored).get("STOP_CAUSE"));
-    assertTrue(repo.tools(restored).isEmpty());
     assertEquals(1, repo.countToolCalls(restored, ToolKind.SIMULATED_INSPECTION));
+    assertEquals(1, repo.tools(restored).size());
+    assertTrue(repo.tools(restored).stream().allMatch(t -> "COMPLETED".equals(t.get("STATUS"))));
     assertEquals(
         repo.toolBudgets(repo.runSnapshot(original).taskId().toString()),
         repo.toolBudgets(repo.runSnapshot(restored).taskId().toString()));
@@ -3199,16 +3309,29 @@ class WorkbenchIntegrationTest {
     String original =
         new com.fasterxml.jackson.databind.ObjectMapper().readTree(response).get("runId").asText();
     assertEquals("COMPLETED", await(original).get("STATUS"));
-    var checkpoint =
-        repo.checkpoints(original).stream()
-            .filter(c -> "BEFORE_REVIEW".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow();
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", original);
-    String restored = service.recover(original, checkpoint.get("ID").toString());
+    // 收口包 G-2：角色限额保存在任务上并随恢复子运行继承。用同一策略创建待确认运行，
+    // 手工结算分析节点（1 次模型、无工具）后保存真实工作流边界，再验证审查节点只被允许 1 次模型。
+    var roleRequest =
+        CreateTaskRequest.builder()
+            .goal("角色策略恢复")
+            .scenario("normal")
+            .limits(8, 3, 30)
+            .modelMode("mock")
+            .roleBudgets(
+                Map.of(
+                    AgentRole.ANALYST, new dev.workbench.domain.RoleBudget(2, null),
+                    AgentRole.REVIEWER, new dev.workbench.domain.RoleBudget(1, null)))
+            .workflowTemplate("general-analysis-review")
+            .reviewPlan(true)
+            .build();
+    var prepared = interruptAfterFirstAgentNode(roleRequest, false);
+    String restored = service.recover(prepared.runId(), prepared.checkpointId());
     assertEquals("COMPLETED", await(restored).get("STATUS"));
     assertEquals(1, repo.agents(restored).size());
     assertEquals(1, repo.models(restored).size());
+    assertEquals(prepared.runId(), repo.run(restored).get("PARENT_ID"));
+    assertEquals(
+        repo.runSnapshot(prepared.runId()).taskId(), repo.runSnapshot(restored).taskId());
     assertEquals(
         repo.roleBudgets(repo.runSnapshot(original).taskId().toString()),
         repo.roleBudgets(repo.runSnapshot(restored).taskId().toString()));
@@ -3384,13 +3507,12 @@ class WorkbenchIntegrationTest {
 
   @Test
   void interruptedRunRestoresFromSavedSafeNode() throws Exception {
-    String id = service.create(new CreateTaskRequest("测试恢复", "slow", 4, 2, 30));
-    for (int i = 0; i < 50 && repo.checkpoints(id).isEmpty(); i++) Thread.sleep(50);
-    service.cancel(id);
-    await(id);
-    // 仅测试构造故障历史；生产逻辑不允许将取消终态改为中断。
-    db.update("UPDATE runs SET status='INTERRUPTED',reason='模拟进程中断' WHERE id=?", id);
-    String cp = repo.checkpoints(id).getFirst().get("ID").toString();
+    // 收口包 G-2：恢复只接受真实工作流检查点。这里显式保存「首个节点启动前」的安全边界，
+    // 再以中断收尾，避免依赖遗留 run_checkpoints 表与不可控的运行时序。
+    String id = createPendingWorkflow("测试恢复", "general-analysis-review");
+    String cp = saveFirstNodeBoundary(id);
+    workflowRuns.finishWorkflowStoppedRun(id, null, StopCause.INTERRUPTED, "模拟进程中断", 0, 0, 5);
+    assertEquals(cp, availableCheckpoint(id).id().toString());
     String restored = service.recover(id, cp);
     assertEquals("COMPLETED", await(restored).get("STATUS"));
     assertTrue(plans.find(restored).stream().allMatch(n -> n.status() == PlanNodeStatus.COMPLETED));
@@ -3419,181 +3541,219 @@ class WorkbenchIntegrationTest {
   @Test
   void readOnlyWorkspaceRecoveryRequiresUnchangedStateAndRechecksAfterQueue(@TempDir Path temp)
       throws Exception {
-    Path source = Files.createDirectory(temp.resolve("source"));
-    runGit(source, "init", "-b", "main");
-    runGit(source, "config", "user.email", "test@example.invalid");
-    runGit(source, "config", "user.name", "Test");
-    Files.writeString(source.resolve("sample.txt"), "原始内容", StandardCharsets.UTF_8);
-    runGit(source, "add", "sample.txt");
-    runGit(source, "commit", "-m", "fixture");
-    var workspace = workspaces.create(source.toString(), "main");
-    String old =
-        service.create(
-            new CreateTaskRequest(
-                "分析只读文件", "normal", 6, 2, 30, "mock", workspace.id(), "sample.txt", false, null));
-    assertEquals("COMPLETED", await(old).get("STATUS"));
-    var checkpoints = repo.checkpoints(old);
-    var start =
-        checkpoints.stream()
-            .filter(c -> "BEFORE_TOOL".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow();
-    var review =
-        checkpoints.stream()
-            .filter(c -> Integer.valueOf(6).equals(c.get("VERSION")))
-            .findFirst()
-            .orElseThrow();
-    assertEquals(true, review.get("VALID"));
-    String originalAgent = repo.agents(old).getFirst().get("ID").toString();
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", old);
-    assertThrows(
-        IllegalStateException.class, () -> service.recover(old, start.get("ID").toString()));
-    String restored = service.recover(old, review.get("ID").toString());
-    assertEquals("COMPLETED", await(restored).get("STATUS"));
-    assertEquals(1, repo.agents(restored).size());
-    assertTrue(repo.tools(restored).isEmpty());
-    assertEquals(PlanNodeStatus.REUSED, plans.find(restored).getFirst().status());
-    assertEquals(originalAgent, plans.find(restored).getFirst().sourceAgentId().toString());
-    assertTrue(repo.runSnapshot(restored).rounds() >= repo.runSnapshot(old).rounds());
-    var next =
-        repo.checkpoints(restored).stream()
-            .filter(c -> Integer.valueOf(6).equals(c.get("VERSION")))
-            .findFirst()
-            .orElseThrow();
-    assertEquals(true, next.get("VALID"));
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    // 收口包 G-2：只读工作区的安全边界由真实工具读取证据构成；显式结算分析节点后保存工作流检查点。
+    var prepared =
+        interruptAfterFirstAgentNode(
+            CreateTaskRequest.builder()
+                .goal("分析只读文件")
+                .scenario("normal")
+                .limits(6, 3, 30)
+                .modelMode("mock")
+                .workspace(workspace.id(), "authorized.txt")
+                .workflowTemplate("workspace-analysis")
+                .reviewPlan(true)
+                .build(),
+            true);
+    String old = prepared.runId();
+    String originalAgent = plans.find(old).getFirst().agentId().toString();
+    assertEquals(1, workflowCheckpoints(old).size());
+    assertEquals(1, availableCheckpoint(old).completedNodes());
 
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", restored);
+    // 授权文件被改动 → 边界立即失效，恢复申请在任何 Agent 启动前被拒绝。
+    var file = workspaces.read(workspace.id(), "authorized.txt");
+    var changed = workspaces.write(workspace.id(), "authorized.txt", file.sha256(), "已改变");
+    assertFalse(workflowCheckpoints(old).getFirst().available());
+    var blocked =
+        assertThrows(
+            IllegalStateException.class, () -> service.recover(old, prepared.checkpointId()));
+    assertTrue(blocked.getMessage().contains("授权文件内容已变化"));
+    // 恢复原内容 → 边界重新可用（复验基于当前文件版本，不能复用旧结论）。
+    workspaces.write(workspace.id(), "authorized.txt", changed.sha256(), file.content());
+    assertEquals(prepared.checkpointId(), availableCheckpoint(old).id().toString());
+
+    // 授权范围被改动同样使边界失效。
+    String taskId = repo.runSnapshot(old).taskId().toString();
+    db.update(
+        "UPDATE tasks SET file_scope=?,file_scopes_json=? WHERE id=?",
+        "second.txt",
+        "[\"second.txt\"]",
+        taskId);
+    assertFalse(workflowCheckpoints(old).getFirst().available());
+    assertThrows(IllegalStateException.class, () -> service.recover(old, prepared.checkpointId()));
+    db.update(
+        "UPDATE tasks SET file_scope=?,file_scopes_json=? WHERE id=?",
+        "authorized.txt",
+        "[\"authorized.txt\"]",
+        taskId);
+    assertEquals(prepared.checkpointId(), availableCheckpoint(old).id().toString());
+
+    // 排队窗口：先占用执行器，再申请恢复；排队期间文件变化，恢复子运行必须在启动任何 Agent 前失败关闭。
     String busy = service.create(new CreateTaskRequest("占用调度队列", "slow", 4, 2, 30));
     for (int i = 0; i < 100 && repo.tools(busy).isEmpty(); i++) Thread.sleep(100);
     assertFalse(repo.tools(busy).isEmpty());
-    String queued = service.recover(restored, next.get("ID").toString());
+    String queued = service.recover(old, prepared.checkpointId());
     assertEquals("PENDING", repo.run(queued).get("STATUS"));
-    var file = workspaces.read(workspace.id(), "sample.txt");
-    var changedFile = workspaces.write(workspace.id(), "sample.txt", file.sha256(), "已改变");
+    var queuedChange =
+        workspaces.write(
+            workspace.id(),
+            "authorized.txt",
+            workspaces.read(workspace.id(), "authorized.txt").sha256(),
+            "排队后已改变");
     service.cancel(busy);
     var failed = await(queued);
+    // 语义反转（收口包 G-2）：遗留路径在派发前写 RECOVERY_DISPATCH=PRECONDITION_FAILED 并允许重试；
+    // 工作流恢复把复核放在首个节点认领时，失败关闭为 FAILED + 真实原因，且保留这次恢复的父子关系，
+    // 不允许在同一父运行上无限重试恢复。
     assertEquals("FAILED", failed.get("STATUS"));
-    assertTrue(failed.get("REASON").toString().contains("工作区"));
-    assertEquals("PRECONDITION_FAILED", failed.get("RECOVERY_DISPATCH"));
-    assertEquals("RECOVERY_PRECONDITION_FAILED", failed.get("STOP_CAUSE"));
+    assertTrue(failed.get("REASON").toString().contains("授权文件内容已变化"));
     assertTrue(repo.agents(queued).isEmpty());
-    assertFalse(repo.hasRecovery(restored));
-    assertThrows(
-        IllegalStateException.class, () -> service.recover(old, review.get("ID").toString()));
-    workspaces.write(workspace.id(), "sample.txt", changedFile.sha256(), "原始内容");
-    String retry = service.recover(restored, next.get("ID").toString());
-    assertEquals("COMPLETED", await(retry).get("STATUS"));
-    assertEquals(originalAgent, plans.find(retry).getFirst().sourceAgentId().toString());
-    assertTrue(repo.tools(retry).isEmpty());
-    db.update("UPDATE runs SET status='RUNNING' WHERE id=?", retry);
-    try {
-      assertThrows(
-          IllegalStateException.class,
-          () -> repo.rejectRecoveryPrecondition(retry, 0, 0, 0, "不应允许"));
-      assertTrue(repo.hasRecovery(restored));
-    } finally {
-      db.update("UPDATE runs SET status='COMPLETED' WHERE id=?", retry);
-    }
-    assertEquals("原始内容", Files.readString(source.resolve("sample.txt")));
+    assertEquals(PlanNodeStatus.SKIPPED, plans.find(queued).get(1).status());
+    assertEquals(PlanNodeStatus.SKIPPED, plans.find(queued).getLast().status());
+    assertTrue(repo.hasRecovery(old));
+    assertThrows(IllegalStateException.class, () -> service.recover(old, prepared.checkpointId()));
+    workspaces.write(workspace.id(), "authorized.txt", queuedChange.sha256(), file.content());
 
+    // 未声明未跟踪文件：收口包 G-2 后工作流边界只绑定实际读取的文件版本与基线提交，
+    // 等价的安全约束落在验证指纹上——存在未声明未跟踪文件时无法签署任何测试/证据结论。
     Files.writeString(Path.of(workspace.workspacePath()).resolve("untracked.txt"), "未跟踪");
     String untracked =
         service.create(
-            new CreateTaskRequest(
-                "分析含未跟踪文件的工作区",
-                "normal",
-                6,
-                2,
-                30,
-                "mock",
-                workspace.id(),
-                "sample.txt",
-                false,
-                null));
+            CreateTaskRequest.builder()
+                .goal("分析含未跟踪文件的工作区")
+                .scenario("normal")
+                .limits(6, 2, 30)
+                .modelMode("mock")
+                .workspace(workspace.id(), "authorized.txt")
+                .workflowTemplate("workspace-analysis")
+                .build());
     assertEquals("COMPLETED", await(untracked).get("STATUS"));
+    var fingerprint =
+        assertThrows(
+            IllegalStateException.class, () -> workspaces.verificationFingerprint(workspace.id()));
+    assertTrue(fingerprint.getMessage().contains("未跟踪"));
+    assertEquals(1, workflowRuns.workflowChecks(untracked).size());
     assertTrue(
-        repo.events(untracked).stream()
-            .anyMatch(
-                e ->
-                    "CHECKPOINT_SKIPPED".equals(e.get("EVENT_TYPE"))
-                        && "WORKSPACE_BEFORE_UNAVAILABLE".equals(e.get("REASON_CODE"))));
-    assertTrue(
-        repo.events(untracked).stream()
-            .anyMatch(
-                e ->
-                    "CHECKPOINT_SKIPPED".equals(e.get("EVENT_TYPE"))
-                        && e.get("MESSAGE").toString().contains("分析前")));
-    assertTrue(
-        repo.checkpoints(untracked).stream()
-            .noneMatch(c -> Integer.valueOf(6).equals(c.get("VERSION"))));
+        workflowRuns.workflowChecks(untracked).stream()
+            .allMatch(check -> check.status() == SystemCheckStatus.PASSED));
+    // 边界只覆盖已读取文件与基线提交，不声称覆盖未跟踪路径；首个节点启动前的真实边界仍然存在。
+    assertEquals(0, workflowCheckpoints(untracked).getFirst().completedNodes());
+    // 已消费过恢复的父运行不再提供可用边界：失败关闭的恢复不会被静默改写为可重试成功。
+    assertFalse(workflowCheckpoints(old).stream().anyMatch(WorkflowCheckpoint::available));
+    assertEquals(originalAgent, plans.find(old).getFirst().agentId().toString());
   }
 
   @Test
   void recoveryPreconditionFailureIsAtomicAndDoesNotGuessOnStorageFailure() throws Exception {
-    String parent = service.create(new CreateTaskRequest("恢复事务样本", "normal", 5, 2, 30));
-    assertEquals("COMPLETED", await(parent).get("STATUS"));
-    var checkpoint =
-        repo.checkpoints(parent).stream()
-            .filter(c -> "BEFORE_TOOL".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow();
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", parent);
-    String child = java.util.UUID.randomUUID().toString();
-    repo.createRecoveryRun(
-        java.util.UUID.fromString(child),
-        repo.runSnapshot(parent),
-        repo.checkedCheckpoint(checkpoint.get("ID").toString()));
-    db.update("UPDATE runs SET status='RUNNING' WHERE id=?", child);
-    db.execute(
-        "ALTER TABLE events ADD CONSTRAINT recovery_precondition_test_failure CHECK (event_type <>"
-            + " 'FAILED' OR POSITION('"
-            + child
-            + "' IN message)=0)");
+    var prepared =
+        interruptAfterFirstAgentNode(
+            CreateTaskRequest.builder()
+                .goal("恢复事务样本")
+                .scenario("normal")
+                .limits(6, 2, 30)
+                .modelMode("mock")
+                .workflowTemplate("general-analysis-review")
+                .reviewPlan(true)
+                .build(),
+            false);
+    String parent = prepared.runId();
+    String cp = prepared.checkpointId();
+    int checkpointsBefore = workflowCheckpoints(parent).size();
+    // 存储不一致注入：周期快照的预算摘要被改写时，恢复必须拒绝且不猜测可用性，也不能留下半成品子运行。
+    String budgetSha =
+        db.queryForObject(
+            "SELECT budget_sha256 FROM run_snapshots WHERE run_id=? ORDER BY event_seq DESC LIMIT 1",
+            String.class,
+            parent);
+    db.update(
+        "UPDATE run_snapshots SET budget_sha256=? WHERE run_id=?",
+        "0".repeat(64),
+        parent);
     try {
-      assertThrows(
-          org.springframework.dao.DataAccessException.class,
-          () -> repo.rejectRecoveryPrecondition(child, 0, 0, 0, "故障注入 " + child));
-      assertEquals("RUNNING", repo.run(child).get("STATUS"));
-      assertEquals("UNKNOWN", repo.run(child).get("RECOVERY_DISPATCH"));
-      assertTrue(plans.find(child).stream().allMatch(n -> n.status() == PlanNodeStatus.PENDING));
-      assertTrue(repo.hasRecovery(parent));
+      var inconsistent =
+          assertThrows(IllegalStateException.class, () -> service.recover(parent, cp));
+      assertTrue(inconsistent.getMessage().contains("预算"));
+      assertEquals("INTERRUPTED", repo.run(parent).get("STATUS"));
+      assertEquals(
+          0,
+          (int)
+              db.queryForObject(
+                  "SELECT COUNT(*) FROM runs WHERE parent_id=?", Integer.class, parent));
+      assertFalse(repo.hasRecovery(parent));
+      assertEquals(checkpointsBefore, workflowCheckpoints(parent).size());
+      assertEquals(PlanNodeStatus.COMPLETED, plans.find(parent).getFirst().status());
+      assertEquals(PlanNodeStatus.SKIPPED, plans.find(parent).getLast().status());
     } finally {
-      db.execute("ALTER TABLE events DROP CONSTRAINT recovery_precondition_test_failure");
+      db.update("UPDATE run_snapshots SET budget_sha256=? WHERE run_id=?", budgetSha, parent);
     }
-    repo.rejectRecoveryPrecondition(child, 0, 0, 0, "前置条件不满足");
-    assertEquals("PRECONDITION_FAILED", repo.run(child).get("RECOVERY_DISPATCH"));
-    assertTrue(plans.find(child).stream().allMatch(n -> n.status() == PlanNodeStatus.SKIPPED));
+    // 前置条件失败同样不猜测：来源结果被篡改时拒绝恢复，且没有创建任何子运行。
+    String sourceAgent = plans.find(parent).getFirst().agentId().toString();
+    db.update("UPDATE agent_invocations SET result='篡改' WHERE id=?", sourceAgent);
+    var rejected =
+        assertThrows(IllegalStateException.class, () -> service.recover(parent, cp));
+    assertTrue(rejected.getMessage().contains("无法安全恢复"));
+    assertEquals("INTERRUPTED", repo.run(parent).get("STATUS"));
+    assertEquals(
+        0,
+        (int)
+            db.queryForObject(
+                "SELECT COUNT(*) FROM runs WHERE parent_id=?", Integer.class, parent));
     assertFalse(repo.hasRecovery(parent));
+    db.update("UPDATE agent_invocations SET result='已保存的分析' WHERE id=?", sourceAgent);
+    // 故障解除后同一检查点仍可恢复：上述失败没有消耗父运行的可恢复性。
+    String child = service.recover(parent, cp);
+    assertEquals("COMPLETED", await(child).get("STATUS"));
+    assertTrue(repo.hasRecovery(parent));
+    assertThrows(IllegalStateException.class, () -> service.recover(parent, cp));
   }
 
   @Test
-  void reviewCheckpointReusesVerifiedAnalysisWithoutRepeatingTools() throws Exception {
-    String old = service.create(new CreateTaskRequest("恢复到审查", "normal", 6, 2, 30));
-    assertEquals("COMPLETED", await(old).get("STATUS"));
-    var checkpoint =
-        repo.checkpoints(old).stream()
-            .filter(c -> "BEFORE_REVIEW".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow();
-    assertEquals(true, checkpoint.get("VALID"));
-    String originalAgent = repo.agents(old).getFirst().get("ID").toString();
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", old);
-    String restored = service.recover(old, checkpoint.get("ID").toString());
+  void reviewCheckpointReusesVerifiedAnalysisWithoutRepeatingTools(@TempDir Path temp)
+      throws Exception {
+    var workspace = createWorkspaceWorkflowFixture(temp);
+    // 收口包 G-2：只读工作区边界由真实读取证据构成；恢复后复用已结算的分析实例，不得重复读取工具。
+    var prepared =
+        interruptAfterFirstAgentNode(
+            CreateTaskRequest.builder()
+                .goal("恢复到审查")
+                .scenario("normal")
+                .limits(6, 3, 30)
+                .modelMode("mock")
+                .workspace(workspace.id(), "authorized.txt")
+                .workflowTemplate("workspace-analysis")
+                .reviewPlan(true)
+                .build(),
+            true);
+    String old = prepared.runId();
+    String originalAgent = plans.find(old).getFirst().agentId().toString();
+    assertEquals(1, repo.tools(old).size());
+    String restored = service.recover(old, prepared.checkpointId());
     assertEquals("COMPLETED", await(restored).get("STATUS"));
     assertTrue(repo.tools(restored).isEmpty());
     assertEquals(1, repo.agents(restored).size());
     assertEquals(PlanNodeStatus.REUSED, plans.find(restored).getFirst().status());
     assertEquals(originalAgent, plans.find(restored).getFirst().sourceAgentId().toString());
-    assertTrue(reports.render(restored).contains("REUSED"));
     assertNull(plans.find(restored).getFirst().agentId());
+    assertTrue(reports.render(restored).contains("REUSED"));
     assertTrue(repo.runSnapshot(restored).rounds() >= repo.runSnapshot(old).rounds());
-    var nextCheckpoint =
-        repo.checkpoints(restored).stream()
-            .filter(c -> "BEFORE_REVIEW".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow();
-    assertEquals(5, ((Number) nextCheckpoint.get("VERSION")).intValue());
-    assertEquals(true, nextCheckpoint.get("VALID"));
+    assertEquals(1, workflowRuns.workflowChecks(restored).size());
+    assertTrue(
+        workflowRuns.workflowChecks(restored).stream()
+            .allMatch(check -> check.status() == SystemCheckStatus.PASSED));
+    // 恢复世代只有一层：子运行的计划来自父边界，不再产生新的可复用检查点。
+    assertTrue(workflowCheckpoints(restored).isEmpty());
+    // 交接收据引用父运行的原始实例与工具证据，而不是重新读取的文件。
+    String parentTool = repo.tools(old).getFirst().get("ID").toString();
+    var receipts = workflowRuns.workflowHandoffs(restored);
+    assertTrue(
+        receipts.stream()
+            .anyMatch(receipt -> old.equals(String.valueOf(receipt.sourceRunId()))));
+    assertTrue(
+        receipts.stream()
+            .anyMatch(
+                receipt ->
+                    receipt.toolEvidence().stream()
+                        .anyMatch(evidence -> evidence.toolCallId().toString().equals(parentTool))));
     String unrelated = service.create(new CreateTaskRequest("无关来源", "normal", 4, 2, 30));
     assertEquals("COMPLETED", await(unrelated).get("STATUS"));
     var unrelatedAgent =
@@ -3608,90 +3768,111 @@ class WorkbenchIntegrationTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> repo.ancestorAnalysisReference(restored, unrelated, unrelatedAgent));
+    // 父边界已被这次恢复消费：即便来源结果被改写，也不会再基于旧边界创建第二个子运行。
+    // 被复用节点的来源仍指向父运行的原始实例，恢复不会重放或改写该分析。
     String savedSourceResult =
         db.queryForObject(
             "SELECT result FROM agent_invocations WHERE id=?", String.class, originalAgent);
     db.update("UPDATE agent_invocations SET result='篡改' WHERE id=?", originalAgent);
-    assertFalse(repo.validCheckpoint(repo.checkpoint(nextCheckpoint.get("ID").toString())));
+    assertFalse(workflowCheckpoints(old).stream().anyMatch(WorkflowCheckpoint::available));
     db.update("UPDATE agent_invocations SET result=? WHERE id=?", savedSourceResult, originalAgent);
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", restored);
-    String restoredAgain = service.recover(restored, nextCheckpoint.get("ID").toString());
-    assertEquals("COMPLETED", await(restoredAgain).get("STATUS"));
-    assertEquals(1, repo.agents(restoredAgain).size());
-    assertTrue(repo.tools(restoredAgain).isEmpty());
-    assertEquals(originalAgent, plans.find(restoredAgain).getFirst().sourceAgentId().toString());
-    assertTrue(repo.runSnapshot(restoredAgain).rounds() >= repo.runSnapshot(restored).rounds());
-    var transfer =
-        repo.handoffs(restoredAgain).stream()
-            .filter(h -> "AGENT_TRANSFER".equals(h.get("DIRECTION")))
-            .map(h -> (Handoff) h.get("PAYLOAD"))
-            .findFirst()
-            .orElseThrow();
-    assertEquals(old, transfer.evidenceRunId());
+    assertFalse(workflowCheckpoints(old).stream().anyMatch(WorkflowCheckpoint::available));
+    assertEquals(
+        1,
+        (int)
+            db.queryForObject(
+                "SELECT COUNT(*) FROM runs WHERE parent_id=?", Integer.class, old));
+    assertThrows(
+        IllegalStateException.class, () -> service.recover(restored, prepared.checkpointId()));
+    assertEquals(originalAgent, plans.find(restored).getFirst().sourceAgentId().toString());
   }
 
   @Test
   void reviewCheckpointRejectsAlteredAnalysisSource() throws Exception {
-    String id = service.create(new CreateTaskRequest("校验分析来源", "normal", 5, 2, 30));
-    assertEquals("COMPLETED", await(id).get("STATUS"));
-    String cp =
-        repo.checkpoints(id).stream()
-            .filter(c -> "BEFORE_REVIEW".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow()
-            .get("ID")
-            .toString();
-    db.update(
-        "UPDATE agent_invocations SET result='篡改' WHERE id=?",
-        repo.agents(id).getFirst().get("ID"));
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", id);
-    assertFalse(repo.validCheckpoint(repo.checkpoint(cp)));
-    assertThrows(IllegalArgumentException.class, () -> service.recover(id, cp));
+    // 收口包 G-2：工作流边界把来源结果纳入摘要；篡改后边界立即不可用，且不会创建恢复子运行。
+    var prepared =
+        interruptAfterFirstAgentNode(
+            CreateTaskRequest.builder()
+                .goal("校验分析来源")
+                .scenario("normal")
+                .limits(6, 2, 30)
+                .modelMode("mock")
+                .workflowTemplate("general-analysis-review")
+                .reviewPlan(true)
+                .build(),
+            false);
+    String sourceAgent = plans.find(prepared.runId()).getFirst().agentId().toString();
+    db.update("UPDATE agent_invocations SET result='篡改' WHERE id=?", sourceAgent);
+    assertFalse(workflowCheckpoints(prepared.runId()).getFirst().available());
+    // 语义反转（收口包 G-2）：摘要复验失败抛出 IllegalStateException，而不是遗留检查点的 IllegalArgumentException。
+    var rejected =
+        assertThrows(
+            IllegalStateException.class,
+            () -> service.recover(prepared.runId(), prepared.checkpointId()));
+    assertTrue(rejected.getMessage().contains("无法安全恢复"));
+    assertEquals("INTERRUPTED", repo.run(prepared.runId()).get("STATUS"));
+    assertEquals(
+        0,
+        (int)
+            db.queryForObject(
+                "SELECT COUNT(*) FROM runs WHERE parent_id=?",
+                Integer.class,
+                prepared.runId()));
   }
 
   @Test
   void recoveryCreationRollsBackAndConfirmedQueueRejectionAllowsRetry() throws Exception {
-    String old = service.create(new CreateTaskRequest("恢复事务", "normal", 6, 2, 30));
-    assertEquals("COMPLETED", await(old).get("STATUS"));
-    var checkpointRow =
-        repo.checkpoints(old).stream()
-            .filter(c -> "BEFORE_REVIEW".equals(c.get("STAGE")))
-            .findFirst()
-            .orElseThrow();
-    String checkpointId = checkpointRow.get("ID").toString();
-    db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", old);
+    var prepared =
+        interruptAfterFirstAgentNode(
+            CreateTaskRequest.builder()
+                .goal("恢复事务")
+                .scenario("normal")
+                .limits(6, 2, 30)
+                .modelMode("mock")
+                .workflowTemplate("general-analysis-review")
+                .reviewPlan(true)
+                .build(),
+            false);
+    String old = prepared.runId();
+    String checkpointId = prepared.checkpointId();
+    // 恢复创建失败（子运行行写入被拒绝）时，运行、计划和检查点必须一起回滚。
     db.execute(
-        "ALTER TABLE events ADD CONSTRAINT recovery_event_test_failure CHECK"
-            + " (event_type <> 'RECOVERY_STARTED' OR POSITION('"
+        "ALTER TABLE runs ADD CONSTRAINT recovery_event_test_failure CHECK"
+            + " (parent_id IS NULL OR parent_id <> '"
             + old
-            + "' IN message)=0)");
+            + "')");
     try {
       assertThrows(
           org.springframework.dao.DataAccessException.class,
           () -> service.recover(old, checkpointId));
       assertFalse(repo.hasRecovery(old));
+      assertEquals("INTERRUPTED", repo.run(old).get("STATUS"));
+      assertEquals(1, workflowCheckpoints(old).size());
       assertEquals(
-          0, db.queryForObject("SELECT COUNT(*) FROM runs WHERE parent_id=?", Integer.class, old));
+          0, (int) db.queryForObject(
+              "SELECT COUNT(*) FROM runs WHERE parent_id=?", Integer.class, old));
     } finally {
-      db.execute("ALTER TABLE events DROP CONSTRAINT recovery_event_test_failure");
+      db.execute("ALTER TABLE runs DROP CONSTRAINT recovery_event_test_failure");
     }
+    // 已确认的队列拒绝（线程池拒绝派发）只结算子运行与计划，父运行仍可重新申请恢复。
     String rejected = java.util.UUID.randomUUID().toString();
-    repo.createRecoveryRun(
-        java.util.UUID.fromString(rejected),
-        repo.runSnapshot(old),
-        repo.checkedCheckpoint(checkpointId));
+    recovery.recover(old, java.util.UUID.fromString(checkpointId), java.util.UUID.fromString(rejected));
+    assertEquals("PENDING", repo.run(rejected).get("STATUS"));
     assertTrue(repo.hasRecovery(old));
     repo.rejectRecoveryBeforeDispatch(rejected);
     assertEquals("FAILED", repo.run(rejected).get("STATUS"));
     assertEquals("REJECTED", repo.run(rejected).get("RECOVERY_DISPATCH"));
     assertTrue(repo.agents(rejected).isEmpty());
-    assertTrue(plans.find(rejected).stream().allMatch(n -> n.status() == PlanNodeStatus.SKIPPED));
+    // 已确认的拒绝只结算未启动节点；复用标记保留，证明没有重新执行被复用的分析。
+    assertEquals(PlanNodeStatus.REUSED, plans.find(rejected).getFirst().status());
+    assertEquals(PlanNodeStatus.SKIPPED, plans.find(rejected).getLast().status());
     assertFalse(repo.hasRecovery(old));
     db.update("UPDATE runs SET status='RUNNING' WHERE id=?", rejected);
     assertTrue(repo.hasRecovery(old));
     db.update("UPDATE runs SET status='FAILED' WHERE id=?", rejected);
     String accepted = service.recover(old, checkpointId);
     assertEquals("COMPLETED", await(accepted).get("STATUS"));
+    assertEquals(PlanNodeStatus.REUSED, plans.find(accepted).getFirst().status());
     assertTrue(repo.hasRecovery(old));
     assertThrows(IllegalStateException.class, () -> service.recover(old, checkpointId));
   }
@@ -4614,24 +4795,33 @@ class WorkbenchIntegrationTest {
 
   @Test
   void alteredCheckpointIsRejected() throws Exception {
-    String id = service.create(new CreateTaskRequest("检查点校验", "normal", 4, 2, 30));
-    var old = await(id);
+    // 收口包 G-2：检查点保存在 workflow_checkpoints；这里篡改累计轮次，模拟被改写的安全边界。
+    String id = createPendingWorkflow("检查点校验", "general-analysis-review");
+    String cp = saveFirstNodeBoundary(id);
+    db.update("UPDATE workflow_checkpoints SET rounds=rounds+1 WHERE id=?", cp);
     db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", id);
-    String cp = repo.checkpoints(id).getFirst().get("ID").toString();
-    db.update("UPDATE checkpoints SET rounds=rounds+1 WHERE id=?", cp);
-    assertEquals(false, repo.checkpoints(id).getFirst().get("VALID"));
-    assertThrows(IllegalArgumentException.class, () -> service.recover(id, cp));
+    assertFalse(workflowCheckpoints(id).getFirst().available());
+    // 语义反转（收口包 G-2）：篡改被摘要与累计用量复验拒绝，抛出 IllegalStateException（UnsafeBoundaryException），
+    // 而不是遗留检查点表的 IllegalArgumentException。
+    var rejected = assertThrows(IllegalStateException.class, () -> service.recover(id, cp));
+    assertTrue(rejected.getMessage().contains("检查点后"));
     assertEquals("INTERRUPTED", repo.run(id).get("STATUS"));
   }
 
   @Test
   void legacyEngineCheckpointCannotResumeInAgentScope() throws Exception {
-    String id = service.create(new CreateTaskRequest("旧版本检查点", "normal", 4, 2, 30));
-    await(id);
+    // 语义反转（收口包 G-2）：遗留直跑轨下线后，没有工作流计划的历史运行不再有检查点可恢复，
+    // 恢复请求必须以「遗留」原因显式拒绝，并且不再读写遗留 run_checkpoints 表。
+    String id = java.util.UUID.randomUUID().toString();
+    repo.createRun(id, java.util.UUID.randomUUID().toString(), null, 0, 0, 4, 2, 30, 0);
     db.update("UPDATE runs SET status='INTERRUPTED' WHERE id=?", id);
-    String checkpointId = repo.checkpoints(id).getFirst().get("ID").toString();
-    db.update("UPDATE checkpoints SET engine='LEGACY' WHERE id=?", checkpointId);
-    assertEquals(false, repo.checkpoints(id).getFirst().get("VALID"));
-    assertThrows(IllegalArgumentException.class, () -> service.recover(id, checkpointId));
+    assertNull(plans.workflowPlan(id));
+    assertTrue(repo.checkpoints(id).isEmpty());
+    var rejected =
+        assertThrows(
+            IllegalStateException.class,
+            () -> service.recover(id, java.util.UUID.randomUUID().toString()));
+    assertTrue(rejected.getMessage().contains("遗留"));
+    assertEquals("INTERRUPTED", repo.run(id).get("STATUS"));
   }
 }

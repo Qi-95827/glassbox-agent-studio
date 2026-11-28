@@ -85,15 +85,30 @@ public record WorkflowTemplate(
       return this == WORKSPACE_BUG_FIX;
     }
 
+    /**
+     * 模板允许的工具上限。
+     *
+     * <p>纯文本模板没有工作区，因此只允许不触达文件系统的能力声明（模拟检视、读取、搜索）：节点上没有工作区标识也没有
+     * 授权文件集合，工具网关拿不到任何可访问路径，实际不可能读到文件。这与历史纯文本计划（ANALYST 内置定义同样声明
+     * 这三类能力）完全一致，收口包 G-2 之后由标准工作流承载同一行为。
+     */
     public boolean permits(ToolKind tool) {
-      return hasWorkspace()
-          && (tool == ToolKind.WORKSPACE_READ
-              || tool == ToolKind.WORKSPACE_SEARCH
-              || (allowsWrite() && tool == ToolKind.WORKSPACE_WRITE));
+      if (hasWorkspace())
+        return tool == ToolKind.WORKSPACE_READ
+            || tool == ToolKind.WORKSPACE_SEARCH
+            || (allowsWrite() && tool == ToolKind.WORKSPACE_WRITE);
+      return tool == ToolKind.SIMULATED_INSPECTION
+          || tool == ToolKind.WORKSPACE_READ
+          || tool == ToolKind.WORKSPACE_SEARCH;
     }
 
+    /**
+     * 计算该模板本次运行的授权摘要，并在越界时拒绝创建。
+     *
+     * <p>收口包 G-2 起，项目背景记忆不再是模板的排他项：记忆召回由 {@code WorkflowMemoryContext} 在节点装配阶段完成，
+     * 同一份开关在动态工作流路径上同样生效，因此历史直跑轨下线后不再需要对模板拒绝记忆任务。
+     */
     public String authorizationDigest(TaskDefinition task) {
-      if (task.memoryEnabled()) throw new IllegalArgumentException("所选动态模板不支持项目背景记忆。");
       if (this == WORKSPACE_BUG_FIX) {
         if (task.entryKind() != TaskEntryKind.BUG || task.bugId() == null)
           throw new IllegalArgumentException("Bug 修复工作流需要从 Bug 入口绑定模拟 Bug。");
@@ -106,8 +121,9 @@ public record WorkflowTemplate(
           fields.append('|').append(path.length()).append(':').append(path);
         return AgentAssemblySnapshot.sha256(fields.toString());
       }
-      if (task.bugId() != null || task.entryKind() == TaskEntryKind.BUG)
-        throw new IllegalArgumentException("所选动态模板不支持 Bug 任务。");
+      // 只有真正绑定了模拟 Bug 的任务必须走 Bug 修复模板；「Bug 入口但没有具体 Bug 绑定」属于纯文本观察任务，
+      // 由通用/只读模板承载即可，不能因此拒绝创建请求。
+      if (task.bugId() != null) throw new IllegalArgumentException("所选动态模板不支持 Bug 任务。");
       if (task.writeEnabled() != allowsWrite())
         throw new IllegalArgumentException(allowsWrite() ? "所选工作流需要显式授权修改文件。" : "所选只读工作流不允许写入。");
       if (this == TEXT_ONLY) {

@@ -192,23 +192,23 @@ class WorkflowScheduler {
       // 暂停发生在未认领节点的安全边界：运行保持 PAUSED，工作线程立即归还执行器，等待 /resume 重新派发。
       return;
     } catch (StopExecution e) {
-      stop(runId, activeAgents, control, e.stopCause(), e.getMessage());
+      stop(runId, task, activeAgents, control, e.stopCause(), e.getMessage());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      stop(runId, activeAgents, control, StopCause.INTERRUPTED, "进程中断，未结束的模型结果未知。");
+      stop(runId, task, activeAgents, control, StopCause.INTERRUPTED, "进程中断，未结束的模型结果未知。");
     } catch (ModelRateLimitException e) {
-      stop(runId, activeAgents, control, StopCause.MODEL_RATE_LIMIT, "模型请求被限流拒绝，当前节点无法继续自动重试。");
+      stop(runId, task, activeAgents, control, StopCause.MODEL_RATE_LIMIT, "模型请求被限流拒绝，当前节点无法继续自动重试。");
     } catch (UncertainToolEffectException e) {
-      stop(runId, activeAgents, control, StopCause.TOOL_EFFECT_UNKNOWN, "工具写入结果未知，请先核对工作区状态。");
+      stop(runId, task, activeAgents, control, StopCause.TOOL_EFFECT_UNKNOWN, "工具写入结果未知，请先核对工作区状态。");
     } catch (StaleEvidenceException e) {
-      stop(runId, activeAgents, control, StopCause.CHECK_FAILED, e.getMessage());
+      stop(runId, task, activeAgents, control, StopCause.CHECK_FAILED, e.getMessage());
     } catch (IllegalArgumentException | IllegalStateException e) {
       // 装配、版本、授权或上下文约束拒绝：保留项目生成的安全原因，便于从运行详情定位。
       String detail = e.getMessage() == null ? "未提供原因。" : e.getMessage();
       if (detail.length() > 400) detail = detail.substring(0, 399) + "…";
-      stop(runId, activeAgents, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行被拒绝：" + detail);
+      stop(runId, task, activeAgents, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行被拒绝：" + detail);
     } catch (Exception e) {
-      stop(runId, activeAgents, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行失败，请查看节点与调用记录。");
+      stop(runId, task, activeAgents, control, StopCause.UNCLASSIFIED_FAILURE, "工作流执行失败，请查看节点与调用记录。");
     } finally {
       // 终态运行不再需要断点放行记录；暂停中的运行保留，供 /resume 重入后越过已放行断点。
       if (!runs.runSnapshot(runId).status().canCancel()) releasedBreakpoints.remove(runId);
@@ -624,7 +624,7 @@ class WorkflowScheduler {
         new AgentExecutionRequest(
                 node.role(),
                 id,
-                stepInput(runId, task, attempt, json.writeValueAsString(input)),
+                stepInput(runId, task, attempt, json.writeValueAsString(input), loadedMemory.matches()),
                 nodeWorkspaceId,
                 files,
                 !writeFiles.isEmpty(),
@@ -658,7 +658,12 @@ class WorkflowScheduler {
     return agent.execute(request);
   }
   private void stop(
-      String runId, Set<UUID> agentIds, RunControl control, StopCause cause, String reason) {
+      String runId,
+      TaskDefinition task,
+      Set<UUID> agentIds,
+      RunControl control,
+      StopCause cause,
+      String reason) {
     // 检查阻塞等运行状态没有对应的调用终态；此时只结算运行与节点，不伪造调用状态。
     InvocationStatus status =
         switch (cause.status()) {
@@ -684,7 +689,54 @@ class WorkflowScheduler {
         reason,
         control.rounds(),
         control.tools(),
-        control.elapsed());
+        control.elapsed(),
+        systemStopHandoff(runId, task, agentIds, cause, reason));
+  }
+
+  /**
+   * 非成功停机时补一条真实的系统交接，保持玻璃盒「交接」视图对新运行同样完整。
+   *
+   * <p>只登记真实存在的事实：运行标识、已认领并正在执行的实例、该实例所在节点的角色、停止原因与安全说明。
+   * 没有在途实例、或停止原因在交接状态枚举里没有对应项（例如 BLOCKED）时保持为空，绝不编造交接。
+   */
+  private dev.workbench.domain.Handoff systemStopHandoff(
+      String runId, TaskDefinition task, Set<UUID> agentIds, StopCause cause, String reason) {
+    if (agentIds == null || agentIds.isEmpty()) return null;
+    dev.workbench.domain.HandoffStatus handoffStatus;
+    try {
+      handoffStatus = dev.workbench.domain.HandoffStatus.valueOf(cause.status().name());
+    } catch (IllegalArgumentException unavailable) {
+      return null;
+    }
+    String agentId = agentIds.iterator().next().toString();
+    // 发送方由「该实例实际所在的计划节点角色」决定，不能按提交顺序猜测。
+    var sender =
+        plans.find(runId).stream()
+            .filter(node -> agentId.equals(node.agentId() == null ? null : node.agentId().toString()))
+            .findFirst()
+            .map(
+                node ->
+                    switch (node.role()) {
+                      case ANALYST -> dev.workbench.domain.HandoffParty.ANALYSIS_AGENT;
+                      case CODER -> dev.workbench.domain.HandoffParty.CODING_AGENT;
+                      case REVIEWER -> dev.workbench.domain.HandoffParty.REVIEW_AGENT;
+                    })
+            .orElse(null);
+    if (sender == null) return null;
+    return new dev.workbench.domain.Handoff(
+        task.id().toString(),
+        runId,
+        agentId,
+        sender,
+        dev.workbench.domain.HandoffParty.COORDINATOR,
+        task.goal(),
+        List.of("该交接由系统在运行终止时登记，未完成或未知内容不能视为成功"),
+        handoffStatus,
+        reason,
+        runId,
+        evidence.toolEvidence(runId),
+        dev.workbench.domain.HandoffSource.SYSTEM,
+        null);
   }
 
   /**
@@ -779,11 +831,17 @@ class WorkflowScheduler {
       String runId,
       TaskDefinition task,
       WorkflowExecutionService.ClaimedNode attempt,
-      String text) {
+      String text,
+      List<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.MemoryMatchView>
+          memoryMatches) {
     var sources = new java.util.ArrayList<AgentInput.Source>();
     sources.add(new AgentInput.Source(AgentInput.Kind.TASK, task.id().toString(), null));
     sources.add(
         new AgentInput.Source(AgentInput.Kind.WORKFLOW_NODE, attempt.node().id().toString(), null));
+    // 记忆来源必须与文本段落来自同一批冻结匹配，装配视图才能还原「哪些项目背景进入了本次 Prompt」。
+    for (var match : memoryMatches)
+      sources.add(
+          new AgentInput.Source(AgentInput.Kind.MEMORY, match.memoryId(), match.version()));
     for (var dependency : attempt.dependencies()) {
       if (dependency.kind() == dev.workbench.framework.workflow.plan.PlanNodeKind.SYSTEM_CHECK) {
         sources.add(

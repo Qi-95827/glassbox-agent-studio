@@ -11,15 +11,18 @@ import dev.workbench.store.RunStateStore;
 import dev.workbench.store.StopCompletion;
 import dev.workbench.store.TaskRecordService;
 
-/** 运行执行入口：认领待运行、构建运行控制、选择动态计划或直接执行路径。 */
+/** 运行执行入口：认领待运行、构建运行控制并交给唯一的工作流调度器。 */
 final class RunExecutionEngine {
   private final RunStateStore runs;
   private final TaskRecordService tasks;
   private final dev.workbench.framework.control.RunControlStore controls;
   private final WorkflowScheduler workflows;
   private final RunCommandService commands;
-  private final DirectRunExecutor direct;
   private final Object stateLock;
+
+  /** 历史无计划运行的统一结算说明：遗留直跑轨已下线，这类运行不再执行。 */
+  static final String LEGACY_RUN_WITHOUT_PLAN_REASON =
+      "该运行创建于遗留直线执行轨道且没有工作流计划；遗留轨道已下线，本次未启动任何 Agent，请重新创建任务使用标准工作流引擎。";
 
   RunExecutionEngine(
       RunStateStore runs,
@@ -27,14 +30,12 @@ final class RunExecutionEngine {
       dev.workbench.framework.control.RunControlStore controls,
       WorkflowScheduler workflows,
       RunCommandService commands,
-      DirectRunExecutor direct,
       Object stateLock) {
     this.runs = runs;
     this.tasks = tasks;
     this.controls = controls;
     this.workflows = workflows;
     this.commands = commands;
-    this.direct = direct;
     this.stateLock = stateLock;
   }
 
@@ -53,19 +54,11 @@ final class RunExecutionEngine {
             commands.yielded(),
             prepared.task().roleBudgets(),
             prepared.task().toolBudgets());
-    if (prepared.workflow() != null) {
-      try {
-        workflows.execute(id, prepared.workflow(), prepared.task(), control, stateLock);
-      } finally {
-        commands.clearControl(id);
-      }
-      return;
+    try {
+      workflows.execute(id, prepared.workflow(), prepared.task(), control, stateLock);
+    } finally {
+      commands.clearControl(id);
     }
-    var state =
-        new DirectRunExecutor.ExecutionState(
-            id, prepared.run(), prepared.task(), control, stage, previousResult, recovery);
-    state.agentId = dev.workbench.domain.WorkbenchIds.newId();
-    direct.execute(state);
   }
 
   /**
@@ -158,7 +151,21 @@ final class RunExecutionEngine {
                 null));
         return null;
       }
-      if (workflow != null && workflow.approvedAt() == null) return null;
+      if (workflow == null) {
+        // 收口包 G-2：历史旧库里无工作流计划的 PENDING 记录不再直接执行，安全结算为失败并说明原因。
+        runs.finishStoppedRun(
+            new StopCompletion(
+                java.util.UUID.fromString(id),
+                null,
+                StopCause.UNCLASSIFIED_FAILURE,
+                LEGACY_RUN_WITHOUT_PLAN_REASON,
+                run.rounds(),
+                run.tools(),
+                run.elapsedMs(),
+                null));
+        return null;
+      }
+      if (workflow.approvedAt() == null) return null;
       runs.update(id, RunStatus.RUNNING, null, null, run.rounds(), run.tools(), run.elapsedMs());
     }
     return new Prepared(run, task, workflow);

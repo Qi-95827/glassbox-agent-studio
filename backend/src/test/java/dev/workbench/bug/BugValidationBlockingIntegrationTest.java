@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
-/** 兼容 Bug 流程缺少 tests 目录时必须是执行阻塞，而不是待用户审查。 */
+/** 统一工作流后，模拟 Bug 缺少验证条件时必须是执行阻塞，而不是待用户审查。 */
 @SpringBootTest(
     classes = WorkbenchApplication.class,
     properties = {
@@ -30,10 +30,11 @@ class BugValidationBlockingIntegrationTest {
   @Test
   void missingValidationConditionsWritesValidationStopCauseAndExecutionBlockedCategory() {
     var workspace = workspaces.createIdeaWorkspace(List.of("calculator.py"));
+    // 收口包 G-2：模拟 Bug 必须走 Bug 入口并显式授权写入，才会物化为标准 bug-fix 工作流。
     String id =
         runs.create(
             new CreateTaskRequest(
-                "兼容 Bug 流程验证条件不足",
+                "模拟 Bug 流程验证条件不足",
                 "normal",
                 4,
                 2,
@@ -41,11 +42,18 @@ class BugValidationBlockingIntegrationTest {
                 "mock",
                 workspace.id(),
                 "calculator.py",
+                true,
+                "MOCK-PY-001",
                 false,
-                "MOCK-PY-001"));
+                null,
+                null,
+                null,
+                null,
+                null,
+                dev.workbench.domain.TaskEntryKind.BUG));
     Map<String, Object> run = awaitTerminal(id);
     assertEquals("BLOCKED", run.get("STATUS"), String.valueOf(run.get("REASON")));
-    assertEquals("VALIDATION_MISSING", run.get("STOP_CAUSE"));
+    assertEquals("CHECK_FAILED", run.get("STOP_CAUSE"));
     assertEquals("EXECUTION_BLOCKED", run.get("BLOCK_CATEGORY"));
   }
 

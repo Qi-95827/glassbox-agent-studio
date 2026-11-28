@@ -26,6 +26,12 @@ class BuiltInWorkflows {
       new AgentDefinitionRef("workspace-edit", 1);
   private static final AgentDefinitionRef WORKSPACE_REVIEW =
       new AgentDefinitionRef("workspace-change-review", 1);
+  /** 内置角色定义：与历史纯文本计划（ANALYST → REVIEWER）使用同一批受信定义，保证语义与产物一致。 */
+  private static final AgentDefinitionRef BUILTIN_ANALYST =
+      new AgentDefinitionRef("analyst", AgentRole.ANALYST.version());
+
+  private static final AgentDefinitionRef BUILTIN_REVIEWER =
+      new AgentDefinitionRef("reviewer", AgentRole.REVIEWER.version());
 
   @Bean
   AgentDefinitionProvider textAnalysis() {
@@ -49,6 +55,24 @@ class BuiltInWorkflows {
             AgentRole.ANALYST,
             List.of(),
             List.of());
+  }
+
+  /**
+   * 通用纯文本任务的「分析 → 独立审查」标准流程。
+   *
+   * <p>收口包 G-2：历史直跑轨下线后，未显式指定模板的纯文本任务由本模板承接。节点角色、受信 Agent 定义与依赖关系
+   * 与原「分析 + 审查」语义一一对齐（内置 analyst → 内置 reviewer），只是改由唯一的工作流引擎执行，
+   * 因此同样具备玻璃盒节点视图、断点、反思与并发调度能力。
+   */
+  @Bean
+  WorkflowTemplate generalAnalysisReview() {
+    return new WorkflowTemplate(
+        "general-analysis-review",
+        1,
+        List.of(
+            new WorkflowTemplate.Step("ANALYST", "按目标分析任务", "analysis", BUILTIN_ANALYST, List.of()),
+            new WorkflowTemplate.Step(
+                "REVIEWER", "独立审查分析结论", "review", BUILTIN_REVIEWER, List.of("ANALYST"))));
   }
 
   @Bean

@@ -64,13 +64,14 @@ class RunServiceQueueTest {
   }
 
   @Test
-  void rejectedRecoveryCanBeRequestedAgain() {
+  void recoveryOfLegacyRunWithoutPlanIsRejectedAndCreatesNothing() {
     var runs = mock(RunStateStore.class);
     var tasks = mock(TaskRecordService.class);
     var creation = mock(RunCreationStore.class);
     var evidence = mock(RunEvidenceRecordService.class);
     var creations = mock(TaskCreationService.class);
     var agent = mock(AgentScopeExecutor.class);
+    var workflows = mock(WorkflowScheduler.class);
     var service =
         new RunService(
             runs,
@@ -90,15 +91,14 @@ class RunServiceQueueTest {
             mock(dev.workbench.workspace.RunHandoverService.class),
             mock(dev.workbench.planning.EntryPolicyService.class),
             mock(AgentContextAssembler.class),
-            mock(WorkflowScheduler.class),
+            workflows,
             java.util.concurrent.Executors.newSingleThreadExecutor());
     var runId = java.util.UUID.randomUUID();
-    var taskId = java.util.UUID.randomUUID();
     var checkpointId = java.util.UUID.randomUUID();
     var original =
         new dev.workbench.domain.RunSnapshot(
             runId,
-            taskId,
+            java.util.UUID.randomUUID(),
             null,
             RunStatus.INTERRUPTED,
             0,
@@ -112,33 +112,68 @@ class RunServiceQueueTest {
             0,
             null,
             null);
-    var task =
-        new dev.workbench.domain.TaskDefinition(
-            taskId,
-            "任务",
-            dev.workbench.domain.Scenario.NORMAL,
-            dev.workbench.domain.ModelMode.MOCK,
-            null,
-            null,
-            false,
-            null,
-            false,
-            java.util.List.of(),
-            java.util.List.of(),
-            dev.workbench.domain.TaskEntryKind.GENERAL);
-    var checkpoint =
-        new dev.workbench.domain.CheckpointSnapshot(
-            checkpointId, runId, dev.workbench.domain.CheckpointStage.BEFORE_TOOL, 0, 0, 0, null);
     when(runs.runSnapshot(runId.toString())).thenReturn(original);
-    when(tasks.taskDefinition(taskId.toString())).thenReturn(task);
-    when(evidence.checkedCheckpoint(checkpointId.toString())).thenReturn(checkpoint);
+    // 收口包 G-2：遗留直跑轨已下线，无工作流计划的历史中断记录不再支持恢复。
+    when(workflows.plan(runId.toString())).thenReturn(null);
     service.shutdown();
-    String first = service.recover(runId.toString(), checkpointId.toString());
-    String second = service.recover(runId.toString(), checkpointId.toString());
-    assertNotEquals(first, second);
-    verify(creation, times(2)).createRecoveryRun(any(), eq(original), eq(checkpoint));
-    verify(creation).rejectRecoveryBeforeDispatch(first);
-    verify(creation).rejectRecoveryBeforeDispatch(second);
+    var error =
+        assertThrows(
+            IllegalStateException.class,
+            () -> service.recover(runId.toString(), checkpointId.toString()));
+    assertTrue(error.getMessage().contains("遗留"), error.getMessage());
+    assertTrue(error.getMessage().contains("重新创建任务"), error.getMessage());
+    verify(creation, never()).createRecoveryRun(any(), any(), any());
     verifyNoInteractions(agent);
+  }
+
+  @Test
+  void recoveryRejectsRunThatIsNotInterrupted() {
+    var runs = mock(RunStateStore.class);
+    var service =
+        new RunService(
+            runs,
+            mock(TaskRecordService.class),
+            mock(RunCreationStore.class),
+            mock(AgentAssemblyRecordService.class),
+            mock(RunEvidenceRecordService.class),
+            mock(RunCheckpointStore.class),
+            mock(RunCountStore.class),
+            mock(dev.workbench.framework.control.RunControlStore.class),
+            mock(TaskCreationService.class),
+            mock(AgentScopeExecutor.class),
+            new ObjectMapper(),
+            mock(WorkspaceService.class),
+            mock(BugService.class),
+            mock(dev.workbench.bug.BugIntakeService.class),
+            mock(dev.workbench.workspace.RunHandoverService.class),
+            mock(dev.workbench.planning.EntryPolicyService.class),
+            mock(AgentContextAssembler.class),
+            mock(WorkflowScheduler.class),
+            java.util.concurrent.Executors.newSingleThreadExecutor());
+    var runId = java.util.UUID.randomUUID();
+    when(runs.runSnapshot(runId.toString()))
+        .thenReturn(
+            new dev.workbench.domain.RunSnapshot(
+                runId,
+                java.util.UUID.randomUUID(),
+                null,
+                RunStatus.COMPLETED,
+                0,
+                0,
+                4,
+                2,
+                2,
+                null,
+                null,
+                30,
+                0,
+                null,
+                null));
+    service.shutdown();
+    var error =
+        assertThrows(
+            IllegalStateException.class,
+            () -> service.recover(runId.toString(), java.util.UUID.randomUUID().toString()));
+    assertTrue(error.getMessage().contains("只有中断的运行可以恢复"), error.getMessage());
   }
 }

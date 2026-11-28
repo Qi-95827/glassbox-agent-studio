@@ -69,7 +69,9 @@ class MemorySingleResolutionIntegrationTest {
   @Autowired MemoryService memories;
   @Autowired MemoryRecordRepository records;
   @Autowired MemoryAssemblyAdapter assembly;
-  @Autowired AgentScopeExecutor executor;
+  @org.springframework.test.context.bean.override.mockito.MockitoSpyBean AgentScopeExecutor agentExecutor;
+  @Autowired RunService service;
+  @Autowired dev.workbench.planning.PlanService plans;
   @Autowired AgentContextAssembler contexts;
   @Autowired RunCreationStore creation;
   @Autowired RunStateStore runs;
@@ -190,7 +192,7 @@ class MemorySingleResolutionIntegrationTest {
                 "zh-CN")
             .withResolvedMemories(loaded.matches());
 
-    executor.execute(request);
+    agentExecutor.execute(request);
 
     var components = captured.get();
     assertNotNull(components, "执行器必须发出真实装配快照");
@@ -199,8 +201,15 @@ class MemorySingleResolutionIntegrationTest {
     assertEquals(1, components.memoryMatches().getFirst().version());
   }
 
+  /**
+   * 端到端单次记忆解析：{@code RunService} 创建「无显式模板」任务 → 标准 {@code workspace-analysis} 工作流 →
+   * AgentScopeExecutor，全程不允许任何执行器按 runId 二次查库。
+   *
+   * <p>并发删除窗口精准插在「调度器已组装 Prompt、执行器尚未落装配快照」之间：删除之后按 runId 查库必然为空，
+   * 因此只要落库快照仍保留同一批记忆证据，就证明整条链路只解析过一次记忆。
+   */
   @Test
-  void directRunAnalysisPathUsesSingleMemoryResolutionAndPersistsSnapshotAfterConcurrentDelete() {
+  void workflowRunResolvesMemoryOnceAndKeepsSnapshotAfterConcurrentDelete() throws Exception {
     String workspaceId = workspaces.createIdeaWorkspace(List.of("sort.js")).id();
     String memoryId = UUID.randomUUID().toString();
     records.save(
@@ -208,135 +217,77 @@ class MemorySingleResolutionIntegrationTest {
             memoryId,
             workspaceId,
             MemoryCategory.PROJECT_CONVENTION,
-            "直跑冻结时的项目约定正文：排序页面保持原生脚本",
+            "工作流冻结时的项目约定正文：排序页面保持原生脚本",
             MemorySource.USER_CONFIRMED,
             MemoryStatus.ACTIVE,
             1,
             "2026-01-01T00:00:00Z",
             "2026-01-02T00:00:00Z"));
 
-    UUID taskId = UUID.randomUUID();
-    UUID runId = UUID.randomUUID();
-    TaskDefinition task =
-        new TaskDefinition(
-            taskId,
-            "按项目约定分析排序页面实现",
-            Scenario.NORMAL,
-            ModelMode.MOCK,
-            workspaceId,
-            "sort.js",
-            false,
-            null,
-            true,
-            List.of("排序页面保持原生脚本"),
-            List.of("给出分析结论"),
-            TaskEntryKind.CODE,
-            List.of("sort.js"),
-            Map.of(),
-            Map.of(),
-            null,
-            "zh-CN");
-    creation.createTaskAndFirstRun(
-        task,
-        runId,
-        new RunLimits(12, 12, 6, null, 3, 120, 6, 6),
-        "直跑单次记忆解析回归任务");
-    runs.update(runId.toString(), RunStatus.RUNNING, null, null, 0, 0, 0L);
-
-    var capturedRequests = new ArrayList<AgentExecutionRequest>();
+    var capturedRequests = new java.util.concurrent.CopyOnWriteArrayList<AgentExecutionRequest>();
     var deletedBeforeAnalystExecutor = new AtomicReference<>(Boolean.FALSE);
-    // 在真实 DirectRunExecutor 组装完 Prompt 后、进入真实 AgentScopeExecutor 前精准插入并发删除窗口。
-    AgentExecutor raceInjectingExecutor =
-        request -> {
-          capturedRequests.add(request);
-          if (request.role() == AgentRole.ANALYST) {
-            memories.delete(workspaceId, memoryId, 1);
-            assertTrue(
-                assembly.matchesForRun(runId.toString()).isEmpty(),
-                "删除后再按 runId 查库必然为空——这正说明直跑执行器不能二次查库");
-            deletedBeforeAnalystExecutor.set(Boolean.TRUE);
-          }
-          return executor.execute(request);
-        };
+    var emptyAssemblyRightAfterDelete = new AtomicReference<>(Boolean.FALSE);
+    // 在调度器组装完 Prompt 之后、进入真实 AgentScopeExecutor 之前精准插入并发删除窗口。
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              AgentExecutionRequest request = invocation.getArgument(0);
+              capturedRequests.add(request);
+              if (request.role() == AgentRole.ANALYST
+                  && deletedBeforeAnalystExecutor.compareAndSet(false, true)) {
+                memories.delete(workspaceId, memoryId, 1);
+                emptyAssemblyRightAfterDelete.set(
+                    assembly.matchesForRun(request.context().runId()).isEmpty());
+              }
+              return invocation.callRealMethod();
+            })
+        .when(agentExecutor)
+        .execute(org.mockito.ArgumentMatchers.any(AgentExecutionRequest.class));
 
-    var handoffs = new RunHandoffFactory(evidence, json);
-    var commands = mock(RunCommandService.class);
-    var stateLock = new Object();
-    var review =
-        new RunReviewCoordinator(
-            runs,
-            assemblyRecords,
-            evidence,
-            raceInjectingExecutor,
-            commands,
-            handoffs,
-            null,
-            null,
-            stateLock);
-    var direct =
-        new DirectRunExecutor(
-            creation,
-            runs,
-            evidence,
-            checkpointStore,
-            assemblyRecords,
-            raceInjectingExecutor,
-            contexts,
-            mock(BugService.class),
-            mock(BugIntakeService.class),
-            mock(RunCheckpointSupport.class),
-            handoffs,
-            mock(RunFailureHandler.class),
-            commands,
-            review,
-            null,
-            null,
-            null,
-            null);
+    String runId =
+        service.create(
+            dev.workbench.orchestration.CreateTaskRequest.builder()
+                .goal("按项目约定分析排序页面实现")
+                .scenario("normal")
+                .limits(12, 12, 120)
+                .modelMode("mock")
+                .workspace(workspaceId, null)
+                .fileScopes(List.of("sort.js"))
+                .memoryEnabled(true)
+                .constraints(List.of("排序页面保持原生脚本"))
+                .acceptanceCriteria(List.of("给出分析结论"))
+                .locale("zh-CN")
+                .build());
 
-    var snapshot = runs.runSnapshot(runId.toString());
-    var control =
-        new RunControl(
-            runId.toString(),
-            snapshot,
-            controls,
-            new Object(),
-            Set.of(),
-            Set.of(),
-            ConcurrentHashMap.newKeySet(),
-            Map.of(),
-            Map.of());
-    var state =
-        new DirectRunExecutor.ExecutionState(
-            runId.toString(), snapshot, task, control, CheckpointStage.BEFORE_TOOL, null, false);
-    state.agentId = UUID.randomUUID().toString();
-    direct.execute(state);
-
+    var finished = awaitTerminal(runId);
     assertEquals(Boolean.TRUE, deletedBeforeAnalystExecutor.get(), "必须实际触发分析阶段删库窗口");
+    assertEquals(
+        Boolean.TRUE,
+        emptyAssemblyRightAfterDelete.get(),
+        "删除后按 runId 查库必然为空——这正说明执行器不能二次查库");
+
+    // 无显式模板的任务必须被物化为标准内置工作流，绝不再落回任何遗留直跑轨。
+    var plan = plans.workflowPlan(runId);
+    assertNotNull(plan, "无模板新建任务必须物化标准 WorkflowPlan");
+    assertEquals("workspace-analysis", plan.templateId());
+    assertTrue(
+        finished.status() == RunStatus.COMPLETED,
+        "标准工作流应正常结束，实际状态 " + finished.status());
+
     var analystReq =
         capturedRequests.stream()
             .filter(r -> r.role() == AgentRole.ANALYST)
             .findFirst()
             .orElseThrow();
     assertTrue(
-        analystReq.context().text().contains("直跑冻结时的项目约定正文"),
-        "直跑分析 Prompt 必须包含召回的记忆正文");
-    assertNotNull(analystReq.resolvedMemories(), "直跑分析请求必须显式携带 resolvedMemories");
+        analystReq.context().text().contains("工作流冻结时的项目约定正文"),
+        "分析 Prompt 必须包含召回的记忆正文");
+    assertNotNull(analystReq.resolvedMemories(), "分析请求必须显式携带 resolvedMemories");
     assertEquals(1, analystReq.resolvedMemories().size());
     assertEquals(memoryId, analystReq.resolvedMemories().getFirst().memoryId());
 
-    // 审查阶段未注入记忆，也必须显式传入空列表而非 null，绝不回退按 runId 查库。
-    var reviewerReq =
-        capturedRequests.stream()
-            .filter(r -> r.role() == AgentRole.REVIEWER)
-            .findFirst()
-            .orElseThrow();
-    assertNotNull(reviewerReq.resolvedMemories(), "直跑审查请求不得为 null 回退查库");
-    assertTrue(reviewerReq.resolvedMemories().isEmpty());
-
     // 真正从 H2 持久化装配表回读：即便删库发生在执行器之前，落库快照仍必须保留同批记忆 ID 与版本。
-    var persisted = assemblyRecords.agentAssemblies(runId.toString());
-    assertFalse(persisted.isEmpty(), "直跑必须落库真实装配快照");
+    var persisted = assemblyRecords.agentAssemblies(runId);
+    assertFalse(persisted.isEmpty(), "标准工作流必须落库真实装配快照");
     var analystSnapshot =
         persisted.stream()
             .filter(item -> item.snapshot().components().authorization().profile() == AgentRole.ANALYST)
@@ -350,5 +301,16 @@ class MemorySingleResolutionIntegrationTest {
         memoryId, analystSnapshot.snapshot().components().memoryMatches().getFirst().memoryId());
     assertEquals(
         1, analystSnapshot.snapshot().components().memoryMatches().getFirst().version());
+  }
+
+  /** 轮询运行到终态，避免测试在异步派发尚未结束时开始断言。 */
+  private dev.workbench.domain.RunSnapshot awaitTerminal(String runId) throws Exception {
+    for (int i = 0; i < 300; i++) {
+      var snapshot = runs.runSnapshot(runId);
+      if (snapshot.status() != RunStatus.PENDING && snapshot.status() != RunStatus.RUNNING)
+        return snapshot;
+      Thread.sleep(50);
+    }
+    return runs.runSnapshot(runId);
   }
 }

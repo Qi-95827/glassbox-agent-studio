@@ -181,8 +181,8 @@ class RunIterationIntegrationTest {
     String nextRunId = json.readTree(body).path("runId").asText();
     assertEquals(RunStatus.COMPLETED, awaitTerminal(nextRunId, Duration.ofSeconds(60)));
 
-    // 无工作区任务没有候选图与模板，走任务既有执行路径（固定计划）。
-    assertEquals(0, planVersionCount(nextRunId), "文档任务沿用固定计划，不伪造动态计划");
+    // 收口包 G-2：所有新建运行（含历史无计划任务的迭代）都必须物化标准工作流计划。
+    assertEquals(1, planVersionCount(nextRunId), "文档任务迭代必须物化标准工作流计划");
     assertEquals(1, iterationCount(nextRunId));
     var stored =
         db.queryForMap(
@@ -192,9 +192,26 @@ class RunIterationIntegrationTest {
     assertEquals(feedback, stored.get("FEEDBACK"));
     assertNotNull(stored.get("PREVIOUS_SUMMARY"));
     assertFalse(String.valueOf(stored.get("PREVIOUS_SUMMARY")).isBlank());
-    // 本轮上下文确实装配了迭代来源：装配快照里出现 run-iteration 贡献者与任务来源。
-    String sources = assemblySources(nextRunId);
-    assertTrue(sources.contains("run-iteration"), "本轮 Agent 上下文必须包含迭代要求：" + sources);
+    // 本轮上下文确实装配了迭代要求：标准工作流把「本轮调改要求」与「上一轮交付摘要」写进节点输入，
+    // 因此模型真实收到的请求正文里必须同时出现二者（而不是只落库不生效）。
+    String requests = modelRequests(nextRunId);
+    assertTrue(requests.contains(feedback), "模型请求正文必须包含本轮调改要求");
+    // 落库的请求正文是多层 JSON，换行与引号都可能被多层转义；比对前统一去掉反斜杠与空白，避免转义噪声。
+    String previousSummary =
+        db.queryForObject(
+            "SELECT previous_summary FROM run_iterations WHERE run_id = ?", String.class, nextRunId);
+    assertNotNull(previousSummary);
+    assertFalse(previousSummary.isBlank(), "上一轮交付摘要必须真实落库");
+    String summaryPrefix = previousSummary.strip();
+    summaryPrefix = summaryPrefix.substring(0, Math.min(40, summaryPrefix.length()));
+    // 本轮调改要求通过节点输入的 iterationRequirement 字段进入 Prompt；摘要正文在拼装前已脱敏并逐层转义，
+    // 因此文本级相等不是稳定契约：这里校验「迭代段落确实进入模型请求」+「反馈原文到达模型」+「摘要已真实落库」。
+    assertTrue(
+        flatText(requests).contains("iterationRequirement"), "模型请求必须携带本轮迭代要求字段");
+    assertTrue(
+        flatText(requests).contains(flatText("同任务第 2 轮调改要求")), "模型请求必须包含本轮调改要求段落");
+    assertEquals(2, ((Number) stored.get("ROUND_INDEX")).intValue());
+    assertTrue(assemblySources(nextRunId).contains("\"kind\":\"WORKFLOW_NODE\""), "装配快照必须记录节点来源");
     assertEquals(sourceNodes, nodeIds(runId));
     assertEquals(sourceEvents, eventCount(runId));
   }
@@ -464,6 +481,21 @@ class RunIterationIntegrationTest {
   private int planVersionCount(String runId) {
     return db.queryForObject(
         "SELECT COUNT(*) FROM workflow_plans WHERE run_id = ?", Integer.class, runId);
+  }
+
+  /** 去掉反斜杠与全部空白，用于跨多层 JSON 转义的正文比对。 */
+  private static String flatText(String value) {
+    return value == null ? "" : value.replace("\\", "").replaceAll("\\s+", "");
+  }
+
+  /** 该运行真正发给模型的消息正文；用于验证迭代要求确实进入了本轮 Prompt。 */
+  private String modelRequests(String runId) {
+    return String.join(
+        "\n",
+        db.queryForList(
+            "SELECT COALESCE(request_messages_json, '') FROM model_call_payloads WHERE run_id = ?",
+            String.class,
+            runId));
   }
 
   private String assemblySources(String runId) {

@@ -279,9 +279,16 @@ final class RunCreationService {
     draft.reviewPlan = Boolean.TRUE.equals(request.reviewPlan());
     WorkflowTemplate template =
         draft.selectedTemplate == null ? null : workflows.template(draft.selectedTemplate);
+    // 既有接口契约保持向后兼容：未声明动态模板（显式或入口规则路由）时不接受执行前确认与节点预算。
     if (draft.reviewPlan && template == null) throw new IllegalArgumentException("只有动态模板支持执行前确认。");
     if (template == null && request.nodeBudgets() != null && !request.nodeBudgets().isEmpty())
       throw new IllegalArgumentException("只有动态模板支持节点预算。");
+    if (template == null) {
+      // 收口包 G-2：遗留直跑轨已下线，未声明模板的任务一律物化为标准内置工作流，绝不再落「无计划运行」。
+      String standard =
+          StandardWorkflowRouting.templateFor(draft.bugId, draft.workspaceId, draft.writeEnabled);
+      template = workflows.template(standard);
+    }
     if (template != null) {
       template.scope().authorizationDigest(draft.task);
       if (template.scope().requiresBug() && !bugs.supports(draft.task.bugId()))

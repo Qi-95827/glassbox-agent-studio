@@ -1,18 +1,13 @@
 package dev.workbench.orchestration;
 
-import dev.workbench.domain.CheckpointSnapshot;
 import dev.workbench.domain.CheckpointStage;
 import dev.workbench.domain.EventType;
 import dev.workbench.domain.RunSnapshot;
 import dev.workbench.domain.RunStatus;
 import dev.workbench.domain.StopCause;
-import dev.workbench.domain.TaskDefinition;
-import dev.workbench.store.RunCreationStore;
 import dev.workbench.store.RunEvidenceRecordService;
 import dev.workbench.store.RunStateStore;
 import dev.workbench.store.StopCompletion;
-import dev.workbench.store.TaskRecordService;
-import dev.workbench.task.CostService;
 import dev.workbench.workspace.RunHandoverService;
 import java.util.Map;
 import java.util.Set;
@@ -22,13 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
 final class RunCommandService {
   private final Object stateLock;
   private final RunStateStore runs;
-  private final RunCreationStore creation;
-  private final TaskRecordService tasks;
   private final RunEvidenceRecordService evidence;
   private final RunHandoverService handovers;
   private final WorkflowScheduler workflows;
-  private final CostService costs;
-  private final RunCheckpointSupport checkpoints;
   private final RunDispatchService dispatcher;
   private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
   private final Set<String> paused = ConcurrentHashMap.newKeySet();
@@ -38,23 +29,15 @@ final class RunCommandService {
   RunCommandService(
       Object stateLock,
       RunStateStore runs,
-      RunCreationStore creation,
-      TaskRecordService tasks,
       RunEvidenceRecordService evidence,
       RunHandoverService handovers,
       WorkflowScheduler workflows,
-      CostService costs,
-      RunCheckpointSupport checkpoints,
       RunDispatchService dispatcher) {
     this.stateLock = stateLock;
     this.runs = runs;
-    this.creation = creation;
-    this.tasks = tasks;
     this.evidence = evidence;
     this.handovers = handovers;
     this.workflows = workflows;
-    this.costs = costs;
-    this.checkpoints = checkpoints;
     this.dispatcher = dispatcher;
   }
 
@@ -150,39 +133,24 @@ final class RunCommandService {
     if (resumeDispatch && dispatcher != null) dispatcher.dispatchResume(id);
   }
 
-  /** 从有效快照创建新运行，不覆盖历史。此处的同步只覆盖本进程； 外部副作用和分布式并发恢复尚未实现。 */
+  /**
+   * 从已保存的工作流检查点创建新运行，不覆盖历史。
+   *
+   * <p>收口包 G-2：遗留直跑轨下线后，无 {@code WorkflowPlan} 的历史中断记录不再支持恢复，必须重新创建任务；
+   * 这里的同步只覆盖本进程，外部副作用和分布式并发恢复尚未实现。
+   */
   String recover(String oldId, String checkpointId) {
     synchronized (stateLock) {
       RunSnapshot original = runs.runSnapshot(oldId);
       if (original.status() != RunStatus.INTERRUPTED)
         throw new IllegalStateException("只有中断的运行可以恢复。");
-      if (workflows.plan(oldId) != null) {
-        String nextId = dev.workbench.domain.WorkbenchIds.newId();
-        workflows.recover(
-            oldId, java.util.UUID.fromString(checkpointId), java.util.UUID.fromString(nextId));
-        dispatcher.dispatchRecovery(nextId, CheckpointStage.BEFORE_TOOL, null);
-        return nextId;
-      }
-      TaskDefinition task = tasks.taskDefinition(original.taskId().toString());
-      CheckpointSnapshot checkpoint = evidence.checkedCheckpoint(checkpointId);
-      if (!checkpoint.runId().equals(original.id()))
-        throw new IllegalArgumentException("检查点不属于该运行。");
-      if (task.bugId() != null || task.writeEnabled())
-        throw new IllegalStateException("写入或 Bug 任务尚不支持安全恢复，请先人工检查外部状态。");
-      if (task.workspaceId() != null) {
-        if (task.memoryEnabled()
-            || !Integer.valueOf(6).equals(checkpoint.version())
-            || checkpoint.stage() != CheckpointStage.BEFORE_REVIEW)
-          throw new IllegalStateException("当前工作区任务或检查点不支持安全恢复。");
-        checkpoints.requireUnchangedWorkspace(
-            task, evidence.workspaceReviewPayload(checkpoint.toolResult()));
-      }
-      if (runs.hasRecovery(oldId)) throw new IllegalStateException("此运行已经发起恢复。");
-
+      if (workflows.plan(oldId) == null)
+        throw new IllegalStateException(
+            "该运行创建于遗留直线执行轨道且没有工作流计划；遗留直跑恢复已下线，请重新创建任务使用标准工作流引擎。");
       String nextId = dev.workbench.domain.WorkbenchIds.newId();
-      creation.createRecoveryRun(java.util.UUID.fromString(nextId), original, checkpoint);
-      if (costs != null) costs.inheritLimit(oldId, nextId);
-      dispatcher.dispatchRecovery(nextId, checkpoint.stage(), checkpoint.toolResult());
+      workflows.recover(
+          oldId, java.util.UUID.fromString(checkpointId), java.util.UUID.fromString(nextId));
+      dispatcher.dispatchRecovery(nextId, CheckpointStage.BEFORE_TOOL, null);
       return nextId;
     }
   }

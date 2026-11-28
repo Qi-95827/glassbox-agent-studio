@@ -58,6 +58,7 @@ class RunIterationContextTest {
   private final RunIterationRepository iterationRows = mock(RunIterationRepository.class);
   private final CostService costs = mock(CostService.class);
   private final TransactionTemplate tx = mock(TransactionTemplate.class);
+  private final WorkflowScheduler workflows = mock(WorkflowScheduler.class);
 
   private RunIterationService service;
   private final String runId = UUID.randomUUID().toString();
@@ -79,10 +80,32 @@ class RunIterationContextTest {
             evidence,
             new RunIterationRecordService(iterationRows),
             costs,
-            tx);
+            tx,
+            workflows);
     when(runRows.findRunById(runId)).thenReturn(Optional.of(run("COMPLETED")));
     when(tasks.taskDefinition(taskId)).thenReturn(task(null));
-   when(plans.find(runId)).thenReturn(List.of());
+    when(plans.find(runId)).thenReturn(List.of());
+    // 收口包 G-2：历史无计划运行迭代时按标准内置模板物化新一轮计划，这里提供真实模板对象。
+    when(workflows.template(anyString()))
+        .thenReturn(
+            new dev.workbench.framework.workflow.plan.WorkflowTemplate(
+                "general-analysis-review",
+                1,
+                List.of(
+                    new dev.workbench.framework.workflow.plan.WorkflowTemplate.Step(
+                        "ANALYST",
+                        "按目标分析任务",
+                        "analysis",
+                        new dev.workbench.framework.agent.definition.AgentDefinitionRef(
+                            "analyst", 1),
+                        List.of()),
+                    new dev.workbench.framework.workflow.plan.WorkflowTemplate.Step(
+                        "REVIEWER",
+                        "独立审查分析结论",
+                        "review",
+                        new dev.workbench.framework.agent.definition.AgentDefinitionRef(
+                            "reviewer", 1),
+                        List.of("ANALYST")))));
   }
 
   @Test
@@ -134,7 +157,8 @@ class RunIterationContextTest {
             evidence,
             new RunIterationRecordService(iterationRows),
             costs,
-            realTx);
+            realTx,
+            workflows);
 
     var result =
         realService.iterate(
@@ -243,7 +267,8 @@ class RunIterationContextTest {
             evidence,
             new RunIterationRecordService(iterationRows),
             costs,
-            realTx);
+            realTx,
+            workflows);
     var error =
         assertThrows(
             IllegalStateException.class,

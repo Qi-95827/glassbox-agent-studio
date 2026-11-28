@@ -26,13 +26,6 @@ import dev.workbench.planning.EntryRouteService;
 @Service
 public class RunService implements dev.workbench.planning.CandidateRunDispatcher {
   private final RunStateStore runs;
-  private final TaskRecordService tasks;
-  private final RunCreationStore creation;
-  private final AgentAssemblyRecordService agents;
-  private final RunEvidenceRecordService evidence;
-  private final RunCheckpointStore checkpointStore;
-  private final RunCountStore counts;
-  private final dev.workbench.framework.control.RunControlStore controls;
   private final WorkflowScheduler workflows;
   private final ExecutorService executor;
   private final Object stateLock = new Object();
@@ -46,6 +39,12 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
   /** 测试注入点：在派发前同步观察数据库提交结果。 */
   volatile Runnable beforeDispatch = () -> {};
 
+  /**
+   * 生产装配。
+   *
+   * <p>收口包 G-2：遗留 {@code DirectRunExecutor}/{@code RunReviewCoordinator} 已下线，这里不再持有任何直跑专属协作对象；
+   * 参数列表保持原样以兼容既有装配点与兼容构造器（部分参数仅由下游协作者消费）。
+   */
   @org.springframework.beans.factory.annotation.Autowired
   public RunService(
       RunStateStore runs,
@@ -75,65 +74,13 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
       dev.workbench.tool.ToolApprovalService approvals,
       org.springframework.context.ApplicationEventPublisher publisher) {
     this.runs = runs;
-    this.tasks = tasks;
-    this.creation = creation;
-    this.agents = agents;
-    this.evidence = evidence;
-    this.checkpointStore = checkpointStore;
-    this.counts = counts;
-    this.controls = controls;
     this.workflows = workflows;
     this.executor = executor;
     RunDispatchService dispatch = new RunDispatchService(runs, creation, executor, this);
-    RunCheckpointSupport checkpoints =
-        new RunCheckpointSupport(evidence, checkpointStore, workspaces);
-    RunHandoffFactory handoffs = new RunHandoffFactory(evidence, json);
-    RunFailureHandler failures = new RunFailureHandler(runs, evidence, handoffs);
     this.commands =
-        new RunCommandService(
-            stateLock,
-            runs,
-            creation,
-            tasks,
-            evidence,
-            handovers,
-            workflows,
-            costs,
-            checkpoints,
-            dispatch);
-    RunReviewCoordinator review =
-        new RunReviewCoordinator(
-            runs,
-            agents,
-            evidence,
-            agent,
-            commands,
-            handoffs,
-            workspaceAuthorization,
-            costs,
-            stateLock);
-    DirectRunExecutor direct =
-        new DirectRunExecutor(
-            creation,
-            runs,
-            evidence,
-            checkpointStore,
-            agents,
-            agent,
-            contexts,
-            bugs,
-            intakes,
-            checkpoints,
-            handoffs,
-            failures,
-            commands,
-            review,
-            workspaceAuthorization,
-            costs,
-            approvals,
-            publisher);
+        new RunCommandService(stateLock, runs, evidence, handovers, workflows, dispatch);
     RunExecutionEngine engine =
-        new RunExecutionEngine(runs, tasks, controls, workflows, commands, direct, stateLock);
+        new RunExecutionEngine(runs, tasks, controls, workflows, commands, stateLock);
     dispatch.setEngine(engine);
     this.dispatcher = dispatch;
     this.creations =

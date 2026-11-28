@@ -79,6 +79,7 @@ public class RunIterationService {
   private final RunIterationRecordService iterations;
   private final CostService costs;
   private final TransactionTemplate tx;
+  private final WorkflowScheduler workflows;
 
   public RunIterationService(
       TaskRecordService tasks,
@@ -93,7 +94,8 @@ public class RunIterationService {
       RunEvidenceRecordService evidence,
       RunIterationRecordService iterations,
       CostService costs,
-      TransactionTemplate tx) {
+      TransactionTemplate tx,
+      WorkflowScheduler workflows) {
     this.tasks = tasks;
     this.runRows = runRows;
     this.taskRows = taskRows;
@@ -107,6 +109,7 @@ public class RunIterationService {
     this.iterations = iterations;
     this.costs = costs;
     this.tx = tx;
+    this.workflows = workflows;
   }
 
   public Iterated iterate(String sourceRunId, Request request) {
@@ -224,8 +227,14 @@ public class RunIterationService {
           runId, taskId, sourceRunId, choice.template(), snapshot);
       return;
     }
-    runCreation.createIterationRunFromLegacyPlan(
-        runId, taskId, sourceRunId, snapshot, task.writeEnabled());
+    // 收口包 G-2：历史无计划运行不再回退直跑轨，改用标准内置模板物化新一轮计划。
+    WorkflowTemplate standard =
+        workflows.template(
+            StandardWorkflowRouting.templateFor(
+                task.bugId(), task.workspaceId(), task.writeEnabled()));
+    if (standard == null)
+      throw new IllegalStateException("源运行既没有动态计划也没有可用的标准工作流模板，无法开启下一轮调改。");
+    runCreation.createIterationRunFromTemplate(runId, taskId, sourceRunId, standard, snapshot);
   }
 
   /** 工作区授权按当前规则复验；整仓范围走目录复验，与分叉共用同一套判定。 */
