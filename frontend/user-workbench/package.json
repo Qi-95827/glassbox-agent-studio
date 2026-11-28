@@ -7,9 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "format": "prettier --write \"src/**/*.{js,jsx,css,json}\"",
-    "format:check": "prettier --check \"src/**/*.{js,jsx,css,json}\"",
+    "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
     "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -38,6 +39,7 @@
     "globals": "^15.14.0",
     "jsdom": "^26.0.0",
     "prettier": "^3.5.0",
+    "typescript": "^5.9.3",
     "vite": "^6.3.0",
     "vitest": "^3.0.5"
   }

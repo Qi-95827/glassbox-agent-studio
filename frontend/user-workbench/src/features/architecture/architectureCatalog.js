@@ -354,7 +354,7 @@ export const ARCHITECTURE_TOPICS = [
           'en-US':
             'Automatically attaches same-origin cookies, CSRF tokens, and Accept-Language headers with normalized error handling.'
         },
-        codeRefs: ['api/client.js', 'api/runs.js', 'api/modelConnections.js']
+        codeRefs: ['api/client.js', 'api/runs.ts', 'api/modelConnections.js']
       }
     }
   },

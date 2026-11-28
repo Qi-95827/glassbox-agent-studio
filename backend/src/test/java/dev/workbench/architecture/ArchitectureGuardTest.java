@@ -90,4 +90,45 @@ class ArchitectureGuardTest {
               "jakarta.persistence..",
               "dev.workbench.persistence.repository..",
               "dev.workbench.persistence.entity..");
+
+  /**
+   * 主代码禁止 JPA {@code @Lob}：大正文必须走受控列或文件，不能用大对象注解绕过长度与迁移治理。
+   *
+   * <p>同时覆盖「类被标注」与「字段/方法/构造器被标注」两种形态；当前全仓零使用，因此零误报。
+   */
+  @ArchTest
+  static final ArchRule mainCodeMustNotUseLob =
+      com.tngtech.archunit.lang.CompositeArchRule.of(
+              com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses()
+                  .should()
+                  .beAnnotatedWith(jakarta.persistence.Lob.class))
+          .and(
+              com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noCodeUnits()
+                  .should()
+                  .beAnnotatedWith(jakarta.persistence.Lob.class))
+          .because("主代码禁止使用 @Lob，大正文必须走受控列或文件");
+
+  /**
+   * 出站 HTTP 客户端只能由统一出站封装与其基础设施适配器创建。
+   *
+   * <p>规则只禁止「创建」客户端（{@code newHttpClient()} / {@code newBuilder()}）：{@code HttpClient} 自带连接池、
+   * 代理与超时语义，业务代码自建客户端会绕过 {@code OutboundUrlGuard} 的地址与凭据防护。
+   * 复用注入的共享客户端仍然合法，因此不会误伤正常调用方。白名单只有两处：
+   *
+   * <ul>
+   *   <li>{@code dev.workbench.framework.outbound}：唯一的出站客户端工厂；
+   *   <li>{@code dev.workbench.infrastructure}：MCP 等协议适配层，必须复用同一套防护。
+   * </ul>
+   */
+  @ArchTest
+  static final ArchRule httpClientCreationOnlyInsideOutboundAdapters =
+      noClasses()
+          .that()
+          .resideOutsideOfPackages(
+              "dev.workbench.framework.outbound..", "dev.workbench.infrastructure..")
+          .should()
+          .callMethod(java.net.http.HttpClient.class, "newHttpClient")
+          .orShould()
+          .callMethod(java.net.http.HttpClient.class, "newBuilder")
+          .because("出站 HTTP 客户端必须由统一出站封装创建，禁止业务代码自建客户端绕过防护");
 }

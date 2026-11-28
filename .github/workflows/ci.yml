@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端全量测试与静态红线
+    runs-on: ubuntu-latest
+    env:
+      # 单元测试默认不连 PostgreSQL；PG 场景由专用集成测试在本地显式开启。
+      WORKBENCH_PG_TEST: ""
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: 全量测试
+        run: mvn -B test
+
+      - name: 静态红线：主代码零 @Lob
+        run: |
+          if git grep -n "@Lob" -- "backend/src/main"; then
+            echo "禁止在 backend/src/main 使用 @Lob"
+            exit 1
+          fi
+
+      - name: 静态红线：config/ 与 data/ 不得入库
+        run: |
+          tracked="$(git ls-files config data)"
+          if [ -n "$tracked" ]; then
+            echo "禁止把本地密钥或运行数据纳入版本库："
+            echo "$tracked"
+            exit 1
+          fi
+
+  frontend:
+    name: 前端格式化、Lint、类型、测试与构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/user-workbench
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/user-workbench/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 代码格式化检查
+        run: npm run format:check
+
+      - name: 静态检查
+        run: npm run lint
+
+      - name: 类型检查
+        run: npm run typecheck --if-present
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 生产构建
+        run: npm run build
+
+      - name: 中英词条 1:1 校验
+        run: |
+          node -e "const fs=require('fs');const p='src/i18n/locales/';const zh=JSON.parse(fs.readFileSync(p+'zh-CN.json','utf8'));const en=JSON.parse(fs.readFileSync(p+'en-US.json','utf8'));const zk=Object.keys(zh),ek=Object.keys(en);const missingEn=zk.filter(k=>!(k in en));const missingZh=ek.filter(k=>!(k in zh));console.log('i18n:',zk.length,ek.length,'missingEn:',missingEn.length,'missingZh:',missingZh.length);if(missingEn.length||missingZh.length||zk.length!==ek.length)process.exit(1)"

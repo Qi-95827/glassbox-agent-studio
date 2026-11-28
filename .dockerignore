@@ -1,0 +1,16 @@
+# 构建上下文排除清单：绝不把本机密钥、运行数据与构建产物带入镜像。
+.git
+.gitignore
+.idea
+.vscode
+target
+*/target
+backend/target
+frontend/user-workbench/node_modules
+frontend/user-workbench/dist
+config
+data
+*.log
+mvn-*.log
+docs
+examples
