@@ -280,8 +280,88 @@ class MonitoringDashboardServiceTest {
     assertTrue(result.primaryIssue().contains("健康"));
   }
 
-  private void task(String id, String goal, String now) {
-    db.update(
+  /**
+   * 单遍分桶必须把每个运行精确计入它自己的小时桶，且不重复、不遗漏。
+   *
+   * <p>回归：旧实现是「桶 × 运行」双重循环，逻辑正确但复杂度浪费；改造后必须逐点等价。
+   */
+  @Test
+  void timeSeriesCountsEachRunExactlyOnceInsideItsOwnBucket() {
+    java.time.Instant now = java.time.Instant.now();
+    String taskId = java.util.UUID.randomUUID().toString();
+    task(taskId, "分桶样本", now.toString());
+    // 三个运行分别落在当前小时、1 小时前与 2 小时前；第四个落在 25 小时前，超出 24h 窗口。
+    for (int hourOffset = 0; hourOffset < 3; hourOffset++) {
+      run(
+          java.util.UUID.randomUUID().toString(),
+          taskId,
+          "COMPLETED",
+          1000L + hourOffset,
+          null,
+          now.minus(hourOffset, java.time.temporal.ChronoUnit.HOURS).toString());
+    }
+    run(
+        java.util.UUID.randomUUID().toString(),
+        taskId,
+        "FAILED",
+        500L,
+        "UNCLASSIFIED_FAILURE",
+        now.minus(25, java.time.temporal.ChronoUnit.HOURS).toString());
+
+    var result = dashboard.dashboard("24h", null, null);
+
+    assertEquals(3, result.summary().totalRuns(), "24h 窗口只应统计窗口内的三个运行，窗口外的不计入");
+    long bucketed = result.timeSeries().stream().mapToLong(point -> point.runCount()).sum();
+    assertEquals(3, bucketed, "24h 分桶必须恰好覆盖窗口内的三个运行且不重复");
+    long successes = result.timeSeries().stream().mapToLong(point -> point.successCount()).sum();
+    assertEquals(3, successes, "三个 COMPLETED 必须落在各自小时桶");
+  }
+
+  /**
+   * 分片查询：超过单批 500 的运行集合必须全部被统计，绝不因 IN 分片丢失数据。
+   */
+  @Test
+  void shardedInQueriesKeepAllRowsBeyondOneBatch() {
+    java.time.Instant now = java.time.Instant.now();
+    String taskId = java.util.UUID.randomUUID().toString();
+    task(taskId, "分片样本", now.toString());
+    int total = 501;
+    var batch = new java.util.ArrayList<Object[]>();
+    for (int index = 0; index < total; index++) {
+      String runId = java.util.UUID.randomUUID().toString();
+      batch.add(
+          new Object[] {
+            runId, taskId, "COMPLETED", "分片原因", 0, 0, 1000L, now.toString(), now.toString(), null
+          });
+      db.update(
+          """
+          INSERT INTO plan_nodes(id,run_id,sequence_no,role_code,status,agent_id,started_at,finished_at)
+          VALUES(?,?,?,?,?,?,?,?)
+          """,
+          java.util.UUID.randomUUID().toString(),
+          runId,
+          1,
+          "ANALYST",
+          "COMPLETED",
+          java.util.UUID.randomUUID().toString(),
+          now.toString(),
+          now.toString());
+    }
+    db.batchUpdate(
+        """
+        INSERT INTO runs(id,task_id,status,reason,rounds,tools,elapsed_ms,created_at,updated_at,stop_cause)
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+        """,
+        batch);
+
+    var result = dashboard.dashboard("24h", null, null);
+
+    assertEquals(total, result.summary().totalRuns(), "分片后必须统计到全部 501 个运行");
+    long bucketed = result.timeSeries().stream().mapToLong(point -> point.runCount()).sum();
+    assertEquals(total, bucketed, "分桶同样不能因分片丢行");
+  }
+
+  private void task(String id, String goal, String now) {    db.update(
         "INSERT INTO tasks(id,goal,scenario,created_at) VALUES(?,?,?,?)",
         id,
         goal,

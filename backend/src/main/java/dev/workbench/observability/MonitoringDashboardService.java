@@ -122,8 +122,14 @@ public class MonitoringDashboardService {
       Set<String> filteredRunIds =
           runs.stream().map(RunRow::id).collect(java.util.stream.Collectors.toSet());
       runIds = runs.stream().map(RunRow::id).toList();
+      // 指定模型时，调用计数只能统计真正命中该模型的调用；否则同一次运行里其他模型的调用会被算进来。
       modelCalls =
-          modelCalls.stream().filter(call -> filteredRunIds.contains(call.runId())).toList();
+          modelCalls.stream()
+              .filter(
+                  call ->
+                      filteredRunIds.contains(call.runId())
+                          && modelFilter.equalsIgnoreCase(call.modelName()))
+              .toList();
     }
     if (runs.isEmpty()) return empty(normalized, scopedTaskId, scopedGoal, taskOptions);
 
@@ -214,6 +220,12 @@ public class MonitoringDashboardService {
         ratio(toolDenies, toolCalls));
   }
 
+  /**
+   * 单遍分桶：先把每个运行归到它所属的桶，再按桶输出。
+   *
+   * <p>旧实现是 {@code buckets × runs} 的双重循环，桶数 24~30、运行数上万时是纯浪费；
+   * 这里先按桶起点建索引再遍历运行一次，复杂度降到 {@code O(B + N)}，且结果与旧实现逐点等价。
+   */
   private List<MonitoringDashboard.TimeSeriesPoint> timeSeries(
       String range,
       List<RunRow> runs,
@@ -222,22 +234,22 @@ public class MonitoringDashboardService {
     if (runs.isEmpty()) return List.of();
     ZoneId zone = ZoneId.systemDefault();
     List<Bucket> buckets = buckets(range, runs, now, zone);
-    for (Bucket bucket : buckets) {
-      for (RunRow run : runs) {
-        Instant createdAt = parseInstant(run.createdAt());
-        if (createdAt == null) continue;
-        Instant start = truncate(createdAt, range, zone);
-        if (!start.equals(bucket.start)) continue;
-        RunAggregate aggregate = aggregates.get(run.id());
-        bucket.runCount++;
-        if ("COMPLETED".equals(run.status())) bucket.successCount++;
-        if ("FAILED".equals(run.status())) bucket.failedCount++;
-        if (TERMINAL_RUN_STATUSES.contains(run.status()) && run.elapsedMs() > 0) {
-          bucket.durationSum += run.elapsedMs();
-          bucket.durationCount++;
-        }
-        if (aggregate != null) bucket.totalTokens += aggregate.totalTokens();
+    Map<Instant, Bucket> byStart = new LinkedHashMap<>();
+    for (Bucket bucket : buckets) byStart.put(bucket.start, bucket);
+    for (RunRow run : runs) {
+      Instant createdAt = parseInstant(run.createdAt());
+      if (createdAt == null) continue;
+      Bucket bucket = byStart.get(truncate(createdAt, range, zone));
+      if (bucket == null) continue;
+      RunAggregate aggregate = aggregates.get(run.id());
+      bucket.runCount++;
+      if ("COMPLETED".equals(run.status())) bucket.successCount++;
+      if ("FAILED".equals(run.status())) bucket.failedCount++;
+      if (TERMINAL_RUN_STATUSES.contains(run.status()) && run.elapsedMs() > 0) {
+        bucket.durationSum += run.elapsedMs();
+        bucket.durationCount++;
       }
+      if (aggregate != null) bucket.totalTokens += aggregate.totalTokens();
     }
     return buckets.stream()
         .map(

@@ -88,8 +88,22 @@ final class ExecutionNodeDetailProjector {
     var agentRows = agents.agents(runId);
     var assemblies = agents.agentAssemblies(runId);
     var handoffs = workflows.workflowHandoffs(runId);
-    var modelPayloads = traces.modelPayloadsByRun(runId);
-    var toolTraces = traces.toolTracesByRun(runId);
+    // 单节点详情只下推本节点实例产生的载荷：先按实例 ID 收敛调用 ID，再精确查询，
+    // 绝不再为单个节点拉取同一次运行其他节点的 64KB 级正文。
+    var nodeAgentIds =
+        attempts.stream().map(attempt -> attempt.agentId().toString()).collect(java.util.stream.Collectors.toSet());
+    var nodeModelCallIds = new java.util.LinkedHashSet<String>();
+    var nodeToolCallIds = new java.util.LinkedHashSet<String>();
+    for (var model : models) {
+      if (nodeAgentIds.contains(String.valueOf(model.get("AGENT_ID")))
+          && model.get("ID") != null) nodeModelCallIds.add(String.valueOf(model.get("ID")));
+    }
+    for (var tool : tools) {
+      if (nodeAgentIds.contains(String.valueOf(tool.get("AGENT_ID")))
+          && tool.get("ID") != null) nodeToolCallIds.add(String.valueOf(tool.get("ID")));
+    }
+    var modelPayloads = traces.modelPayloadsByIds(runId, nodeModelCallIds);
+    var toolTraces = traces.toolTracesByIds(runId, nodeToolCallIds);
     return new NodeDetail(
         ExecutionViewService.SCHEMA_VERSION,
         Instant.now().toString(),
@@ -282,7 +296,7 @@ final class ExecutionNodeDetailProjector {
         label(nodes, handoff.receiverNodeId()),
         handoff.receiverAttemptId().toString(),
         handoff.receiverAgentId().toString(),
-        handoff.dependencyNodeId().toString(),
+        handoff.dependencyNodeId() == null ? null : handoff.dependencyNodeId().toString(),
         handoff.dependencyNodeId() == null ? null : label(nodes, handoff.dependencyNodeId()),
         handoff.acceptedAt() == null ? null : handoff.acceptedAt().toString(),
         handoff.sourceRunId() == null ? null : handoff.sourceRunId().toString(),

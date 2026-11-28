@@ -22,8 +22,21 @@ public class MonitoringDashboardRepository {
     this.sessions = sessions;
   }
 
+
+  /** 数据库 IN 参数安全分片大小：超过该数量的集合必须分批查询，避免触及数据库参数上限。 */
+  static final int IN_CHUNK = 500;
+
+  /** 按 {@link #IN_CHUNK} 分批执行同一查询并顺序合并结果；空集合由各查询自身处理。 */
+  private static <T> List<T> chunked(
+      List<String> ids, java.util.function.Function<List<String>, List<T>> query) {
+    var result = new java.util.ArrayList<T>();
+    for (int start = 0; start < ids.size(); start += IN_CHUNK)
+      result.addAll(query.apply(ids.subList(start, Math.min(ids.size(), start + IN_CHUNK))));
+    return result;
+  }
   /** 读取指定任务集合在时间范围内的运行；from 为空表示不限起始时间。 */
   public List<RunRow> runs(List<String> taskIds, String from) {
+    if (taskIds != null && taskIds.size() > IN_CHUNK) return chunked(taskIds, chunk -> runs(chunk, from));
     if (taskIds == null || taskIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
@@ -93,6 +106,7 @@ public class MonitoringDashboardRepository {
    * <p>只看任务与运行元数据，不读取任何提示词、模型输出或文件正文；按最近活跃排序并有硬上限，供监控页筛选下拉直接消费。
    */
   public List<TaskOptionRow> taskOptions(List<String> taskIds, int limit) {
+    if (taskIds != null && taskIds.size() > IN_CHUNK) return chunked(taskIds, chunk -> taskOptions(chunk, limit));
     if (taskIds == null || taskIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
@@ -140,7 +154,8 @@ public class MonitoringDashboardRepository {
   public record TaskOptionRow(
       String taskId, String goal, String latestStatus, String latestAt, long runCount) {}
 
-  public List<ModelCallRow> modelCalls(List<String> runIds) {    if (runIds == null || runIds.isEmpty()) return List.of();
+  public List<ModelCallRow> modelCalls(List<String> runIds) {
+    if (runIds != null && runIds.size() > IN_CHUNK) return chunked(runIds, this::modelCalls);    if (runIds == null || runIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
             .createQuery(
@@ -170,6 +185,7 @@ public class MonitoringDashboardRepository {
   }
 
   public List<ToolCallRow> toolCalls(List<String> runIds) {
+    if (runIds != null && runIds.size() > IN_CHUNK) return chunked(runIds, this::toolCalls);
     if (runIds == null || runIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
@@ -198,6 +214,7 @@ public class MonitoringDashboardRepository {
   }
 
   public List<NodeRow> nodes(List<String> runIds) {
+    if (runIds != null && runIds.size() > IN_CHUNK) return chunked(runIds, this::nodes);
     if (runIds == null || runIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
@@ -233,6 +250,7 @@ public class MonitoringDashboardRepository {
   }
 
   public List<GatewayTraceRow> gatewayTraces(List<String> runIds) {
+    if (runIds != null && runIds.size() > IN_CHUNK) return chunked(runIds, this::gatewayTraces);
     if (runIds == null || runIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
@@ -292,6 +310,7 @@ public class MonitoringDashboardRepository {
   }
 
   public List<AssemblyRow> assemblies(List<String> agentIds) {
+    if (agentIds != null && agentIds.size() > IN_CHUNK) return chunked(agentIds, this::assemblies);
     if (agentIds == null || agentIds.isEmpty()) return List.of();
     List<Object[]> rows =
         sessions
@@ -360,6 +379,12 @@ public class MonitoringDashboardRepository {
 
   /** 费用台账：已结算与仍在预留的金额分别汇总，避免把未知费用当成零。 */
   public CostTotals costTotals(List<String> runIds) {
+    if (runIds != null && runIds.size() > IN_CHUNK)
+      return chunked(runIds, chunk -> List.of(costTotals(chunk))).stream()
+          .reduce(new CostTotals(0L, 0L, 0L), (left, right) -> new CostTotals(
+              left.settledMicros() + right.settledMicros(),
+              left.reservedMicros() + right.reservedMicros(),
+              left.runsWithCost() + right.runsWithCost()));
     if (runIds == null || runIds.isEmpty()) return new CostTotals(0L, 0L, 0L);
     Object[] row =
         (Object[])

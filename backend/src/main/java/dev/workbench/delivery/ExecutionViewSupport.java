@@ -41,11 +41,15 @@ final class ExecutionViewSupport {
   static List<String> downstreamPending(List<PlanNode> nodes, UUID start) {
     var result = new LinkedHashSet<String>();
     var queue = new ArrayDeque<UUID>();
+    var visited = new LinkedHashSet<UUID>();
     queue.add(start);
+    visited.add(start);
     while (!queue.isEmpty()) {
       UUID current = queue.removeFirst();
       for (var node : nodes) {
         if (!node.dependencyIds().contains(current)) continue;
+        // 钻石 DAG 会让同一节点被多条路径重复命中；每个节点只入队一次，避免指数级重复扫描。
+        if (!visited.add(node.id())) continue;
         if (node.status() == PlanNodeStatus.PENDING || node.status() == PlanNodeStatus.SKIPPED) {
           result.add(node.id().toString());
           queue.add(node.id());

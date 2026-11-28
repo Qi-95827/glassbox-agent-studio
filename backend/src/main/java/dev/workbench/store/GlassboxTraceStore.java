@@ -92,18 +92,52 @@ public class GlassboxTraceStore {
   public Map<String, ModelCallPayload> modelPayloadsByRun(String runId) {
     var result = new LinkedHashMap<String, ModelCallPayload>();
     for (var row : modelPayloads.findByRunId(runId)) {
-      result.put(
-          row.getModelCallId(),
-          new ModelCallPayload(
-              readList(row.getRequestMessagesJson(), new TypeReference<List<PromptMessage>>() {}),
-              readList(row.getRequestToolsJson(), new TypeReference<List<ToolSchemaView>>() {}),
-              row.getResponseContent(),
-              readList(
-                  row.getResponseToolCallsJson(), new TypeReference<List<ToolCallDecision>>() {}),
-              row.isTruncated(),
-              readContext(row.getContextBreakdownJson()),
-              row.getReasoningContent(),
-              row.isStreamed()));
+      result.put(row.getModelCallId(), toPayload(row));
+    }
+    return result;
+  }
+
+  /**
+   * 单节点按需下推：只读取指定调用 ID 的模型载荷。
+   *
+   * <p>单节点详情此前调用 {@link #modelPayloadsByRun} 拉整次运行的全部 64KB 级载荷，节点越多浪费越大；
+   * 这里按调用 ID 精确下推，并按 {@value #QUERY_CHUNK} 分片避免超出数据库 IN 参数上限。
+   * 空集合直接返回空映射，不产生任何查询。
+   */
+  @Transactional(readOnly = true)
+  public Map<String, ModelCallPayload> modelPayloadsByIds(
+      String runId, java.util.Collection<String> modelCallIds) {
+    if (runId == null || modelCallIds == null || modelCallIds.isEmpty()) return Map.of();
+    var result = new LinkedHashMap<String, ModelCallPayload>();
+    for (var chunk : chunks(modelCallIds)) {
+      for (var row : modelPayloads.findByRunIdAndModelCallIdIn(runId, chunk)) {
+        result.put(row.getModelCallId(), toPayload(row));
+      }
+    }
+    return result;
+  }
+
+  private ModelCallPayload toPayload(ModelCallPayloadEntity row) {
+    return new ModelCallPayload(
+        readList(row.getRequestMessagesJson(), new TypeReference<List<PromptMessage>>() {}),
+        readList(row.getRequestToolsJson(), new TypeReference<List<ToolSchemaView>>() {}),
+        row.getResponseContent(),
+        readList(row.getResponseToolCallsJson(), new TypeReference<List<ToolCallDecision>>() {}),
+        row.isTruncated(),
+        readContext(row.getContextBreakdownJson()),
+        row.getReasoningContent(),
+        row.isStreamed());
+  }
+
+  /** 数据库 IN 参数安全分片大小。 */
+  static final int QUERY_CHUNK = 500;
+
+  private static List<List<String>> chunks(java.util.Collection<String> ids) {
+    var distinct =
+        ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    var result = new java.util.ArrayList<List<String>>();
+    for (int start = 0; start < distinct.size(); start += QUERY_CHUNK) {
+      result.add(distinct.subList(start, Math.min(distinct.size(), start + QUERY_CHUNK)));
     }
     return result;
   }
@@ -309,15 +343,33 @@ public class GlassboxTraceStore {
   public Map<String, ToolCallTrace> toolTracesByRun(String runId) {
     var result = new LinkedHashMap<String, ToolCallTrace>();
     for (var row : toolTraces.findByRunId(runId)) {
-      result.put(
-          row.getToolCallId(),
-          new ToolCallTrace(
-              row.getInputArgsJson(),
-              readList(row.getGatewayChecksJson(), new TypeReference<List<GatewayCheck>>() {}),
-              row.getFullResult(),
-              row.isResultTruncated()));
+      result.put(row.getToolCallId(), toTrace(row));
     }
     return result;
+  }
+
+  /**
+   * 单节点按需下推：只读取指定工具调用 ID 的轨迹；空集合不产生查询，大集合按 {@value #QUERY_CHUNK} 分片。
+   */
+  @Transactional(readOnly = true)
+  public Map<String, ToolCallTrace> toolTracesByIds(
+      String runId, java.util.Collection<String> toolCallIds) {
+    if (runId == null || toolCallIds == null || toolCallIds.isEmpty()) return Map.of();
+    var result = new LinkedHashMap<String, ToolCallTrace>();
+    for (var chunk : chunks(toolCallIds)) {
+      for (var row : toolTraces.findByRunIdAndToolCallIdIn(runId, chunk)) {
+        result.put(row.getToolCallId(), toTrace(row));
+      }
+    }
+    return result;
+  }
+
+  private ToolCallTrace toTrace(ToolCallTraceEntity row) {
+    return new ToolCallTrace(
+        row.getInputArgsJson(),
+        readList(row.getGatewayChecksJson(), new TypeReference<List<GatewayCheck>>() {}),
+        row.getFullResult(),
+        row.isResultTruncated());
   }
 
   @Transactional(readOnly = true)

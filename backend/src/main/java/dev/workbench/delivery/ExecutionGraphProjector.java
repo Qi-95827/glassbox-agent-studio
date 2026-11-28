@@ -36,7 +36,7 @@ import org.springframework.stereotype.Component;
 
 /** 执行图的只读投影：流程、节点、依赖、焦点、阻塞与可用操作。 */
 @Component
-final class ExecutionGraphProjector {
+class ExecutionGraphProjector {
   private final RunStateStore runs;
   private final AgentAssemblyRecordService agents;
   private final TaskRecordService tasks;
@@ -77,6 +77,13 @@ final class ExecutionGraphProjector {
     this.traces = traces;
   }
 
+  /**
+   * 只读投影入口。
+   *
+   * <p>图状态、节点列表与 {@code lastEventSeq} 必须在同一只读事务内读取：否则并发追加事件时，
+   * 游标与节点状态可能来自不同快照，前端会看到"已推进的游标 + 未推进的节点"这类撕裂状态。
+   */
+  @org.springframework.transaction.annotation.Transactional(readOnly = true)
   ExecutionView view(String runId) {
     ownership.requireRun(runId);
     var run = runs.run(runId);

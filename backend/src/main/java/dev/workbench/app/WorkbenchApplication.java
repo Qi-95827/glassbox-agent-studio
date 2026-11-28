@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 @SpringBootApplication(scanBasePackages = "dev.workbench")
 @EntityScan(basePackages = "dev.workbench.persistence.entity")
 @EnableJpaRepositories(basePackageClasses = WorkflowCheckpointRepository.class)
+@org.springframework.scheduling.annotation.EnableScheduling
 public class WorkbenchApplication {
   public static void main(String[] args) {
     SpringApplication.run(WorkbenchApplication.class, args);
