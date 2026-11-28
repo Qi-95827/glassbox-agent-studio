@@ -40,6 +40,8 @@ class LegacyH2DoubleStartupIntegrationTest {
       probe = Files.createTempFile("agent-workbench-legacy-double-probe-", ".mv.db");
       try {
         Files.copy(SOURCE, probe, StandardCopyOption.REPLACE_EXISTING);
+      } catch (java.nio.file.NoSuchFileException vanished) {
+        return false;
       } catch (java.io.IOException copyFailure) {
         if (!isLocked(copyFailure))
           throw new IllegalStateException(

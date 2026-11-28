@@ -246,7 +246,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
   @Override
   public synchronized void modelFailed() {
     // 失败/取消也要冲刷：已到达的尾部同样不能以半截敏感串的形式留在滞留窗口里。
-    flushStreamMaskers();
+    flushStreamMaskers(true);
     if (costs != null && costReservation != CostService.Reservation.NONE) {
       costs.cancel(costReservation);
       costReservation = CostService.Reservation.NONE;
@@ -255,7 +255,7 @@ final class ControlledAgentRuntime implements AgentRuntime {
 
   @Override
   public synchronized void modelResult(Integer input, Integer output) {
-    flushStreamMaskers();
+    flushStreamMaskers(false);
     control.finishModel(agentId, InvocationStatus.COMPLETED, input, output, null);
     CostService.Settlement settlement = CostService.Settlement.NONE;
     if (costs != null) {
@@ -407,11 +407,11 @@ final class ControlledAgentRuntime implements AgentRuntime {
    * <p>没有订阅者或未装配事件发布器时静默跳过：瞬态帧属于观感增强，绝不能因为推不出去
    * 就影响模型调用或安全检查本身。空的正文片段同样跳过，减少无意义帧。
    */
-  /** 冲刷正文与思考链的滞留窗口；重复调用安全。 */
-  private void flushStreamMaskers() {
-    String content = contentMasker.flushFinal();
+  /** 冲刷正文与思考链的滞留窗口；正常完成走完整脱敏，异常中断额外执行半截凭据兜底；重复调用安全。 */
+  private void flushStreamMaskers(boolean aborted) {
+    String content = aborted ? contentMasker.flushFinal() : contentMasker.flush();
     if (!content.isEmpty()) publishTransient("MODEL_DELTA", content, java.util.Map.of());
-    String reasoning = reasoningMasker.flushFinal();
+    String reasoning = aborted ? reasoningMasker.flushFinal() : reasoningMasker.flush();
     if (!reasoning.isEmpty())
       publishTransient("MODEL_REASONING_DELTA", reasoning, java.util.Map.of());
   }

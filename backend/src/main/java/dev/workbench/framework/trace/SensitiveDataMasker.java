@@ -33,40 +33,41 @@ public final class SensitiveDataMasker {
 
   /**
    * 流式切点检测：与完整脱敏共享同一形态集合（PEM/JWT/AWS/Google/GitHub/GitLab/Bearer/sk-/URL/KV），
-   * 并额外覆盖引号键名、引号值和尚未完结的前缀，保证跨帧切点不会把敏感串前半段先放出去。
+   * 并使用与整段规则等价的跨行空白（{@code \s}）与引号形态，保证单行/多行格式化凭据在任意跨帧切点都不会先放走前缀。
    */
   static final Pattern STREAM_PARTIAL =
       Pattern.compile(
           "(?s)sk-[A-Za-z0-9_-]*"
-              + "|(?i:bearer)[ \\t]+[A-Za-z0-9._~+/=-]*"
+              + "|(?i:bearer)\\s+[A-Za-z0-9._~+/=-]*"
               + "|eyJ[A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]*){0,2}"
-              + "|(?i:[\"']?"
+              + "|(?i:\"?'?"
               + KV_KEY
-              + "[\"']?)[ \\t]*[:=][ \\t]*[\"']?"
+              + "'?\"?)(?:\\s*[:=]\\s*\"?'?"
               + KV_VALUE_CHARS
-              + "*"
-              + "|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*"
+              + "*|\\s+)"
+              + "|-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\\s\\S]*)"
               + "|(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]*"
               + "|(?<![A-Za-z0-9])AIza[A-Za-z0-9_-]*"
               + "|(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9_]*|github_pat_[A-Za-z0-9_]*)"
               + "|(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]*"
-              + "|://[^/\\s:@'\"]+:[^/\\s@'\"]*@?");
+              + "|://[^/\\s:@'\"]+(?::[^/\\s@'\"]*@?)?");
 
   private static final Pattern UNCLOSED_PEM =
       Pattern.compile("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*");
-  /** 仅锚定流末尾的截断令牌；只对 Bearer 忽略大小写，绝不误伤普通英文单词（如 Asia），也不重复叠加已脱敏标记。 */
+  /** 仅锚定流末尾的截断令牌；只对 Bearer 忽略大小写并支持跨行空白，绝不误伤普通英文单词（如 Asia），也不重复叠加已脱敏标记。 */
   private static final Pattern TRUNCATED_TOKEN =
       Pattern.compile(
-          "(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|(?i:bearer)[ \\t]+|eyJ))"
+          "(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|(?i:bearer)\\s+|eyJ))"
               + "(?!\\*\\*\\*MASKED)[A-Za-z0-9._~+/=-]*$");
-  /** 仅锚定流末尾尚未闭合的凭据键值，避免误伤正文中已结束的普通统计（如 token: 100。）。 */
+  /** 仅锚定流末尾尚未闭合的凭据键值（与整段规则一致支持跨行空白与引号），仅在流异常中断时兜底。 */
   private static final Pattern TRUNCATED_KV =
       Pattern.compile(
-          "(?i)([\"']?" + KV_KEY + "[\"']?[ \\t]*[:=][ \\t]*[\"']?)(?!\\*\\*\\*MASKED)"
+          "(?i)(\"?'?" + KV_KEY + "'?\"?\\s*[:=]\\s*\"?'?)(?!\\*\\*\\*MASKED)"
               + KV_VALUE_CHARS
               + "+$");
+  /** 流末尾截断的 URL 凭据（缺 {@code @}）；排除 1~5 位纯数字端口（如 {@code http://localhost:8088}），避免误伤普通地址。 */
   private static final Pattern TRUNCATED_URL_CREDENTIALS =
-      Pattern.compile("://[^/\\s:@'\"]+:[^/\\s@'\"]*$");
+      Pattern.compile("://[^/\\s:@'\"]+:(?!\\d{1,5}$)[^/\\s@'\"]+$");
 
   /** 键值对允许单/双引号与 JSON、HTML 转义引号；值遇到引号、括号、分隔符即停止，绝不吞结构符。 */
   private static final Pattern SECRET_KV_PATTERN =
@@ -108,6 +109,16 @@ public final class SensitiveDataMasker {
   }
 
   /**
+   * 正常结束收尾：执行与整段等价的完整脱敏，并对未闭合私钥块兜底；不触发异常截断规则，避免误伤末尾的普通
+   * {@code http://localhost:8088} 或 {@code token: 100}。
+   */
+  public static String maskCompleted(String input) {
+    if (input == null || input.isEmpty()) return input;
+    String value = mask(input);
+    return UNCLOSED_PEM.matcher(value).replaceAll("***MASKED-PRIVATE-KEY***");
+  }
+
+  /**
    * 失败/中断收尾：先做完整匹配脱敏，再兜底掩码残留在末尾的未闭合敏感块。
    *
    * <p>流被取消时可能只收到 `-----BEGIN ... PRIVATE KEY-----` 或半截 `"api_key": "sk-...`；
@@ -115,8 +126,7 @@ public final class SensitiveDataMasker {
    */
   public static String maskFinal(String input) {
     if (input == null || input.isEmpty()) return input;
-    String value = mask(input);
-    value = UNCLOSED_PEM.matcher(value).replaceAll("***MASKED-PRIVATE-KEY***");
+    String value = maskCompleted(input);
     value = TRUNCATED_TOKEN.matcher(value).replaceAll("$1***MASKED***");
     value = TRUNCATED_KV.matcher(value).replaceAll("$1***MASKED***");
     value = TRUNCATED_URL_CREDENTIALS.matcher(value).replaceAll("://***MASKED***");

@@ -22,6 +22,48 @@ class MixedModelCostIntegrationTest {
   @Autowired dev.workbench.persistence.repository.RunCostLimitRepository limits;
 
   @Test
+  void legacyEmptyPriceMappingSameModelForkPreservesParentFrozenPriceVersion() {
+    var kind = ModelKind.forMode(ModelMode.DEEPSEEK);
+    var v1 = costs.publish("default", kind.code(), "CNY", 2_000_000, 4_000_000, 100, 100, "test-v1");
+    // 之后平台对同一模型发布同币种新单价（v2 将成为新的 active 版本，单价远高于 v1）。
+    var v2 = costs.publish("default", kind.code(), "CNY", 9_000_000, 9_000_000, 100, 100, "test-v2");
+
+    for (String legacyJson : java.util.Arrays.asList("{}", null)) {
+      String parentRunId = UUID.randomUUID().toString();
+      String childRunId = UUID.randomUUID().toString();
+      // 旧账本没有逐模型映射，仅靠 priceVersionId 冻结 v1 单价。
+      limits.save(
+          new dev.workbench.persistence.entity.RunCostLimitEntity(
+              parentRunId,
+              5_000L,
+              v1.id(),
+              legacyJson,
+              "2026-01-01T00:00:00Z",
+              "2026-01-01T00:00:00Z"));
+
+      // 同模型分叉（不覆盖模型变量）：必须冻结继承父运行原 v1，绝不能静默切换到当前最新 v2。
+      var prepared = costs.prepareInheritedLimit(parentRunId, ModelMode.DEEPSEEK).orElseThrow();
+      assertTrue(
+          prepared.modelPriceVersionsJson().contains(v1.id()),
+          "旧账本同模型分叉必须保留父运行冻结的 v1 价格版本：" + prepared.modelPriceVersionsJson());
+      assertFalse(
+          prepared.modelPriceVersionsJson().contains(v2.id()),
+          "旧账本同模型分叉不得静默切换为当前最新 v2：" + prepared.modelPriceVersionsJson());
+
+      costs.applyPreparedLimit(childRunId, prepared);
+      var reservation = costs.reserve(childRunId, kind);
+      var settlement = costs.settle(reservation, Integer.valueOf(100), Integer.valueOf(100));
+      assertEquals(
+          Long.valueOf(600L),
+          settlement.actualMicros(),
+          "子运行预留与结算必须按父运行冻结的 v1（2M/4M -> 600）计价，而非 v2（9M/9M -> 1800）");
+      var reservations = (java.util.List<?>) costs.estimate(childRunId).get("RESERVATIONS");
+      var evidence = (java.util.Map<?, ?>) reservations.getFirst();
+      assertEquals(2_000_000L, evidence.get("INPUT_MICROS_PER_MILLION"));
+    }
+  }
+
+  @Test
   void historicalEmptyPriceMappingIsCompletedBeforeInheritance() {
     var targetKind = ModelKind.forMode(ModelMode.DEEPSEEK);
     var mockPrice = costs.publish("default", "mock", "CNY", 0, 0, 100, 100, "test");

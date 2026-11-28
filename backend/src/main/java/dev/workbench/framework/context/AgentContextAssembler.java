@@ -45,6 +45,8 @@ public final class AgentContextAssembler {
   public AgentInput assembleInput(AgentContextInput input) {
     var result = new StringBuilder();
     var sources = new ArrayList<AgentInput.Source>();
+    var memoryMatches =
+        new ArrayList<dev.workbench.framework.agent.assembly.AgentAssemblySnapshot.MemoryMatchView>();
     for (var contributor : contributors) {
       var section = contributor.contribute(input);
       if (section == null) throw new IllegalStateException("上下文来源返回空值：" + contributor.id());
@@ -54,11 +56,12 @@ public final class AgentContextAssembler {
           new AgentInput.Source(
               AgentInput.Kind.CONTRIBUTOR, contributor.id(), contributor.version()));
       sources.addAll(section.sources());
+      memoryMatches.addAll(section.memoryMatches());
     }
     if (result.isEmpty()) throw new IllegalStateException("Agent 上下文不能为空。");
     // 必需约束与交接文本整体装配；超过上限时在启动模型前阻塞，避免静默丢失硬约束。
     if (result.length() > maxChars)
       throw new IllegalStateException("Agent 上下文超过 " + maxChars + " 字符上限，已在启动模型前停止，请缩小授权范围或任务输入。");
-    return new AgentInput(input.runId(), result.toString(), sources);
+    return new AgentInput(input.runId(), result.toString(), sources, memoryMatches);
   }
 }

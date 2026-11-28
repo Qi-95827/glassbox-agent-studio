@@ -226,13 +226,15 @@ final class DirectRunExecutor {
           null);
     }
     var analystDefinition = assemblyRecords.plannedDefinitionForAgent(state.runId, state.agentId);
+    AgentInput analysisInput =
+        contexts.assembleInput(
+            new AgentContextInput(state.task, state.runId, initialCheck(state.initial)));
     String answer =
         agent.execute(
             new AgentExecutionRequest(
                 AgentRole.ANALYST,
                 state.agentId,
-                contexts.assembleInput(
-                    new AgentContextInput(state.task, state.runId, initialCheck(state.initial))),
+                analysisInput,
                 state.task.workspaceId(),
                 state.task.fileScopes(),
                 false,
@@ -244,7 +246,8 @@ final class DirectRunExecutor {
                 analystDefinition.reference(),
                 analystDefinition.sha256())
             .withModelConnection(state.task.modelConnectionId())
-            .withLocale(state.task.locale()));
+            .withLocale(state.task.locale())
+            .withResolvedMemories(analysisInput.memoryMatches()));
     if (answer.length() > 2000) answer = answer.substring(0, 1990) + "…（结果已截断）";
     state.answer = answer;
     state.evidenceRun = state.runId;
@@ -298,7 +301,8 @@ final class DirectRunExecutor {
                 coderDefinition.reference(),
                 coderDefinition.sha256())
             .withModelConnection(state.task.modelConnectionId())
-            .withLocale(state.task.locale()));
+            .withLocale(state.task.locale())
+            .withResolvedMemories(List.of()));
     if (answer.length() > 1900) answer = answer.substring(0, 1890) + "…（结果已截断）";
     state.answer = answer;
     Handoff codingResult =

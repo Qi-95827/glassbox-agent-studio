@@ -149,6 +149,79 @@ class StreamingSseMaskingTest {
     assertTrue(content.contains("token: 100"), "不得误伤非末尾普通数字统计：" + content);
   }
 
+  @Test
+  void multiLineFormattedCredentialsNeverLeakAcrossFramesAndMatchWholeMask() {
+    String prefix = "这是一段超过流式保留窗口长度的普通前置说明文本，用来确保切点会真正落在后续多行凭据的键与换行边界上。".repeat(3);
+    String multiLine =
+        prefix
+            + "\n{\n  \"password\"\n  :\n  \"MultiLine-Secret-9988\",\n"
+            + "  'token'\r\n  =\r\n  'MultiToken-7766'\n}\n"
+            + "Authorization: Bearer\n  "
+            + JWT
+            + "\n收尾正常文本。";
+    String expected = dev.workbench.framework.trace.SensitiveDataMasker.mask(multiLine);
+    int afterPasswordNewline = multiLine.indexOf("\"password\"\n") + "\"password\"\n".length();
+    int afterColonNewline = multiLine.indexOf(":\n  ") + ":\n  ".length();
+    int afterBearerNewline = multiLine.indexOf("Bearer\n") + "Bearer\n".length();
+
+    for (List<String> frames :
+        List.of(
+            splitEveryCharacter(multiLine),
+            List.of(multiLine.substring(0, afterPasswordNewline), multiLine.substring(afterPasswordNewline)),
+            List.of(multiLine.substring(0, afterColonNewline), multiLine.substring(afterColonNewline)),
+            List.of(multiLine.substring(0, afterBearerNewline), multiLine.substring(afterBearerNewline)),
+            splitRandomly(multiLine, new Random(20261128L)))) {
+      CapturingPublisher publisher = new CapturingPublisher();
+      ControlledAgentRuntime runtime = runtime(publisher);
+      for (String frame : frames) {
+        runtime.modelDelta(frame);
+        runtime.modelReasoningDelta(frame);
+      }
+      runtime.modelResult(null, null);
+      String content = publisher.joined("MODEL_DELTA");
+      String reasoning = publisher.joined("MODEL_REASONING_DELTA");
+      assertFalse(content.contains("MultiLine-Secret-9988"), "多行双引号口令泄露：" + content);
+      assertFalse(content.contains("MultiToken-7766"), "多行单引号令牌泄露：" + content);
+      assertFalse(content.contains(JWT), "跨行 Bearer JWT 泄露：" + content);
+      assertEquals(expected, content, "任意分帧拼接结果必须与整段脱敏完全一致");
+      assertEquals(expected, reasoning, "思考链任意分帧拼接结果必须与整段脱敏完全一致");
+    }
+  }
+
+  @Test
+  void trailingBareHostPortUrlAndTokenCountAreNotCorruptedWhileAbortedSecretsAreMasked() {
+    // 正常完成时，末尾裸主机+端口 URL 与末尾普通 token 计数均不得被误伤。
+    for (String normalTail :
+        List.of("服务已启动于 http://localhost:8088", "本次统计 token: 100")) {
+      CapturingPublisher publisher = new CapturingPublisher();
+      ControlledAgentRuntime runtime = runtime(publisher);
+      for (char c : normalTail.toCharArray()) runtime.modelDelta(String.valueOf(c));
+      runtime.modelResult(null, null);
+      assertEquals(normalTail, publisher.joined("MODEL_DELTA"));
+    }
+
+    // 即使在流异常中断时，普通主机+端口 URL 也不应被当成缺 @ 凭据误伤；真正的半截 URL 凭据与多行半截口令必须掩码。
+    CapturingPublisher barePortAborted = new CapturingPublisher();
+    ControlledAgentRuntime barePortRuntime = runtime(barePortAborted);
+    barePortRuntime.modelDelta("当前监听 http://localhost:8088");
+    barePortRuntime.modelFailed();
+    assertEquals("当前监听 http://localhost:8088", barePortAborted.joined("MODEL_DELTA"));
+
+    CapturingPublisher urlCredAborted = new CapturingPublisher();
+    ControlledAgentRuntime urlCredRuntime = runtime(urlCredAborted);
+    urlCredRuntime.modelDelta("数据库连接 postgres://app:pa55word");
+    urlCredRuntime.modelFailed();
+    assertFalse(urlCredAborted.joined("MODEL_DELTA").contains("pa55word"));
+    assertTrue(urlCredAborted.joined("MODEL_DELTA").contains("***MASKED***"));
+
+    CapturingPublisher multiLineAborted = new CapturingPublisher();
+    ControlledAgentRuntime multiLineRuntime = runtime(multiLineAborted);
+    multiLineRuntime.modelDelta("配置：\n{\"password\"\n  :\n  \"halfSec");
+    multiLineRuntime.modelFailed();
+    assertFalse(multiLineAborted.joined("MODEL_DELTA").contains("halfSec"));
+    assertTrue(multiLineAborted.joined("MODEL_DELTA").contains("***MASKED***"));
+  }
+
   private void assertNoLeak(List<String> contentFrames, List<String> reasoningFrames) {
     CapturingPublisher publisher = new CapturingPublisher();
     ControlledAgentRuntime runtime = runtime(publisher);

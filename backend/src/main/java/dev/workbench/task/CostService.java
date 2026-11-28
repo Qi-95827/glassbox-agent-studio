@@ -238,6 +238,16 @@ public class CostService
     var bindings = readModelPrices(existingJson);
     String modelCode = ModelKind.forMode(childMode).code();
     if (bindings.containsKey(modelCode)) return existingJson;
+    // 旧账本（modelPriceVersionsJson 为空、仅靠 priceVersionId 冻结单价）：
+    // 子运行未切模型（与父默认价格版本同模型）时，必须冻结继承父运行原价格版本，绝不静默换成当前最新单价。
+    if (bindings.isEmpty() && parent.getPriceVersionId() != null) {
+      var legacyParentPrice = prices.findById(parent.getPriceVersionId()).orElse(null);
+      if (legacyParentPrice != null && legacyParentPrice.getModel().equals(modelCode)) {
+        var frozen = new java.util.LinkedHashMap<String, String>();
+        frozen.put(modelCode, legacyParentPrice.getId());
+        return writeModelPrices(frozen);
+      }
+    }
     var active =
         prices
             .findFirstByProviderAndModelAndActiveTrueOrderByVersionDesc(PROVIDER, modelCode)
@@ -256,6 +266,13 @@ public class CostService
               + "）不一致，无法直接继承预算。");
     }
     var updated = new java.util.LinkedHashMap<>(bindings);
+    // 跨模型分叉旧账本时一并保留父模型冻结价格版本，确保子映射完整且不丢失原基线。
+    if (bindings.isEmpty()
+        && parentPrice != null
+        && parent.getPriceVersionId() != null
+        && parent.getPriceVersionId().equals(parentPrice.getId())) {
+      updated.put(parentPrice.getModel(), parentPrice.getId());
+    }
     updated.put(modelCode, active.getId());
     return writeModelPrices(updated);
   }

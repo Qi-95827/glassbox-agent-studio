@@ -73,7 +73,8 @@ public class ToolMcpRunner implements EvalCategoryRunner {
       String name = text(call.get("name"), "unknown_tool");
       ToolKind kind = toolKind(call.get("kind"));
       ToolEffect effect = ToolContracts.effectFor(kind);
-      String path = text(call.get("path"), null);
+      String path = extractArgPath(call.get("args"));
+      if (path == null || path.isBlank()) path = text(call.get("path"), null);
       String args = json(call.get("args"));
       if (effect == ToolEffect.WRITE && (path == null || path.isBlank())) {
         path = text(call.get("targetPath"), null);
@@ -259,6 +260,29 @@ public class ToolMcpRunner implements EvalCategoryRunner {
           result.trace.put(
               "gatewayChecks", rows.stream().flatMap(call -> call.checks().stream()).toList());
         });
+  }
+
+  /** 与在线 GatewayAgentTool 对齐：工具参数对象中的 path/targetPath 优先于外层题面字段。 */
+  private static String extractArgPath(Object rawArgs) {
+    if (rawArgs instanceof Map<?, ?> map) {
+      String direct = text(map.get("path"), null);
+      if (direct != null && !direct.isBlank()) return direct;
+      return text(map.get("targetPath"), null);
+    }
+    if (rawArgs instanceof String raw && !raw.isBlank()) {
+      try {
+        var tree = JSON.readTree(raw);
+        if (tree.isObject()) {
+          String direct = tree.path("path").asText("");
+          if (!direct.isBlank()) return direct;
+          String target = tree.path("targetPath").asText("");
+          if (!target.isBlank()) return target;
+        }
+      } catch (Exception ignored) {
+        // 非法 JSON 留给后续 Schema 门统一拒单。
+      }
+    }
+    return null;
   }
 
   /** 参数 Schema 门：只判断「是否是 JSON 对象」与文件工具是否有显式目标路径。 */

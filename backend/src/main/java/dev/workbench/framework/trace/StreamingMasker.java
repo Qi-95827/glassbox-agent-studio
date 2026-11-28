@@ -41,21 +41,25 @@ public final class StreamingMasker {
   }
 
   /**
-   * 流结束（完成/失败/取消）时强制冲刷剩余缓冲。
-   *
-   * <p>使用 {@code maskFinal}：完整凭据照常脱敏，末尾未闭合的私钥块、半截 sk-/github_pat_/gh*_/
-   * glpat-/AKIA/AIza/Bearer/eyJ 与缺 `@` 的 URL 凭据也会被兜底掩码。
+   * 流正常结束时冲刷剩余缓冲：走与整段等价的 {@link SensitiveDataMasker#maskCompleted(String)}，
+   * 保证完整凭据与未闭合私钥均被掩码，同时绝不把末尾普通地址（如 {@code http://localhost:8088}）
+   * 或计数（如 {@code token: 100}）误判为中断半截密钥。
    */
   public synchronized String flush() {
     if (pending.length() == 0) return "";
-    String remaining = SensitiveDataMasker.maskFinal(pending.toString());
+    String remaining = SensitiveDataMasker.maskCompleted(pending.toString());
     pending.setLength(0);
     return remaining;
   }
 
-  /** 语义化别名：失败/中断收尾与正常收尾共用同一安全实现。 */
+  /**
+   * 流失败/取消时强制冲刷剩余缓冲：在完整脱敏基础上对末尾截断令牌、半截键值与缺 {@code @} URL 凭据兜底掩码。
+   */
   public synchronized String flushFinal() {
-    return flush();
+    if (pending.length() == 0) return "";
+    String remaining = SensitiveDataMasker.maskFinal(pending.toString());
+    pending.setLength(0);
+    return remaining;
   }
 
   /** 当前尚未发射的原始字符数，供测试与诊断使用。 */
