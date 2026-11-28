@@ -134,6 +134,61 @@ class SensitiveDataMaskerCredentialTest {
   }
 
   @Test
+  void quotedSensitiveValuesRespectUnescapedClosingQuoteAcrossSpacesCommasAndEscapes() {
+    // 1. 同一双引号敏感字段内含空格、逗号或转义引号的混合值：明文后缀必须彻底消失，相邻 JSON 字段必须保留。
+    String commaMix =
+        "{\"password\": \"AKIAIOSFODNN7EXAMPLE, extra secret\", \"note\": \"keep-me\"}";
+    String spaceMix =
+        "{\"secret\": \"***MASKED-TOKEN*** extra plain tail\", \"note\": \"keep-me\"}";
+    String escapedQuoteMix =
+        "{\"password\": \"***MASKED***, \\\"quoted\\\" tail\", \"note\": \"keep-me\"}";
+    String escapedBackslashEnd =
+        "{\"password\": \"secret\\\\\", \"note\": \"keep-me\"}";
+    String singleQuotedMix =
+        "{'password': '***MASKED-KEY***, extra secret', 'note': 'keep-me'}";
+
+    for (String sample : java.util.List.of(commaMix, spaceMix, escapedQuoteMix, escapedBackslashEnd)) {
+      for (String masked :
+          java.util.List.of(
+              SensitiveDataMasker.mask(sample),
+              SensitiveDataMasker.maskCompleted(sample),
+              SensitiveDataMasker.maskFinal(sample))) {
+        assertFalse(masked.contains("extra secret"), masked);
+        assertFalse(masked.contains("extra plain tail"), masked);
+        assertFalse(masked.contains("quoted"), masked);
+        assertFalse(masked.contains("AKIAIOSFODNN7EXAMPLE"), masked);
+        assertTrue(masked.contains("\"note\": \"keep-me\"}"), "相邻 JSON 字段必须完整保留：" + masked);
+      }
+    }
+    assertEquals(
+        "{\"password\": \"***MASKED***\", \"note\": \"keep-me\"}",
+        SensitiveDataMasker.mask(commaMix));
+    assertEquals(
+        "{\"secret\": \"***MASKED***\", \"note\": \"keep-me\"}",
+        SensitiveDataMasker.mask(spaceMix));
+    assertEquals(
+        "{\"password\": \"***MASKED***\", \"note\": \"keep-me\"}",
+        SensitiveDataMasker.mask(escapedQuoteMix));
+    assertEquals(
+        "{\"password\": \"***MASKED***\", \"note\": \"keep-me\"}",
+        SensitiveDataMasker.mask(escapedBackslashEnd));
+    assertEquals(
+        "{'password': '***MASKED***', 'note': 'keep-me'}",
+        SensitiveDataMasker.mask(singleQuotedMix));
+
+    // 2. 流尾未闭合引号内含逗号/空格后缀的截断收尾，以及短普通引号字段不跨引号误吞相邻字段。
+    assertEquals(
+        "{\"password\": \"***MASKED***",
+        SensitiveDataMasker.maskFinal("{\"password\": \"***MASKED***, tail"));
+    assertEquals(
+        "{'password': '***MASKED***",
+        SensitiveDataMasker.maskFinal("{'password': '***MASKED*** tail"));
+    assertEquals(
+        "{\"token\": \"100\", \"note\": \"hello world\"}",
+        SensitiveDataMasker.mask("{\"token\": \"100\", \"note\": \"hello world\"}"));
+  }
+
+  @Test
   void ordinaryTextIsUnchanged() {
     String text = "排序页面需要保留原生实现并给出证据。";
 

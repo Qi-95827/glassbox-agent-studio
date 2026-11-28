@@ -633,6 +633,92 @@ class StreamingSseMaskingTest {
     assertFalse(capturedPayload.get().reasoningContent().contains("_cd"));
   }
 
+  @Test
+  void quotedValuesWithSpacesCommasAndEscapedQuotesNeverLeakAcrossSseFramesOrSnapshot() {
+    String prefix = "这是一段超过流式保留窗口的普通前缀，确保切点落在引号内空格与逗号之后。".repeat(3);
+    String suffix = "。后续正常正文用于验证相邻字段保留且实时流可继续输出。".repeat(3);
+    String contentInput =
+        prefix
+            + "{\"password\": \"AKIAIOSFODNN7EXAMPLE, extra \\\"comma\\\" secret\", \"note\": \"keep-body\"}"
+            + suffix;
+    String reasoningInput =
+        prefix
+            + "{'secret': '***MASKED-TOKEN*** space plain tail', 'note': 'keep-reason'}"
+            + suffix;
+    String expectedContent = dev.workbench.framework.trace.SensitiveDataMasker.mask(contentInput);
+    String expectedReasoning =
+        dev.workbench.framework.trace.SensitiveDataMasker.mask(reasoningInput);
+
+    // 1. 逐字流式切分（自然结束）：正文、推理与快照均无明文后缀，相邻字段完整保留，且与整段脱敏逐字一致。
+    CapturingPublisher publisher = new CapturingPublisher();
+    var capturedPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+    ControlledAgentRuntime runtime = runtimeWithTrace(publisher, capturedPayload);
+    List<ChatResponse> chunks = new ArrayList<>();
+    int maxLen = Math.max(contentInput.length(), reasoningInput.length());
+    for (int i = 0; i < maxLen; i++) {
+      var blocks = new ArrayList<io.agentscope.core.message.ContentBlock>();
+      if (i < contentInput.length())
+        blocks.add(TextBlock.builder().text(contentInput.substring(i, i + 1)).build());
+      if (i < reasoningInput.length())
+        blocks.add(ThinkingBlock.builder().thinking(reasoningInput.substring(i, i + 1)).build());
+      var builder = ChatResponse.builder().content(blocks);
+      if (i == maxLen - 1) {
+        builder.usage(ChatUsage.builder().inputTokens(20).outputTokens(10).build()).finishReason("stop");
+      }
+      chunks.add(builder.build());
+    }
+    new ControlledModel(
+            stubModel(Flux.fromIterable(chunks)), ModelMode.MOCK, runtime, new AtomicReference<>())
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .collectList()
+        .block();
+
+    String sseContent = publisher.joined("MODEL_DELTA");
+    String sseReasoning = publisher.joined("MODEL_REASONING_DELTA");
+    assertFalse(sseContent.contains("extra"), sseContent);
+    assertFalse(sseContent.contains("comma"), sseContent);
+    assertFalse(sseContent.contains("AKIAIOSFODNN7EXAMPLE"), sseContent);
+    assertTrue(sseContent.contains("\"note\": \"keep-body\"}"), sseContent);
+    assertEquals(expectedContent, sseContent);
+
+    assertFalse(sseReasoning.contains("space plain tail"), sseReasoning);
+    assertTrue(sseReasoning.contains("'note': 'keep-reason'}"), sseReasoning);
+    assertEquals(expectedReasoning, sseReasoning);
+
+    assertEquals(expectedContent, capturedPayload.get().responseContent());
+    assertEquals(expectedReasoning, capturedPayload.get().reasoningContent());
+
+    // 2. 限长结束（finishReason=length）：未闭合引号内含逗号与空格的混合值同样彻底脱敏。
+    CapturingPublisher limitPub = new CapturingPublisher();
+    var limitPayload = new AtomicReference<GlassboxModels.ModelCallPayload>();
+    ControlledAgentRuntime limitRuntime = runtimeWithTrace(limitPub, limitPayload);
+    new ControlledModel(
+            stubModel(
+                Flux.just(
+                    ChatResponse.builder()
+                        .content(
+                            List.of(
+                                TextBlock.builder()
+                                    .text("{\"password\": \"***MASKED***, unclosed tail")
+                                    .build(),
+                                ThinkingBlock.builder()
+                                    .thinking("{'secret': '***MASKED*** unclosed tail")
+                                    .build()))
+                        .usage(ChatUsage.builder().inputTokens(8).outputTokens(4).build())
+                        .finishReason("length")
+                        .build())),
+            ModelMode.MOCK,
+            limitRuntime,
+            new AtomicReference<>())
+        .stream(List.of(), List.of(), GenerateOptions.builder().build())
+        .collectList()
+        .block();
+    assertFalse(limitPub.joined("MODEL_DELTA").contains("unclosed tail"));
+    assertFalse(limitPub.joined("MODEL_REASONING_DELTA").contains("unclosed tail"));
+    assertFalse(limitPayload.get().responseContent().contains("unclosed tail"));
+    assertFalse(limitPayload.get().reasoningContent().contains("unclosed tail"));
+  }
+
   private static void assertNoPemLeak(String label, String output, String bodyFragment) {
     assertFalse(output.contains(bodyFragment), label + " 泄露未闭合私钥正文：" + output);
     assertFalse(output.contains("PRIVATE KEY"), label + " 残留未闭合私钥头：" + output);

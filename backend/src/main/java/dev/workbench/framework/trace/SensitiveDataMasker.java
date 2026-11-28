@@ -35,10 +35,14 @@ public final class SensitiveDataMasker {
   /** 受支持的完整掩码占位符；仅当整个字段值恰好等于完整占位符时才豁免，绝不放行「掩码前缀+明文后缀」的混合值。 */
   private static final String MASKED_PLACEHOLDER =
       "\\*\\*\\*MASKED(?:-(?:PRIVATE-KEY|TOKEN|KEY))?\\*\\*\\*";
+  /** 合法双引号字符串内容单元（含空格、逗号与反斜杠转义引号），严格以未转义闭双引号为整值边界。 */
+  private static final String DOUBLE_QUOTED_ATOM = "(?:[^\"\\\\]|\\\\.)";
+  /** 合法单引号字符串内容单元（含空格、逗号与反斜杠转义引号），严格以未转义闭单引号为整值边界。 */
+  private static final String SINGLE_QUOTED_ATOM = "(?:[^'\\\\]|\\\\.)";
 
   /**
-   * 流式切点检测规则集：与 {@link #mask(String)} 的 10 类规则严格一一对应、彼此独立扫描，
-   * 彻底消除单一交替正则下「先命中 Authorization KV 吃掉 Bearer 前缀、导致后续不透明令牌漏检」的重叠盲区。
+   * 流式切点检测规则集：与 {@link #mask(String)} 的规则严格一一对应、彼此独立扫描，
+   * 彻底消除重叠盲区；带引号 KV 按对应未转义闭引号界定整值范围，防止引号内的空格或逗号提前切分。
    */
   static final List<Pattern> STREAM_PARTIAL_PATTERNS =
       List.of(
@@ -53,7 +57,19 @@ public final class SensitiveDataMasker {
           Pattern.compile("sk-[A-Za-z0-9_-]*"),
           Pattern.compile("://[^/\\s:@'\"]+(?::[^/\\s@'\"]*@?)?"),
           Pattern.compile(
-              "(?i:\"?'?" + KV_KEY + "'?\"?)(?:\\s*[:=]\\s*\"?'?" + KV_VALUE_CHARS + "*|\\s+)"));
+              "(?i:\"?'?"
+                  + KV_KEY
+                  + "'?\"?\\s*[:=]\\s*(?<!\\\\)\")"
+                  + DOUBLE_QUOTED_ATOM
+                  + "*(?:\\\\|\"?)"),
+          Pattern.compile(
+              "(?i:\"?'?"
+                  + KV_KEY
+                  + "'?\"?\\s*[:=]\\s*(?<!\\\\)')"
+                  + SINGLE_QUOTED_ATOM
+                  + "*(?:\\\\|'?)"),
+          Pattern.compile(
+              "(?i:\"?'?" + KV_KEY + "'?\"?)(?:\\s*[:=]\\s*" + KV_VALUE_CHARS + "*|\\s+)"));
 
   private static final Pattern UNCLOSED_PEM =
       Pattern.compile("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*");
@@ -62,7 +78,27 @@ public final class SensitiveDataMasker {
       Pattern.compile(
           "(?<![A-Za-z0-9])((?:sk-|github_pat_|gh[pousr]_|glpat-|AIza|AKIA|ASIA|(?i:bearer)\\s+|eyJ))"
               + "(?!" + MASKED_PLACEHOLDER + "$)[A-Za-z0-9._~+/=-]*$");
-  /** 仅锚定流末尾尚未闭合的凭据键值（与整段规则一致支持跨行空白与引号），仅在流异常中断时兜底；仅豁免整值恰好等于完整占位符。 */
+  /** 流末尾尚未闭合的双引号凭据值（允许含空格、逗号与转义引号），仅当整值恰好等于完整占位符时豁免。 */
+  private static final Pattern TRUNCATED_QUOTED_DOUBLE_KV =
+      Pattern.compile(
+          "(?i)(\"?'?"
+              + KV_KEY
+              + "'?\"?\\s*[:=]\\s*(?<!\\\\)\")(?!"
+              + MASKED_PLACEHOLDER
+              + "$)"
+              + DOUBLE_QUOTED_ATOM
+              + "+$");
+  /** 流末尾尚未闭合的单引号凭据值（允许含空格、逗号与转义引号），仅当整值恰好等于完整占位符时豁免。 */
+  private static final Pattern TRUNCATED_QUOTED_SINGLE_KV =
+      Pattern.compile(
+          "(?i)(\"?'?"
+              + KV_KEY
+              + "'?\"?\\s*[:=]\\s*(?<!\\\\)')(?!"
+              + MASKED_PLACEHOLDER
+              + "$)"
+              + SINGLE_QUOTED_ATOM
+              + "+$");
+  /** 仅锚定流末尾尚未闭合的无引号凭据键值（与整段规则一致支持跨行空白），仅在流异常中断时兜底；仅豁免整值恰好等于完整占位符。 */
   private static final Pattern TRUNCATED_KV =
       Pattern.compile(
           "(?i)(\"?'?" + KV_KEY + "'?\"?\\s*[:=]\\s*\"?'?)(?!" + MASKED_PLACEHOLDER + "$)"
@@ -72,7 +108,27 @@ public final class SensitiveDataMasker {
   private static final Pattern TRUNCATED_URL_CREDENTIALS =
       Pattern.compile("://[^/\\s:@'\"]+:(?!\\d{1,5}$)[^/\\s@'\"]+$");
 
-  /** 键值对允许单/双引号与 JSON、HTML 转义引号；值遇到引号、括号、分隔符即停止，绝不吞结构符；仅当整值恰好等于完整占位符时才豁免。 */
+  /** 双引号敏感键值：严格以未转义闭双引号为整值边界，保护引号内含空格/逗号/转义引号的完整口令并保留相邻 JSON 字段。 */
+  private static final Pattern QUOTED_DOUBLE_KV_PATTERN =
+      Pattern.compile(
+          "(?i)(\"?'?"
+              + KV_KEY
+              + "'?\"?\\s*[:=]\\s*(?<!\\\\)\")(?!"
+              + MASKED_PLACEHOLDER
+              + "\")("
+              + DOUBLE_QUOTED_ATOM
+              + "{6,})(\")");
+  /** 单引号敏感键值：严格以未转义闭单引号为整值边界，保护引号内含空格/逗号/转义引号的完整口令并保留相邻字段。 */
+  private static final Pattern QUOTED_SINGLE_KV_PATTERN =
+      Pattern.compile(
+          "(?i)(\"?'?"
+              + KV_KEY
+              + "'?\"?\\s*[:=]\\s*(?<!\\\\)')(?!"
+              + MASKED_PLACEHOLDER
+              + "')("
+              + SINGLE_QUOTED_ATOM
+              + "{6,})(')");
+  /** 无引号或未闭合单段敏感键值：值遇到空白、括号、分隔符即停止，绝不吞结构符；仅当整值恰好等于完整占位符时才豁免。 */
   private static final Pattern SECRET_KV_PATTERN =
       Pattern.compile(
           "(?i)(\"?'?(?:api[_-]?key|secret|password|passwd|token|authorization|cookie)'?\"?\\s*[:=]\\s*\"?'?)"
@@ -84,12 +140,19 @@ public final class SensitiveDataMasker {
   public record TruncatedText(String text, boolean truncated) {}
 
   /**
-   * 整段脱敏：严格执行「多行私钥块（完整+未闭合）→ 专项令牌与 URL 凭据 → 泛化键值」三层顺序，
-   * 确保泛化 KV 规则绝不会提前吃掉 {@code -----BEGIN} 或 {@code Bearer} 前缀而破坏后续专项结构识别。
+   * 整段脱敏：严格执行「多行私钥块（完整+未闭合）→ 专项令牌与 URL 凭据 → 带引号整值 KV → 泛化无引号 KV」顺序，
+   * 确保泛化规则绝不提前吃掉专项前缀，且带引号敏感值以对应未转义闭引号界定整值边界。
    */
   public static String mask(String input) {
     if (input == null || input.isEmpty()) return input;
     String value = maskBlocksAndTokens(input);
+    value = maskKvValues(value);
+    return value;
+  }
+
+  private static String maskKvValues(String input) {
+    String value = QUOTED_DOUBLE_KV_PATTERN.matcher(input).replaceAll("$1***MASKED***$3");
+    value = QUOTED_SINGLE_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***$3");
     value = SECRET_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***");
     return value;
   }
@@ -175,7 +238,9 @@ public final class SensitiveDataMasker {
     String value = maskBlocksAndTokens(input);
     value = TRUNCATED_TOKEN.matcher(value).replaceAll("$1***MASKED***");
     value = TRUNCATED_URL_CREDENTIALS.matcher(value).replaceAll("://***MASKED***");
-    value = SECRET_KV_PATTERN.matcher(value).replaceAll("$1***MASKED***");
+    value = maskKvValues(value);
+    value = TRUNCATED_QUOTED_DOUBLE_KV.matcher(value).replaceAll("$1***MASKED***");
+    value = TRUNCATED_QUOTED_SINGLE_KV.matcher(value).replaceAll("$1***MASKED***");
     value = TRUNCATED_KV.matcher(value).replaceAll("$1***MASKED***");
     return value;
   }
