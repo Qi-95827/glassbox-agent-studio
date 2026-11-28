@@ -269,6 +269,8 @@ public class AgentScopeExecutor implements AgentExecutor {
     var mcpManager = mcpClients == null ? null : mcpClients.getIfAvailable();
     // 只有真正注册了外部工具的节点才在装配记录中暴露 ToolKind.MCP，否则运行时 beforeTool 会误判越权。
     boolean mcpRegistered = false;
+    // 逐工具如实记录准入结论：被拒绝的、同名跳过的、真正注册的都要进装配快照，供玻璃盒逐项透视。
+    var mcpToolDecisions = new java.util.ArrayList<AgentAssemblySnapshot.McpToolDecision>();
     if (mcpProvider != null && mcpManager != null && request.context().runId() != null) {
       for (var binding : mcpProvider.bindingsForRun(request.context().runId())) {
         String name = binding.exposedName();
@@ -277,6 +279,9 @@ public class AgentScopeExecutor implements AgentExecutor {
             dev.workbench.infrastructure.mcp.McpToolAdmission.decide(
                 request.role(), binding.riskLevel());
         if (!admission.allowed()) {
+          mcpToolDecisions.add(
+              new AgentAssemblySnapshot.McpToolDecision(
+                  name, binding.riskLevel(), false, admission.reasonCode()));
           runtime.event(
               dev.workbench.domain.EventType.TOOL_REJECTED,
               "未装配外部工具 " + name + "：" + admission.reason());
@@ -285,6 +290,13 @@ public class AgentScopeExecutor implements AgentExecutor {
         if (toolkit.getTool(name) == null) {
           toolkit.registerAgentTool(new McpAgentTool(binding, mcpManager, toolContext));
           mcpRegistered = true;
+          mcpToolDecisions.add(
+              new AgentAssemblySnapshot.McpToolDecision(name, binding.riskLevel(), true, ""));
+        } else {
+          // 与内置工具同名时保持既有跳过行为，但必须留下可审计的拒绝原因。
+          mcpToolDecisions.add(
+              new AgentAssemblySnapshot.McpToolDecision(
+                  name, binding.riskLevel(), false, "DUPLICATE_TOOL_NAME"));
         }
       }
     }
@@ -349,7 +361,8 @@ public class AgentScopeExecutor implements AgentExecutor {
                             tool.toolName(),
                             tool.fileExtensions()))
                 .toList(),
-            memoryMatches);
+            memoryMatches,
+            mcpToolDecisions);
     try (ReActAgent agent =
         ReActAgent.builder()
             .name(definition.name())

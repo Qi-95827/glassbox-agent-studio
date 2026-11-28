@@ -123,6 +123,52 @@ class ToolMcpRunnerGateSplitTest {
     assertEquals("DENY", check(mismatchedChecks, "DYNAMIC_APPROVAL"), mismatchedChecks.toString());
   }
 
+  /**
+   * 反例：{@code args.path} 是非字符串（整数/布尔/数组/对象/null/JSON 字符串形式）时，
+   * 即使外层题面 {@code call.path} 合法，也必须在 ARGUMENT_SCHEMA 被拒绝，绝不回退外层路径掩盖类型错误。
+   *
+   * <p>与在线 {@code GatewayAgentTool} 100% 等价：任何非 {@code String} 的参数值一律判定类型不符。
+   */
+  @Test
+  void nonStringArgumentPathIsRejectedAtSchemaGateWithoutFallingBackToOuterPath() {
+    var cases =
+        new java.util.LinkedHashMap<String, Object>();
+    cases.put("整数", Map.of("path", 123));
+    cases.put("布尔", Map.of("path", true));
+    cases.put("数组", Map.of("path", List.of("src/app.js")));
+    cases.put("对象", Map.of("path", Map.of("file", "src/app.js")));
+    cases.put("JSON 字符串形式", "{\"path\":123}");
+    cases.put("显式 null", "{\"path\":null}");
+
+    for (var entry : cases.entrySet()) {
+      EvalCaseExecution execution =
+          runner.run(
+              sample(
+                  List.of(
+                      Map.of(
+                          "name", "read_file",
+                          "kind", "WORKSPACE_READ",
+                          "path", "src/app.js",
+                          "args", entry.getValue()))),
+              config(),
+              "LOCAL");
+
+      var checks = checks(execution);
+      assertEquals("DENY", check(checks, "ARGUMENT_SCHEMA"), entry.getKey() + " → " + checks);
+      assertEquals("SKIP", check(checks, "PATH_WHITELIST"), entry.getKey() + " → " + checks);
+      assertFalse(
+          Boolean.TRUE.equals(execution.metrics().get("schemaValid")),
+          entry.getKey() + " → 类型错误必须判定 schemaValid=false：" + execution.metrics());
+      assertEquals(
+          0,
+          ((Number) execution.metrics().get("executedCount")).intValue(),
+          entry.getKey() + " → 类型错误不得真正执行：" + execution.metrics());
+      assertTrue(
+          ((Number) execution.metrics().get("deniedCount")).intValue() >= 1,
+          entry.getKey() + " → 必须计入拒绝数：" + execution.metrics());
+    }
+  }
+
   private static EvalSample writeSample(String kindName, String path) {
     return new EvalSample(
         "tool-write-" + path,

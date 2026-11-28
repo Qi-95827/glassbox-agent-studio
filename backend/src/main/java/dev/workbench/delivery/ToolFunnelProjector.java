@@ -37,10 +37,27 @@ final class ToolFunnelProjector {
         components.authorization() != null && components.authorization().writeAuthorized();
     var grants = new ArrayList<ExecutionViewService.ToolGrantView>();
     var filtered = new ArrayList<ExecutionViewService.ToolFilterView>();
+    var mcpDecisions =
+        components.mcpToolDecisions().stream()
+            .map(
+                decision ->
+                    new ExecutionViewService.McpToolDecisionView(
+                        decision.exposedName(),
+                        decision.riskLevel(),
+                        decision.allowed(),
+                        decision.reasonCode()))
+            .toList();
+    // 存在被拒绝的外部工具时，ToolKind.MCP 的裁剪原因必须指向角色策略，而不是笼统的「定义未声明」。
+    boolean mcpDenied = mcpDecisions.stream().anyMatch(decision -> !decision.allowed());
     for (ToolKind kind : ToolKind.values()) {
       Integer version = granted.get(kind);
       if (version != null) {
         grants.add(new ExecutionViewService.ToolGrantView(kind.name(), version));
+        continue;
+      }
+      if (kind == ToolKind.MCP && mcpDenied) {
+        filtered.add(
+            new ExecutionViewService.ToolFilterView(kind.name(), "MCP_TOOLS_DENIED_BY_ROLE"));
         continue;
       }
       if (!declared.contains(kind)) {
@@ -65,6 +82,7 @@ final class ToolFunnelProjector {
         components.definition().version(),
         List.copyOf(grants),
         List.copyOf(filtered),
-        attemptNumber);
+        attemptNumber,
+        mcpDecisions);
   }
 }

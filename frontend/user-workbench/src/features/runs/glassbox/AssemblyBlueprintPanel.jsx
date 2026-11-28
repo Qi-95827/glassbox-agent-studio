@@ -12,7 +12,16 @@ const FILTER_REASON_KEY = {
   NODE_NOT_WORKSPACE_READ: 'assembly.reasonNodeNotRead',
   NODE_NOT_WRITE_AUTHORIZED: 'assembly.reasonNodeNotWrite',
   RUN_NOT_WRITE_AUTHORIZED: 'assembly.reasonRunNotWrite',
-  RUN_POLICY_FILTERED: 'assembly.reasonRunPolicy'
+  RUN_POLICY_FILTERED: 'assembly.reasonRunPolicy',
+  MCP_TOOLS_DENIED_BY_ROLE: 'assembly.reasonMcpDeniedByRole'
+};
+
+/** 逐 MCP 工具的原因编码：允许为空编码，拒绝时按编码翻译，未知编码原样展示。 */
+const MCP_REASON_KEY = {
+  REVIEWER_MCP_FORBIDDEN: 'assembly.mcpReasonReviewer',
+  ANALYST_HIGH_RISK_MCP_FORBIDDEN: 'assembly.mcpReasonAnalystHighRisk',
+  DUPLICATE_TOOL_NAME: 'assembly.mcpReasonDuplicate',
+  '': 'assembly.mcpReasonAllowed'
 };
 
 /**
@@ -33,9 +42,23 @@ export default function AssemblyBlueprintPanel({ node, attempts, toolFunnel = nu
   const attemptNo = toolFunnel?.attemptNumber ?? latest?.number ?? null;
   const sources = components?.input?.sources ?? [];
   const memoryMatches = components?.memoryMatches ?? [];
+  // 逐 MCP 工具准入优先取服务端漏斗投影，历史数据回退到装配快照原字段。
+  const mcpDecisions = toolFunnel?.mcpDecisions ?? components?.mcpToolDecisions ?? [];
 
   const filterReason = reason =>
     FILTER_REASON_KEY[reason] ? t(FILTER_REASON_KEY[reason]) : reason || t('assembly.notAssembled');
+
+  const mcpReason = decision => {
+    const key = MCP_REASON_KEY[decision.reasonCode ?? ''];
+    if (key) return t(key);
+    return decision.reasonCode || t('assembly.notAssembled');
+  };
+
+  // 只对已知风险等级翻译；出现未知等级时原样展示，绝不伪造一个不存在的文案。
+  const mcpRiskLabel = riskLevel => {
+    const key = { LOW: 'assembly.mcpRisk.LOW', HIGH: 'assembly.mcpRisk.HIGH' }[riskLevel];
+    return key ? t(key) : riskLevel || '';
+  };
 
   return (
     <Stack spacing={1.5}>
@@ -170,6 +193,57 @@ export default function AssemblyBlueprintPanel({ node, attempts, toolFunnel = nu
               </Stack>
             ))}
           </Stack>
+        )}
+
+        {mcpDecisions.length > 0 && (
+          <>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', mt: 1.25, mb: 0.5 }}
+            >
+              {t('assembly.mcpDecisions', { count: mcpDecisions.length })}
+            </Typography>
+            <Stack spacing={0.6} data-testid="assembly-mcp-decisions">
+              {mcpDecisions.map(decision => (
+                <Stack
+                  key={decision.exposedName}
+                  data-testid={`assembly-mcp-${decision.exposedName}`}
+                  direction="row"
+                  spacing={0.75}
+                  sx={{
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    rowGap: 0.5,
+                    px: 1,
+                    py: 0.55,
+                    borderRadius: 2,
+                    bgcolor: decision.allowed ? googleTokens.successBg : '#FCE8E6',
+                    color: decision.allowed ? googleTokens.successFg : '#C5221F'
+                  }}
+                >
+                  {decision.allowed ? (
+                    <CheckCircleOutlineRounded sx={{ fontSize: 14, flexShrink: 0 }} />
+                  ) : (
+                    <LockOutlined sx={{ fontSize: 14, flexShrink: 0 }} />
+                  )}
+                  <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                    {decision.exposedName}
+                  </Typography>
+                  <Chip
+                    size="small"
+                    data-testid={`assembly-mcp-risk-${decision.exposedName}`}
+                    label={mcpRiskLabel(decision.riskLevel)}
+                    sx={{ height: 18, fontSize: 10 }}
+                  />
+                  <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                    {decision.allowed ? t('assembly.mcpAllowed') : t('assembly.mcpRejected')}
+                  </Typography>
+                  <Typography variant="caption">— {mcpReason(decision)}</Typography>
+                </Stack>
+              ))}
+            </Stack>
+          </>
         )}
       </Box>
 

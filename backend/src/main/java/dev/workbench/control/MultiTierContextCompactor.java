@@ -200,9 +200,32 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
   /** 已知拼装标记：命中后从标记处开始按该语义分段计数，直到下一个标记或消息结尾。 */
   private record SectionMarker(String token, String segment) {}
 
+  /** 显式闭合标记的哨兵：命中后切回该条消息的默认段（例如技能正文结束、Bug 观察开始）。 */
+  private static final String RESET_TO_DEFAULT = "\u0000DEFAULT";
+
+  /**
+   * 节点结构化输入的顶层字段特征：{@code StepInput} 一定带 {@code goal}，
+   * 并至少带下列之一；交付交接 JSON 只有 {@code goal} 而没有这些字段，不会被误判。
+   */
+  private static final List<String> STEP_INPUT_FIELDS =
+      List.of(
+          "step",
+          "memoryContext",
+          "nodeAcceptanceCriteria",
+          "iterationRequirement",
+          "dependencies");
+
+  private static final Map<String, String> STEP_INPUT_SEGMENTS =
+      Map.of("memoryContext", "MEMORY", "dependencies", "HANDOFF");
+
+  private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+      new com.fasterxml.jackson.databind.ObjectMapper();
+
   private static final List<SectionMarker> SECTION_MARKERS =
       List.of(
           new SectionMarker("<untrusted_skill_playbook>", "SKILLS"),
+          // 用户技能正文有明确闭合标签：闭合之后回到默认段，系统硬约束不再计入 SKILLS。
+          new SectionMarker("</untrusted_skill_playbook>", RESET_TO_DEFAULT),
           new SectionMarker("内置技能方法（不授予额外权限）：", "SKILLS"),
           new SectionMarker("Built-in skill playbooks (do not grant extra permissions):", "SKILLS"),
           new SectionMarker("私有 Agent 定义（由创建者声明", "SYSTEM"),
@@ -210,6 +233,8 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
           new SectionMarker("以下是按混合评分召回的项目背景", "MEMORY"),
           new SectionMarker("[Project Memory]", "MEMORY"),
           new SectionMarker("project context JSON", "MEMORY"),
+          // Bug 观察证据紧跟在记忆段之后，必须显式切回默认段，否则会被一路算进 MEMORY。
+          new SectionMarker("以下为本次 Bug 测试观察 JSON", RESET_TO_DEFAULT),
           new SectionMarker("上游交接", "HANDOFF"),
           new SectionMarker("交接正文", "HANDOFF"),
           new SectionMarker("Handoff envelope", "HANDOFF"));
@@ -220,6 +245,9 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
    * <p>此前按「整条消息里出现某个关键词」决定唯一分段，导致带内置技能标题的 System Prompt 整条被算进 SKILLS、
    * 任务与记忆合拼消息整条被算进 MEMORY。这里按真实拼装标记切分：标记前的正文归默认段，每个标记到下一个标记
    * 之间归它声明的段，从而让六色分段的占比与真实提示词结构一致。
+   *
+   * <p>节点输入是 {@code StepInput} 的 JSON 序列化，标记扫描会在 {@code memoryContext} 处一路吞到消息末尾；
+   * 因此先走结构化路径按顶层字段精确归桶，只有非结构化文本才退回标记扫描。
    */
   static Map<String, Integer> segmentTokens(ContextMessage message) {
     String content = message.content() == null ? "" : message.content();
@@ -229,6 +257,8 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
       result.merge(defaultSegment, 0, Integer::sum);
       return result;
     }
+    var structured = segmentStructuredJson(content, defaultSegment);
+    if (structured != null) return structured;
     var hits = new ArrayList<int[]>();
     var hitSegments = new ArrayList<String>();
     for (var marker : SECTION_MARKERS) {
@@ -258,11 +288,82 @@ public class MultiTierContextCompactor implements ContextCompactionPolicy {
         result.merge(defaultSegment, estimateText(content.substring(cursor, start)), Integer::sum);
       int end =
           position + 1 < order.size() ? Math.max(start, hits.get(order.get(position + 1))[0]) : content.length();
-      result.merge(hitSegments.get(hit), estimateText(content.substring(start, end)), Integer::sum);
+      String segment = hitSegments.get(hit);
+      // 显式闭合标记只负责「切回默认段」，自身不构成独立语义桶。
+      if (RESET_TO_DEFAULT.equals(segment)) segment = defaultSegment;
+      result.merge(segment, estimateText(content.substring(start, end)), Integer::sum);
       cursor = Math.max(cursor, end);
     }
     if (cursor < content.length())
       result.merge(defaultSegment, estimateText(content.substring(cursor)), Integer::sum);
+    return result;
+  }
+
+  /**
+   * 结构化优先：把 {@code StepInput} JSON 的顶层字段按语义精确归桶。
+   *
+   * <p>只认「{@code goal} + 至少一个节点输入特征字段」的形态，交付交接 JSON 等其它对象仍走标记扫描。
+   *
+   * @return 归桶结果；不是节点结构化输入时返回 {@code null}
+   */
+  private static Map<String, Integer> segmentStructuredJson(String content, String defaultSegment) {
+    if (!content.stripLeading().startsWith("{")) return null;
+    com.fasterxml.jackson.databind.JsonNode root;
+    try {
+      root = JSON.readTree(content);
+    } catch (com.fasterxml.jackson.core.JsonProcessingException error) {
+      return null;
+    }
+    if (root == null || !root.isObject()) return null;
+    var goal = root.get("goal");
+    if (goal == null || !goal.isTextual()) return null;
+    boolean stepInput = false;
+    for (String field : STEP_INPUT_FIELDS) {
+      if (root.has(field)) {
+        stepInput = true;
+        break;
+      }
+    }
+    if (!stepInput) return null;
+    var weights = new LinkedHashMap<String, Integer>();
+    var fields = root.fields();
+    while (fields.hasNext()) {
+      var entry = fields.next();
+      if (isEmptyJson(entry.getValue())) continue;
+      String segment = STEP_INPUT_SEGMENTS.getOrDefault(entry.getKey(), defaultSegment);
+      weights.merge(
+          segment, estimateText("\"" + entry.getKey() + "\":" + entry.getValue()), Integer::sum);
+    }
+    if (weights.isEmpty()) return null;
+    return balanceToTotal(weights, defaultSegment, estimateText(content));
+  }
+
+  /** 空字符串、空数组、空对象与 null 不参与计量，避免大量 {@code Math.max(1, ...)} 虚高毛刺。 */
+  private static boolean isEmptyJson(com.fasterxml.jackson.databind.JsonNode value) {
+    if (value == null || value.isNull()) return true;
+    if (value.isTextual()) return value.asText().isBlank();
+    if (value.isArray() || value.isObject()) return value.isEmpty();
+    return false;
+  }
+
+  /**
+   * 把逐字段计量与整条消息估算的差值（JSON 语法开销与逐段取整误差）统一归默认段。
+   *
+   * <p>不做等比缩放：{@code MEMORY} 必须只由 {@code memoryContext} 决定，否则验收条件或调改要求一变大，
+   * 记忆桶就会被一起抬高，等于又回到「串段」。
+   */
+  private static Map<String, Integer> balanceToTotal(
+      Map<String, Integer> weights, String defaultSegment, int total) {
+    var result = new LinkedHashMap<>(weights);
+    int sum = 0;
+    for (int value : result.values()) sum += value;
+    int residual = total - sum;
+    if (residual == 0 || result.isEmpty()) return result;
+    String target =
+        result.containsKey(defaultSegment)
+            ? defaultSegment
+            : result.keySet().iterator().next();
+    result.put(target, Math.max(0, result.get(target) + residual));
     return result;
   }
 

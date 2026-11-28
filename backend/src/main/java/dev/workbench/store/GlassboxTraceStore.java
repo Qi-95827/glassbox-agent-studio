@@ -143,7 +143,7 @@ public class GlassboxTraceStore {
         .toList();
   }
 
-  private static List<ToolSchemaView> maskTools(List<ToolSchemaView> items) {
+  private List<ToolSchemaView> maskTools(List<ToolSchemaView> items) {
     if (items == null || items.isEmpty()) return List.of();
     return items.stream()
         .map(
@@ -151,11 +151,11 @@ public class GlassboxTraceStore {
                 new ToolSchemaView(
                     maskField(item.name()),
                     maskField(item.description()),
-                    maskField(item.parametersJson())))
+                    maskJsonOrText(item.parametersJson())))
         .toList();
   }
 
-  private static List<ToolCallDecision> maskToolCalls(List<ToolCallDecision> items) {
+  private List<ToolCallDecision> maskToolCalls(List<ToolCallDecision> items) {
     if (items == null || items.isEmpty()) return List.of();
     return items.stream()
         .map(
@@ -163,7 +163,7 @@ public class GlassboxTraceStore {
                 new ToolCallDecision(
                     maskField(item.id()),
                     maskField(item.name()),
-                    maskField(item.argumentsJson())))
+                    maskJsonOrText(item.argumentsJson())))
         .toList();
   }
 
@@ -184,10 +184,101 @@ public class GlassboxTraceStore {
     return value == null ? null : SensitiveDataMasker.mask(value);
   }
 
+  /** 敏感键名归一后集合：与 {@link SensitiveDataMasker} 的键值规则同口径。 */
+  private static final List<String> SENSITIVE_KEY_TOKENS =
+      List.of("apikey", "secret", "password", "passwd", "token", "authorization", "cookie");
+
+  /** 完整掩码占位符：整值等于它们时视为已脱敏，不再叠加。 */
+  private static final List<String> MASKED_PLACEHOLDERS =
+      List.of("***MASKED***", "***MASKED-PRIVATE-KEY***", "***MASKED-TOKEN***", "***MASKED-KEY***");
+
+  private static boolean sensitiveKey(String fieldName) {
+    if (fieldName == null) return false;
+    String normalized =
+        fieldName.toLowerCase(java.util.Locale.ROOT).replace("_", "").replace("-", "");
+    for (String token : SENSITIVE_KEY_TOKENS) if (normalized.contains(token)) return true;
+    return false;
+  }
+
+  private static boolean maskedPlaceholder(String value) {
+    return value != null && MASKED_PLACEHOLDERS.contains(value);
+  }
+
+  /**
+   * 载荷字段的内层 JSON 叶子级脱敏。
+   *
+   * <p>工具参数与参数 Schema 本身是 JSON 字符串：若直接对整段文本跑正则，一个未闭合 PEM 会吞掉该字符串
+   * 自身的闭合引号与相邻字段，落库后无法再反序列化。这里先解析成树、逐叶子脱敏、再序列化回合法 JSON；
+   * 非 JSON 文本或解析失败时退回整段脱敏，绝不抛异常。
+   */
+  private String maskJsonOrText(String value) {
+    if (value == null || value.isBlank()) return value;
+    String trimmed = value.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("["))
+      return SensitiveDataMasker.mask(value);
+    com.fasterxml.jackson.databind.JsonNode root;
+    try {
+      root = json.readTree(value);
+    } catch (JsonProcessingException error) {
+      return SensitiveDataMasker.mask(value);
+    }
+    if (root == null || !(root.isObject() || root.isArray()))
+      return SensitiveDataMasker.mask(value);
+    maskJsonLeaves(root);
+    try {
+      return json.writeValueAsString(root);
+    } catch (JsonProcessingException error) {
+      return SensitiveDataMasker.mask(value);
+    }
+  }
+
+  private static void maskJsonLeaves(com.fasterxml.jackson.databind.JsonNode node) {
+    if (node instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
+      var names = new java.util.ArrayList<String>();
+      object.fieldNames().forEachRemaining(names::add);
+      for (String name : names) {
+        var child = object.get(name);
+        if (child == null) continue;
+        if (child.isObject() || child.isArray()) {
+          maskJsonLeaves(child);
+          continue;
+        }
+        if (!child.isTextual()) continue;
+        object.put(name, maskLeafText(name, child.asText()));
+      }
+      return;
+    }
+    if (node instanceof com.fasterxml.jackson.databind.node.ArrayNode array) {
+      for (int index = 0; index < array.size(); index++) {
+        var child = array.get(index);
+        if (child == null) continue;
+        if (child.isObject() || child.isArray()) {
+          maskJsonLeaves(child);
+          continue;
+        }
+        if (child.isTextual())
+          array.set(index, com.fasterxml.jackson.databind.node.TextNode.valueOf(
+              SensitiveDataMasker.mask(child.asText())));
+      }
+    }
+  }
+
+  /**
+   * 敏感键名下的叶子值：先按既有规则脱敏；若整值未变化（例如无已知前缀的口令），
+   * 再整体替换为统一占位符，避免因叶子拆分而漏网。
+   */
+  private static String maskLeafText(String fieldName, String raw) {
+    String masked = SensitiveDataMasker.mask(raw);
+    if (!sensitiveKey(fieldName)) return masked;
+    if (!masked.equals(raw) || raw.length() < 6 || maskedPlaceholder(raw)) return masked;
+    return "***MASKED***";
+  }
+
   @Transactional
   public void recordToolTrace(String runId, String toolCallId, ToolCallTrace trace) {
     if (runId == null || toolCallId == null || trace == null) return;
-    var args = SensitiveDataMasker.maskAndTruncate(trace.inputArgs());
+    // 工具入参常常是 JSON 字符串：先在叶子层脱敏，保证脱敏后仍是合法 JSON，再做体积截断。
+    var args = SensitiveDataMasker.maskAndTruncate(maskJsonOrText(trace.inputArgs()));
     var checksJson = writeListWithinLimit(maskGatewayChecks(trace.gatewayChecks()), null);
     var full = SensitiveDataMasker.maskAndTruncate(trace.fullResult());
     boolean truncated = trace.resultTruncated() || args.truncated() || full.truncated();

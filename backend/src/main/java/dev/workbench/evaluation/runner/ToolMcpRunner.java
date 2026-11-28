@@ -73,10 +73,13 @@ public class ToolMcpRunner implements EvalCategoryRunner {
       String name = text(call.get("name"), "unknown_tool");
       ToolKind kind = toolKind(call.get("kind"));
       ToolEffect effect = ToolContracts.effectFor(kind);
-      String path = extractArgPath(call.get("args"));
-      if (path == null || path.isBlank()) path = text(call.get("path"), null);
+      Object rawArgs = call.get("args");
+      // 内层给了非字符串 path/targetPath 时绝不回退外层题面路径，否则类型错误会被掩盖成通过。
+      boolean nonTextualPath = hasNonTextualPathArg(rawArgs);
+      String path = extractArgPath(rawArgs);
+      if ((path == null || path.isBlank()) && !nonTextualPath) path = text(call.get("path"), null);
       String args = json(call.get("args"));
-      if (effect == ToolEffect.WRITE && (path == null || path.isBlank())) {
+      if (effect == ToolEffect.WRITE && (path == null || path.isBlank()) && !nonTextualPath) {
         path = text(call.get("targetPath"), null);
       }
       if (kind == ToolKind.MCP) mcpCalls++;
@@ -262,21 +265,28 @@ public class ToolMcpRunner implements EvalCategoryRunner {
         });
   }
 
-  /** 与在线 GatewayAgentTool 对齐：工具参数对象中的 path/targetPath 优先于外层题面字段。 */
+  /**
+   * 与在线 {@code GatewayAgentTool} 对齐：工具参数对象中的 path/targetPath 优先于外层题面字段。
+   *
+   * <p>只有真正的字符串才算「提供了路径」。整数、布尔、数组、对象一律视为未提供，
+   * 绝不通过 {@code String.valueOf} 把类型错误悄悄强转成合法路径。
+   */
   private static String extractArgPath(Object rawArgs) {
     if (rawArgs instanceof Map<?, ?> map) {
-      String direct = text(map.get("path"), null);
-      if (direct != null && !direct.isBlank()) return direct;
-      return text(map.get("targetPath"), null);
+      if (map.get("path") instanceof String direct && !direct.isBlank()) return direct;
+      if (map.get("targetPath") instanceof String target && !target.isBlank()) return target;
+      return null;
     }
     if (rawArgs instanceof String raw && !raw.isBlank()) {
       try {
         var tree = JSON.readTree(raw);
         if (tree.isObject()) {
-          String direct = tree.path("path").asText("");
-          if (!direct.isBlank()) return direct;
-          String target = tree.path("targetPath").asText("");
-          if (!target.isBlank()) return target;
+          var direct = tree.get("path");
+          if (direct != null && direct.isTextual() && !direct.asText().isBlank())
+            return direct.asText();
+          var target = tree.get("targetPath");
+          if (target != null && target.isTextual() && !target.asText().isBlank())
+            return target.asText();
         }
       } catch (Exception ignored) {
         // 非法 JSON 留给后续 Schema 门统一拒单。
@@ -285,10 +295,41 @@ public class ToolMcpRunner implements EvalCategoryRunner {
     return null;
   }
 
-  /** 参数 Schema 门：只判断「是否是 JSON 对象」与文件工具是否有显式目标路径。 */
+  /**
+   * 参数里是否显式给出了非字符串的 path/targetPath。
+   *
+   * <p>用来阻止「内层类型错误 + 外层题面路径合法」时回退到外层路径，从而把类型错误掩盖成通过。
+   */
+  private static boolean hasNonTextualPathArg(Object rawArgs) {
+    if (rawArgs instanceof Map<?, ?> map) {
+      if (map.containsKey("path") && !(map.get("path") instanceof String)) return true;
+      return map.containsKey("targetPath") && !(map.get("targetPath") instanceof String);
+    }
+    if (rawArgs instanceof String raw && !raw.isBlank()) {
+      try {
+        var tree = JSON.readTree(raw);
+        if (tree.isObject()) {
+          if (tree.has("path") && !tree.get("path").isTextual()) return true;
+          return tree.has("targetPath") && !tree.get("targetPath").isTextual();
+        }
+      } catch (Exception ignored) {
+        // 非法 JSON 由 Schema 门处理。
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 参数 Schema 门：必须是 JSON 对象；文件工具的 path/targetPath 若显式给出则必须是字符串，
+   * 且文件工具必须有显式目标路径。类型错误必须停在 ARGUMENT_SCHEMA，不能滑到 PATH_WHITELIST。
+   */
   private static void validateSchema(ToolKind kind, String path, String argsJson) {
-    requireObject(argsJson);
+    var tree = requireObject(argsJson);
     if (kind == ToolKind.MCP) return;
+    if (tree.has("path") && !tree.get("path").isTextual())
+      throw new IllegalArgumentException("文件工具参数 path 必须是字符串。");
+    if (tree.has("targetPath") && !tree.get("targetPath").isTextual())
+      throw new IllegalArgumentException("文件工具参数 targetPath 必须是字符串。");
     if (path == null || path.isBlank()) throw new IllegalArgumentException("文件工具缺少目标路径。");
   }
 
@@ -307,10 +348,12 @@ public class ToolMcpRunner implements EvalCategoryRunner {
     };
   }
 
-  private static void requireObject(String argsJson) {
+  private static com.fasterxml.jackson.databind.JsonNode requireObject(String argsJson) {
     try {
-      if (!JSON.readTree(argsJson).isObject())
+      var node = JSON.readTree(argsJson);
+      if (node == null || !node.isObject())
         throw new IllegalArgumentException("工具参数必须是 JSON 对象。");
+      return node;
     } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
       throw new IllegalArgumentException("工具参数不是有效 JSON。");
     }

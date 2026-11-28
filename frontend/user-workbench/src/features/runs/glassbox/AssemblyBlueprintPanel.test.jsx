@@ -109,4 +109,113 @@ describe('AssemblyBlueprintPanel 工具漏斗', () => {
     expect(screen.getByTestId('assembly-funnel-attempt')).toHaveTextContent('尝试 #2');
     expect(screen.queryByText(/round-1/)).not.toBeInTheDocument();
   });
+
+  const mcpFunnel = {
+    definitionId: 'workspace-edit',
+    definitionVersion: 1,
+    attemptNumber: 1,
+    granted: [],
+    filtered: [{ kind: 'MCP', reason: 'MCP_TOOLS_DENIED_BY_ROLE' }],
+    mcpDecisions: [
+      { exposedName: 'mcp::notes::search', riskLevel: 'LOW', allowed: true, reasonCode: '' },
+      {
+        exposedName: 'mcp::notes::create',
+        riskLevel: 'HIGH',
+        allowed: false,
+        reasonCode: 'ANALYST_HIGH_RISK_MCP_FORBIDDEN'
+      },
+      {
+        exposedName: 'mcp::notes::remove',
+        riskLevel: 'HIGH',
+        allowed: false,
+        reasonCode: 'REVIEWER_MCP_FORBIDDEN'
+      },
+      {
+        exposedName: 'mcp::notes::dup',
+        riskLevel: 'LOW',
+        allowed: false,
+        reasonCode: 'DUPLICATE_TOOL_NAME'
+      }
+    ]
+  };
+
+  it('展示外部 MCP 工具逐项准入明细与原因编码翻译', () => {
+    render(<AssemblyBlueprintPanel node={node} attempts={attempts} toolFunnel={mcpFunnel} />);
+
+    expect(screen.getByTestId('assembly-mcp-decisions')).toBeInTheDocument();
+    expect(screen.getByTestId('assembly-filtered-MCP')).toHaveTextContent(
+      '外部 MCP 工具被角色策略剥离'
+    );
+
+    const admitted = screen.getByTestId('assembly-mcp-mcp::notes::search');
+    expect(admitted).toHaveTextContent('mcp::notes::search');
+    expect(admitted).toHaveTextContent('低风险');
+    expect(admitted).toHaveTextContent('已放行');
+    expect(admitted).toHaveTextContent('已注册给本节点');
+
+    const highRisk = screen.getByTestId('assembly-mcp-mcp::notes::create');
+    expect(highRisk).toHaveTextContent('高风险');
+    expect(highRisk).toHaveTextContent('已剥离');
+    expect(highRisk).toHaveTextContent('分析角色只能使用低风险只读工具');
+
+    expect(screen.getByTestId('assembly-mcp-mcp::notes::remove')).toHaveTextContent(
+      '评审角色禁止使用外部 MCP 工具'
+    );
+    expect(screen.getByTestId('assembly-mcp-mcp::notes::dup')).toHaveTextContent(
+      '与已注册工具同名，已跳过'
+    );
+  });
+
+  it('英文环境下逐项准入明细同样按编码翻译', () => {
+    setModuleLocale('en-US');
+    render(<AssemblyBlueprintPanel node={node} attempts={attempts} toolFunnel={mcpFunnel} />);
+
+    const admitted = screen.getByTestId('assembly-mcp-mcp::notes::search');
+    expect(admitted).toHaveTextContent('Low risk');
+    expect(admitted).toHaveTextContent('Admitted');
+
+    const rejected = screen.getByTestId('assembly-mcp-mcp::notes::create');
+    expect(rejected).toHaveTextContent('High risk');
+    expect(rejected).toHaveTextContent('Trimmed');
+    expect(rejected).toHaveTextContent('Analyst role may only use low-risk read-only tools');
+    expect(screen.getByTestId('assembly-filtered-MCP')).toHaveTextContent(
+      'External MCP tools were trimmed by role policy'
+    );
+  });
+
+  it('没有 MCP 准入决策时不渲染冗余空块', () => {
+    render(<AssemblyBlueprintPanel node={node} attempts={attempts} toolFunnel={null} />);
+
+    expect(screen.queryByTestId('assembly-mcp-decisions')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('外部 MCP 工具逐项准入');
+  });
+
+  it('服务端未给漏斗时回退到装配快照里的逐工具准入字段', () => {
+    const withSnapshotDecisions = [
+      {
+        number: 1,
+        assembly: {
+          components: {
+            model: { mode: 'MOCK', name: 'mock' },
+            tools: {},
+            input: { sources: [] },
+            memoryMatches: [],
+            mcpToolDecisions: [
+              {
+                exposedName: 'mcp::notes::search',
+                riskLevel: 'LOW',
+                allowed: true,
+                reasonCode: ''
+              }
+            ]
+          }
+        }
+      }
+    ];
+    render(
+      <AssemblyBlueprintPanel node={node} attempts={withSnapshotDecisions} toolFunnel={null} />
+    );
+
+    expect(screen.getByTestId('assembly-mcp-mcp::notes::search')).toHaveTextContent('已放行');
+  });
 });

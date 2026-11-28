@@ -304,13 +304,39 @@ public class ExecutionViewService {
    * 节点工具权限漏斗：{@code granted} 是装配时真正授予的工具，{@code filtered} 是被平台裁剪掉的真实工具与原因编码。
    *
    * <p>两者都使用真实 {@link dev.workbench.domain.ToolKind} 枚举名，前端只做翻译，不再用硬编码清单反推。
+   * {@code mcpDecisions} 是外部 MCP 工具的逐项真实准入结论，让「为什么不给我这个工具」精确到单个工具。
    */
   public record ToolFunnelView(
       String definitionId,
       Integer definitionVersion,
       List<ToolGrantView> granted,
       List<ToolFilterView> filtered,
-      Integer attemptNumber) {}
+      Integer attemptNumber,
+      List<McpToolDecisionView> mcpDecisions) {
+    public ToolFunnelView {
+      mcpDecisions = mcpDecisions == null ? List.of() : List.copyOf(mcpDecisions);
+    }
+
+    /** 兼容没有逐 MCP 工具准入明细的历史投影。 */
+    public ToolFunnelView(
+        String definitionId,
+        Integer definitionVersion,
+        List<ToolGrantView> granted,
+        List<ToolFilterView> filtered,
+        Integer attemptNumber) {
+      this(definitionId, definitionVersion, granted, filtered, attemptNumber, List.of());
+    }
+  }
+
+  /** 单个外部 MCP 工具的准入结论：风险等级、是否放行与稳定原因编码。 */
+  public record McpToolDecisionView(
+      String exposedName, String riskLevel, boolean allowed, String reasonCode) {
+    public McpToolDecisionView {
+      exposedName = exposedName == null ? "" : exposedName;
+      riskLevel = riskLevel == null ? "" : riskLevel;
+      reasonCode = reasonCode == null ? "" : reasonCode;
+    }
+  }
 
   public record ToolGrantView(String kind, Integer version) {}
 

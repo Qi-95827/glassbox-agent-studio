@@ -34,6 +34,22 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
     Objects.requireNonNull(budget);
   }
 
+  /**
+   * 单个外部 MCP 工具的真实准入结论。
+   *
+   * <p>落盘的是装配时的实际决定：成功注册为 {@code allowed=true} 且 {@code reasonCode} 为空；被角色策略剥离或与内置工具
+   * 同名跳过时为 {@code allowed=false} 并带稳定原因编码。{@code components} 位于 framework 包，因此这里只保存
+   * 纯数据，不依赖 {@code infrastructure} 的准入实现。
+   */
+  public record McpToolDecision(
+      String exposedName, String riskLevel, boolean allowed, String reasonCode) {
+    public McpToolDecision {
+      exposedName = exposedName == null ? "" : exposedName;
+      riskLevel = riskLevel == null ? "HIGH" : riskLevel.strip().toUpperCase(java.util.Locale.ROOT);
+      reasonCode = reasonCode == null ? "" : reasonCode;
+    }
+  }
+
   public record Components(
       AgentDefinitionRef definition,
       String definitionSha256,
@@ -45,7 +61,8 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
       Authorization authorization,
       Input input,
       List<PrivateTool> privateTools,
-      List<MemoryMatchView> memoryMatches) {
+      List<MemoryMatchView> memoryMatches,
+      List<McpToolDecision> mcpToolDecisions) {
     public Components {
       Objects.requireNonNull(definition);
       Objects.requireNonNull(model);
@@ -58,6 +75,36 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
       tools = Map.copyOf(tools);
       privateTools = privateTools == null ? List.of() : List.copyOf(privateTools);
       memoryMatches = memoryMatches == null ? List.of() : List.copyOf(memoryMatches);
+      // 历史快照没有逐工具准入明细，缺失字段必须归一为空列表而不是 null。
+      mcpToolDecisions = mcpToolDecisions == null ? List.of() : List.copyOf(mcpToolDecisions);
+    }
+
+    /** 兼容没有逐 MCP 工具准入明细的装配（含历史快照反序列化）。 */
+    public Components(
+        AgentDefinitionRef definition,
+        String definitionSha256,
+        ModelReference model,
+        Integer maxIterations,
+        int maxFrameworkRetries,
+        List<SkillRef> skills,
+        Map<ToolKind, Integer> tools,
+        Authorization authorization,
+        Input input,
+        List<PrivateTool> privateTools,
+        List<MemoryMatchView> memoryMatches) {
+      this(
+          definition,
+          definitionSha256,
+          model,
+          maxIterations,
+          maxFrameworkRetries,
+          skills,
+          tools,
+          authorization,
+          input,
+          privateTools,
+          memoryMatches,
+          List.of());
     }
 
     /** 兼容没有记忆召回的装配。 */
@@ -83,6 +130,7 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
           authorization,
           input,
           privateTools,
+          List.of(),
           List.of());
     }
 
@@ -107,6 +155,7 @@ public record AgentAssemblySnapshot(int version, Components components, AgentBud
           tools,
           authorization,
           input,
+          List.of(),
           List.of(),
           List.of());
     }

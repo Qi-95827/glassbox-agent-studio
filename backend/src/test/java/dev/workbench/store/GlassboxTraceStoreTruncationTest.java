@@ -177,4 +177,135 @@ class GlassboxTraceStoreTruncationTest {
     assertEquals("DENY", storedTool.gatewayChecks().get(1).status());
     assertFalse(storedTool.inputArgs().contains("MIIEowArgs444"));
   }
+
+  /**
+   * 反例：工具参数/Schema 本身是 JSON 字符串，未闭合 PEM 会吞掉内层闭合引号、相邻正常字段与闭合花括号，
+   * 落库读回后无法再解析。必须在叶子层脱敏，保证脱敏结果仍是合法 JSON。
+   */
+  @Test
+  void innerJsonLeafMaskingKeepsArgumentsAndSchemaParseableAfterDbRoundTrip() throws Exception {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    String toolCallId = UUID.randomUUID().toString();
+    String argumentJson =
+        "{\"pem\":\"-----BEGIN EC PRIVATE KEY-----\\nMHcCCallSecret333\",\"path\":\"sort.js\"}";
+    String schemaJson =
+        "{\"type\":\"object\",\"properties\":{\"pem\":{\"default\":\"-----BEGIN RSA PRIVATE KEY-----\\nMIIESchemaSecret444\"},\"path\":{\"const\":\"sort.js\"}},\"examples\":[\"-----BEGIN OPENSSH PRIVATE KEY-----\\nAAAANestedSecret555\",\"sort.js\"]}";
+
+    traces.recordModelPayload(
+        runId,
+        modelCallId,
+        new GlassboxModels.ModelCallPayload(
+            List.of(),
+            List.of(new GlassboxModels.ToolSchemaView("sign", "签名工具", schemaJson)),
+            "ok",
+            List.of(new GlassboxModels.ToolCallDecision("c1", "sign", argumentJson)),
+            false,
+            null));
+    traces.recordToolTrace(
+        runId,
+        toolCallId,
+        new GlassboxModels.ToolCallTrace(
+            argumentJson, List.of(), "ok", false));
+
+    var json = new ObjectMapper();
+
+    var storedModel = traces.modelPayloadsByRun(runId).get(modelCallId);
+    assertNotNull(storedModel, "含未闭合 PEM 的工具载荷必须能从 H2 完整读回");
+    String storedArgs = storedModel.responseToolCalls().getFirst().argumentsJson();
+    String storedSchema = storedModel.requestTools().getFirst().parametersJson();
+
+    var argsNode = json.readTree(storedArgs);
+    assertEquals("sort.js", argsNode.get("path").asText(), "相邻正常字段必须完整保留");
+    assertEquals("***MASKED-PRIVATE-KEY***", argsNode.get("pem").asText());
+    assertFalse(storedArgs.contains("MHcCCallSecret333"));
+
+    var schemaNode = json.readTree(storedSchema);
+    assertEquals("sort.js", schemaNode.at("/properties/path/const").asText(), "嵌套对象字段必须完整保留");
+    assertEquals(
+        "sort.js", schemaNode.get("examples").get(1).asText(), "数组内的普通条目必须完整保留");
+    assertFalse(storedSchema.contains("MIIESchemaSecret444"));
+    assertFalse(storedSchema.contains("AAAANestedSecret555"));
+
+    var storedTool = traces.toolTracesByRun(runId).get(toolCallId);
+    assertNotNull(storedTool, "工具入参必须能从 H2 完整读回");
+    var inputNode = json.readTree(storedTool.inputArgs());
+    assertEquals("sort.js", inputNode.get("path").asText());
+    assertEquals("***MASKED-PRIVATE-KEY***", inputNode.get("pem").asText());
+    assertFalse(storedTool.inputArgs().contains("MHcCCallSecret333"));
+  }
+
+  /** 反例：无专项前缀的敏感键值（空格/逗号/转义引号）在叶子拆分后不得漏网。 */
+  @Test
+  void sensitiveKeysWithoutKnownPrefixAreStillMaskedAndJsonStaysReadable() throws Exception {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    String toolCallId = UUID.randomUUID().toString();
+    String payload =
+        "{\"password\":\"my secret, pass \\\"123\\\"\",\"apiKey\":\"plain_opaque_999\",\"path\":\"a.js\"}";
+
+    traces.recordModelPayload(
+        runId,
+        modelCallId,
+        new GlassboxModels.ModelCallPayload(
+            List.of(),
+            List.of(),
+            "ok",
+            List.of(new GlassboxModels.ToolCallDecision("c1", "write_file", payload)),
+            false,
+            null));
+    traces.recordToolTrace(
+        runId, toolCallId, new GlassboxModels.ToolCallTrace(payload, List.of(), "ok", false));
+
+    var json = new ObjectMapper();
+    var storedModel = traces.modelPayloadsByRun(runId).get(modelCallId);
+    var callNode = json.readTree(storedModel.responseToolCalls().getFirst().argumentsJson());
+    assertEquals("***MASKED***", callNode.get("password").asText());
+    assertEquals("***MASKED***", callNode.get("apiKey").asText());
+    assertEquals("a.js", callNode.get("path").asText());
+    String stored = storedModel.responseToolCalls().getFirst().argumentsJson();
+    assertFalse(stored.contains("my secret"));
+    assertFalse(stored.contains("plain_opaque_999"));
+
+    var toolNode = json.readTree(traces.toolTracesByRun(runId).get(toolCallId).inputArgs());
+    assertEquals("***MASKED***", toolNode.get("password").asText());
+    assertEquals("***MASKED***", toolNode.get("apiKey").asText());
+    assertEquals("a.js", toolNode.get("path").asText());
+  }
+
+  /** 反例：非法 JSON 文本 + 未闭合 PEM 时不得抛异常，敏感片段仍被脱敏，外层列表依然可反序列化。 */
+  @Test
+  void invalidJsonArgumentsFallBackToWholeTextMaskingAndKeepOuterListReadable() {
+    String runId = UUID.randomUUID().toString();
+    String modelCallId = UUID.randomUUID().toString();
+    String toolCallId = UUID.randomUUID().toString();
+    String broken = "path=sort.js, pem=-----BEGIN RSA PRIVATE KEY-----\nMIIEBrokenSecret666";
+
+    traces.recordModelPayload(
+        runId,
+        modelCallId,
+        new GlassboxModels.ModelCallPayload(
+            List.of(),
+            List.of(),
+            "ok",
+            List.of(
+                new GlassboxModels.ToolCallDecision("c1", "sign", broken),
+                new GlassboxModels.ToolCallDecision("c2", "read_file", "{\"path\":\"sort.js\"}")),
+            false,
+            null));
+    traces.recordToolTrace(
+        runId, toolCallId, new GlassboxModels.ToolCallTrace(broken, List.of(), "ok", false));
+
+    var storedModel = traces.modelPayloadsByRun(runId).get(modelCallId);
+    assertNotNull(storedModel, "非法 JSON 入参也不得让整条载荷读不回来");
+    assertEquals(2, storedModel.responseToolCalls().size(), "外层工具调用列表必须完整读回");
+    assertEquals("read_file", storedModel.responseToolCalls().get(1).name());
+    String masked = storedModel.responseToolCalls().getFirst().argumentsJson();
+    assertFalse(masked.contains("MIIEBrokenSecret666"), "未闭合 PEM 必须被脱敏");
+    assertTrue(masked.contains("***MASKED-PRIVATE-KEY***"));
+
+    var storedTool = traces.toolTracesByRun(runId).get(toolCallId);
+    assertNotNull(storedTool);
+    assertFalse(storedTool.inputArgs().contains("MIIEBrokenSecret666"));
+  }
 }

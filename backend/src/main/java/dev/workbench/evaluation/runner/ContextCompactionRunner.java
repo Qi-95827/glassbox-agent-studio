@@ -65,8 +65,10 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
       result = compactor.evaluateAndCompact(request);
     } else {
       // 消融实验关闭压缩：原样透传消息，仅记录 L0 观测与真实超限风险。
+      // 水位必须严格递增（0 < L1 < L2 < L3 < 1），此前三者同为 0.99 会直接抛出参数非法，
+      // 导致「关闭压缩」这一半对照根本没有真实执行，压缩 A/B 永远拿不到生效证据。
       var observeOnly =
-          new CompactionRequest(messages, Integer.MAX_VALUE / 4, 4, 2, 0.99, 0.99, 0.99);
+          new CompactionRequest(messages, Integer.MAX_VALUE / 4, 4, 2, 0.97, 0.98, 0.99);
       var raw = compactor.evaluateAndCompact(observeOnly);
       result =
           new dev.workbench.framework.context.CompactionResult(
@@ -118,6 +120,10 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
 
     var trace = new LinkedHashMap<String, Object>();
     trace.put("category", category().name());
+    // 如实上报实验开关与执行事实：本 Runner 真实下推了 enableCompaction 的控制逻辑，
+    // 无论请求值为 true 还是 false 都属于「已应用」，供 Eval Lab v2 的压缩 A/B 归因使用。
+    trace.put("compactionEnabled", compactionEnabled);
+    trace.put("compactionApplied", true);
     trace.put("placement", placement);
     trace.put("rounds", rounds);
     trace.put("toolBlobChars", blobChars);
@@ -201,6 +207,9 @@ public class ContextCompactionRunner implements EvalCategoryRunner {
             segments.putAll(compacted.breakdown().segmentTokens());
           }
           result.trace.put("compactionTier", tier);
+          // 必须在 CONTEXT_LIMIT 提前返回之前落盘，保证失败题也留存真实生效证据。
+          result.trace.put("compactionEnabled", enabled);
+          result.trace.put("compactionApplied", true);
           result.trace.put("segmentTokens", segments);
           result.trace.put(
               "summaryPreview", compacted == null ? "" : compacted.breakdown().summaryPreview());

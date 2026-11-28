@@ -115,6 +115,102 @@ class ToolFunnelProjectorTest {
     assertEquals("RUN_NOT_WRITE_AUTHORIZED", runWrite.reason());
   }
 
+  /**
+   * 逐 MCP 工具准入必须原样透出，且 {@code ToolKind.MCP} 未被授权时原因要指向角色策略，
+   * 而不是笼统的「定义未声明」（外部工具本来就不在 Agent 定义里）。
+   */
+  @Test
+  void mcpToolDecisionsAreProjectedWithRoleReason() {
+    AgentDefinition definition =
+        new AgentDefinition(
+            REF, "只读分析", "只读分析", AgentRole.ANALYST, List.of(ToolKind.WORKSPACE_READ), List.of());
+    var granted = new EnumMap<ToolKind, Integer>(ToolKind.class);
+    granted.put(ToolKind.WORKSPACE_READ, 1);
+    var decisions =
+        List.of(
+            new AgentAssemblySnapshot.McpToolDecision("mcp::notes::search", "low", true, ""),
+            new AgentAssemblySnapshot.McpToolDecision(
+                "mcp::notes::create", "high", false, "ANALYST_HIGH_RISK_MCP_FORBIDDEN"));
+
+    var funnel =
+        ToolFunnelProjector.project(node(true, false), snapshot(granted, false, decisions), definition);
+
+    assertEquals(2, funnel.mcpDecisions().size());
+    var search = funnel.mcpDecisions().getFirst();
+    assertEquals("mcp::notes::search", search.exposedName());
+    assertEquals("LOW", search.riskLevel(), "风险等级必须归一成大写供前端 Chip 判定");
+    assertTrue(search.allowed());
+    assertEquals("", search.reasonCode());
+    var create = funnel.mcpDecisions().get(1);
+    assertFalse(create.allowed());
+    assertEquals("ANALYST_HIGH_RISK_MCP_FORBIDDEN", create.reasonCode());
+
+    String mcpReason =
+        funnel.filtered().stream()
+            .filter(item -> "MCP".equals(item.kind()))
+            .findFirst()
+            .orElseThrow()
+            .reason();
+    assertEquals("MCP_TOOLS_DENIED_BY_ROLE", mcpReason);
+  }
+
+  /** 没有逐工具证据时保持既有编码逻辑，不得凭空造出角色原因。 */
+  @Test
+  void withoutMcpDecisionsTheMcpKindKeepsItsHistoricalReason() {
+    AgentDefinition definition =
+        new AgentDefinition(
+            REF, "只读分析", "只读分析", AgentRole.ANALYST, List.of(ToolKind.WORKSPACE_READ), List.of());
+    var granted = new EnumMap<ToolKind, Integer>(ToolKind.class);
+    granted.put(ToolKind.WORKSPACE_READ, 1);
+
+    var funnel = ToolFunnelProjector.project(node(true, false), snapshot(granted, false), definition);
+
+    assertTrue(funnel.mcpDecisions().isEmpty());
+    String mcpReason =
+        funnel.filtered().stream()
+            .filter(item -> "MCP".equals(item.kind()))
+            .findFirst()
+            .orElseThrow()
+            .reason();
+    assertEquals("NOT_DECLARED_BY_DEFINITION", mcpReason);
+  }
+
+  private static AgentAssemblySnapshot snapshot(
+      Map<ToolKind, Integer> tools,
+      boolean writeAuthorized,
+      List<AgentAssemblySnapshot.McpToolDecision> decisions) {
+    var components =
+        new AgentAssemblySnapshot.Components(
+            REF,
+            "a".repeat(64),
+            new AgentModelRegistry.ModelReference(dev.workbench.domain.ModelMode.MOCK, "mock", 1),
+            null,
+            1,
+            List.of(),
+            tools,
+            new AgentAssemblySnapshot.Authorization(
+                1,
+                AgentRole.CODER,
+                1,
+                writeAuthorized ? "ws-1" : null,
+                writeAuthorized ? 1 : 0,
+                writeAuthorized ? "d".repeat(64) : null,
+                writeAuthorized),
+            new AgentAssemblySnapshot.Input("b".repeat(64), List.of()),
+            List.of(),
+            List.of(),
+            decisions);
+    return new AgentAssemblySnapshot(
+        1,
+        components,
+        new dev.workbench.framework.control.AgentBudgetPolicy(
+            1,
+            new dev.workbench.domain.RunLimits(null, null, null, null, null, null, null, null),
+            null,
+            Map.of(),
+            null));
+  }
+
   private static AgentAssemblySnapshot snapshot(
       Map<ToolKind, Integer> tools, boolean writeAuthorized) {
     var components =

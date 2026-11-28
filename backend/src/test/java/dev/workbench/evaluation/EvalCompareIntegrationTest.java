@@ -59,6 +59,51 @@ class EvalCompareIntegrationTest {
     assertThrows(IllegalArgumentException.class, () -> compare.compare(baseline, baseline));
   }
 
+  /**
+   * 只差 {@code enableCompaction} 的两个真实批次必须完全可归因。
+   *
+   * <p>回归：压缩 Runner 此前不写 {@code compactionApplied}，Ab 对照恒落 {@code INSUFFICIENT_EVIDENCE}；
+   * 关闭压缩那一侧还会因水位参数非法直接抛错，等于「未下推」和「没用上」被混为一谈。
+   */
+  @Test
+  void compactionOnlyComparisonIsFullyAttributable() {
+    String baseline =
+        lab.start(
+            new EvalLabService.StartRequest(
+                "MINI", "mini", List.of("CONTEXT_COMPACTION"), "mock", null, false, false, false,
+                false, 1, 1, null, null),
+            "zh-CN");
+    String candidate =
+        lab.start(
+            new EvalLabService.StartRequest(
+                "MINI", "mini", List.of("CONTEXT_COMPACTION"), "mock", null, true, false, false,
+                false, 1, 1, null, null),
+            "zh-CN");
+    wait(baseline);
+    wait(candidate);
+
+    Map<String, Object> result = compare.compare(baseline, candidate);
+
+    assertEquals(Boolean.TRUE, result.get("fullyAttributable"), "仅差压缩开关时必须完全可归因：" + result);
+    @SuppressWarnings("unchecked")
+    var warnings = (List<Object>) result.get("attributionWarnings");
+    assertTrue(warnings.isEmpty(), "不应再出现证据不足告警：" + warnings);
+
+    @SuppressWarnings("unchecked")
+    var configDiff = (List<Map<String, Object>>) result.get("configDiff");
+    var row =
+        configDiff.stream()
+            .filter(item -> "enableCompaction".equals(item.get("field")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("缺少 enableCompaction 差异行：" + configDiff));
+    assertEquals("ATTRIBUTABLE", row.get("attributionStatus"), row.toString());
+    assertEquals(Boolean.TRUE, row.get("attributable"), row.toString());
+    assertEquals(Boolean.TRUE, row.get("baselineApplied"), row.toString());
+    assertEquals(Boolean.TRUE, row.get("candidateApplied"), row.toString());
+    assertEquals(row.get("baselineTotalCases"), row.get("baselineAppliedCount"), row.toString());
+    assertEquals(row.get("candidateTotalCases"), row.get("candidateAppliedCount"), row.toString());
+  }
+
   private void wait(String id) {
     long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
     while (true) {

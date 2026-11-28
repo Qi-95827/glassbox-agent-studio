@@ -18,22 +18,40 @@ import dev.workbench.domain.AgentRole;
 public final class McpToolAdmission {
   private McpToolAdmission() {}
 
-  /** 准入结论：允许或拒绝并给出原因。 */
-  public record Decision(boolean allowed, String reason) {
-    static Decision allow() {
-      return new Decision(true, "");
+  /** 评审角色禁用外部工具的稳定原因编码。 */
+  public static final String REVIEWER_FORBIDDEN = "REVIEWER_MCP_FORBIDDEN";
+
+  /** 分析角色剥离高风险外部工具的原因编码。 */
+  public static final String ANALYST_HIGH_RISK_FORBIDDEN = "ANALYST_HIGH_RISK_MCP_FORBIDDEN";
+
+  /**
+   * 准入结论：允许或拒绝并给出原因。
+   *
+   * <p>{@code reasonCode} 是结构化原因编码，供玻璃盒逐工具展示与前端翻译；{@code reason} 保留中文自然语言，
+   * 兼容既有事件日志与断言。允许时两者均为空串。
+   */
+  public record Decision(boolean allowed, String reasonCode, String reason) {
+    public Decision {
+      reasonCode = reasonCode == null ? "" : reasonCode;
+      reason = reason == null ? "" : reason;
     }
 
-    static Decision deny(String reason) {
-      return new Decision(false, reason);
+    static Decision allow() {
+      return new Decision(true, "", "");
+    }
+
+    static Decision deny(String reasonCode, String reason) {
+      return new Decision(false, reasonCode, reason);
     }
   }
 
   /** 判定某个角色能否装配指定风险等级的 MCP 工具。 */
   public static Decision decide(AgentRole role, String riskLevel) {
     boolean highRisk = "HIGH".equalsIgnoreCase(riskLevel == null ? "" : riskLevel.strip());
-    if (role == AgentRole.REVIEWER) return Decision.deny("评审角色禁止使用外部 MCP 工具。");
-    if (role == AgentRole.ANALYST && highRisk) return Decision.deny("分析角色只能使用低风险只读 MCP 工具。");
+    if (role == AgentRole.REVIEWER)
+      return Decision.deny(REVIEWER_FORBIDDEN, "评审角色禁止使用外部 MCP 工具。");
+    if (role == AgentRole.ANALYST && highRisk)
+      return Decision.deny(ANALYST_HIGH_RISK_FORBIDDEN, "分析角色只能使用低风险只读 MCP 工具。");
     return Decision.allow();
   }
 }
