@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** 运行控制命令与进程内的暂停/取消集合；检查点恢复也在这里完成前置校验。 */
 final class RunCommandService {
-  private final Object stateLock;
+  private final RunLockRegistry locks;
   private final RunStateStore runs;
   private final RunEvidenceRecordService evidence;
   private final RunHandoverService handovers;
@@ -27,13 +27,13 @@ final class RunCommandService {
   private final Map<String, Object> pauseMonitors = new ConcurrentHashMap<>();
 
   RunCommandService(
-      Object stateLock,
+      RunLockRegistry locks,
       RunStateStore runs,
       RunEvidenceRecordService evidence,
       RunHandoverService handovers,
       WorkflowScheduler workflows,
       RunDispatchService dispatcher) {
-    this.stateLock = stateLock;
+    this.locks = locks;
     this.runs = runs;
     this.evidence = evidence;
     this.handovers = handovers;
@@ -66,7 +66,7 @@ final class RunCommandService {
 
   /** 排队中的任务立即终止；运行中的任务通过信号协作取消。 */
   void cancel(String id) {
-    synchronized (stateLock) {
+    synchronized (locks.lockFor(id)) {
       RunSnapshot run = runs.runSnapshot(id);
       if (!run.status().canCancel()) throw new IllegalStateException("运行已结束，不能取消。");
       evidence.event(id, EventType.CANCEL_REQUESTED, "用户请求取消。");
@@ -102,7 +102,7 @@ final class RunCommandService {
 
   /** 请求在下一个协作检查点暂停；在途模型请求可能仍会结束并产生费用。 */
   void pause(String id) {
-    synchronized (stateLock) {
+    synchronized (locks.lockFor(id)) {
       RunSnapshot run = runs.runSnapshot(id);
       if (run.status() != RunStatus.RUNNING) throw new IllegalStateException("只有运行中的任务可以请求暂停。");
       if (paused.add(id))
@@ -113,7 +113,7 @@ final class RunCommandService {
   /** 恢复当前进程内的暂停；进程重启后的恢复仍使用检查点。 */
   void resume(String id) {
     boolean resumeDispatch = false;
-    synchronized (stateLock) {
+    synchronized (locks.lockFor(id)) {
       RunSnapshot run = runs.runSnapshot(id);
       if (run.status() != RunStatus.PAUSED
           && !(run.status() == RunStatus.RUNNING && paused.contains(id)))
@@ -140,7 +140,7 @@ final class RunCommandService {
    * 这里的同步只覆盖本进程，外部副作用和分布式并发恢复尚未实现。
    */
   String recover(String oldId, String checkpointId) {
-    synchronized (stateLock) {
+    synchronized (locks.lockFor(oldId)) {
       RunSnapshot original = runs.runSnapshot(oldId);
       if (original.status() != RunStatus.INTERRUPTED)
         throw new IllegalStateException("只有中断的运行可以恢复。");

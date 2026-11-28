@@ -18,7 +18,7 @@ final class RunExecutionEngine {
   private final dev.workbench.framework.control.RunControlStore controls;
   private final WorkflowScheduler workflows;
   private final RunCommandService commands;
-  private final Object stateLock;
+  private final RunLockRegistry locks;
 
   /** 历史无计划运行的统一结算说明：遗留直跑轨已下线，这类运行不再执行。 */
   static final String LEGACY_RUN_WITHOUT_PLAN_REASON =
@@ -30,13 +30,13 @@ final class RunExecutionEngine {
       dev.workbench.framework.control.RunControlStore controls,
       WorkflowScheduler workflows,
       RunCommandService commands,
-      Object stateLock) {
+      RunLockRegistry locks) {
     this.runs = runs;
     this.tasks = tasks;
     this.controls = controls;
     this.workflows = workflows;
     this.commands = commands;
-    this.stateLock = stateLock;
+    this.locks = locks;
   }
 
   void execute(String id, CheckpointStage stage, String previousResult, boolean recovery) {
@@ -55,7 +55,8 @@ final class RunExecutionEngine {
             prepared.task().roleBudgets(),
             prepared.task().toolBudgets());
     try {
-      workflows.execute(id, prepared.workflow(), prepared.task(), control, stateLock);
+      // 同一运行恒用同一把分段锁，不同运行按槽位并发。
+      workflows.execute(id, prepared.workflow(), prepared.task(), control, locks.lockFor(id));
     } finally {
       commands.clearControl(id);
     }
@@ -71,7 +72,7 @@ final class RunExecutionEngine {
     TaskDefinition task;
     WorkflowPlan plan;
     // 与取消/恢复共享同一把锁：原子复核 PAUSED 并切回 RUNNING，防止并发双 /resume 重复执行。
-    synchronized (stateLock) {
+    synchronized (locks.lockFor(id)) {
       run = runs.runSnapshot(id);
       if (run.status() != dev.workbench.domain.RunStatus.PAUSED) return;
       plan = workflows.plan(id);
@@ -121,7 +122,7 @@ final class RunExecutionEngine {
             task.roleBudgets(),
             task.toolBudgets());
     try {
-      workflows.execute(id, plan, task, control, stateLock, true);
+      workflows.execute(id, plan, task, control, locks.lockFor(id), true);
     } finally {
       commands.clearControl(id);
     }
@@ -132,7 +133,7 @@ final class RunExecutionEngine {
     TaskDefinition task;
     WorkflowPlan workflow;
     // 与排队取消共享同一把锁，保证已取消的任务不会再次被启动。
-    synchronized (stateLock) {
+    synchronized (locks.lockFor(id)) {
       run = runs.runSnapshot(id);
       if (run.status() != RunStatus.PENDING) return null;
       try {

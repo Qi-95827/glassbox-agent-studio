@@ -28,7 +28,8 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
   private final RunStateStore runs;
   private final WorkflowScheduler workflows;
   private final ExecutorService executor;
-  private final Object stateLock = new Object();
+  /** 按运行标识分段的进程内锁；同一运行恒定命中同一槽位，不同运行可真正并发。 */
+  private final RunLockRegistry locks = new RunLockRegistry();
   private final RunCreationService creations;
   private final RunDispatchService dispatcher;
   private final RunCommandService commands;
@@ -78,9 +79,9 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
     this.executor = executor;
     RunDispatchService dispatch = new RunDispatchService(runs, creation, executor, this);
     this.commands =
-        new RunCommandService(stateLock, runs, evidence, handovers, workflows, dispatch);
+        new RunCommandService(locks, runs, evidence, handovers, workflows, dispatch);
     RunExecutionEngine engine =
-        new RunExecutionEngine(runs, tasks, controls, workflows, commands, stateLock);
+        new RunExecutionEngine(runs, tasks, controls, workflows, commands, locks);
     dispatch.setEngine(engine);
     this.dispatcher = dispatch;
     this.creations =
@@ -164,7 +165,7 @@ public class RunService implements dev.workbench.planning.CandidateRunDispatcher
 
   /** 一个计划版本只接受一次确认。 */
   public void approvePlan(String runId, java.util.UUID planVersionId) {
-    synchronized (stateLock) {
+    synchronized (locks.lockFor(runId)) {
       workflows.approvePlan(runId, planVersionId);
       dispatcher.dispatchAfterCommit(runId);
     }
